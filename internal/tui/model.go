@@ -112,24 +112,22 @@ func (r *rootModel) View() string {
 	if len(r.stack) == 0 {
 		return ""
 	}
-	titleLeft := " jitenv — " + r.top().Title()
-	var titleRight string
-	if r.dirty {
-		titleRight = warnStyle.Render("● unsaved ") + " "
-	} else {
-		titleRight = okStyle.Render("● saved ") + " "
-	}
-
 	status := r.top().Status()
+	dirtyTag := okStyle.Render("● saved")
+	if r.dirty {
+		dirtyTag = warnStyle.Render("● unsaved")
+	}
 	if r.flash != "" {
 		flashStyle := okStyle
 		if r.flashErr {
 			flashStyle = errorStyle
 		}
-		status = flashStyle.Render("» "+r.flash) + "    " + dimText(status)
+		status = flashStyle.Render("» "+r.flash) + "    " + dimText(status) + "    " + dirtyTag
+	} else {
+		status = status + "    " + dirtyTag
 	}
 
-	return renderApp(r.width, r.height, titleLeft, titleRight, r.top().View(), status)
+	return renderApp(r.width, r.height, r.top().View(), status)
 }
 
 func (r *rootModel) push(s screen) { r.stack = append(r.stack, s) }
