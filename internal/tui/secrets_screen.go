@@ -262,6 +262,7 @@ func (s *secretDetailScreen) Status() string {
 	return renderHelpKeys(
 		[2]string{"↑/↓", "move"},
 		[2]string{"Enter", "open"},
+		[2]string{"r", "reveal"},
 		[2]string{"Esc", "back"},
 	)
 }
@@ -288,6 +289,10 @@ func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, "")})
 			}
 			return s, s.openMenu()
+		case "r":
+			if k := s.selectedKey(); k != "" {
+				s.reveal[k] = !s.reveal[k]
+			}
 		case "esc":
 			return s, emit(popMsg{})
 		}
@@ -307,18 +312,11 @@ func (s *secretDetailScreen) openMenu() tea.Cmd {
 	if key == "" {
 		return nil
 	}
-	revealLabel := "Reveal"
-	if s.reveal[key] {
-		revealLabel = "Hide"
-	}
 	cb := func(choice string) tea.Cmd {
 		switch choice {
 		case "Edit":
 			return tea.Sequence(emit(popMsg{}),
 				emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, key)}))
-		case "Rename":
-			return tea.Sequence(emit(popMsg{}),
-				emit(pushMsg{s: newRenameKeyScreen(s.root, s.bag, key)}))
 		case "Delete":
 			cb := func(choice string) tea.Cmd {
 				if choice == "Yes" {
@@ -332,15 +330,12 @@ func (s *secretDetailScreen) openMenu() tea.Cmd {
 			}
 			return emit(pushMsg{s: newConfirmScreen(s.root,
 				fmt.Sprintf("Delete key %q?", key), cb, "Yes", "No")})
-		case "Reveal", "Hide":
-			s.reveal[key] = !s.reveal[key]
-			return emit(popMsg{})
 		}
 		return emit(popMsg{})
 	}
 	return emit(pushMsg{s: newPopupMenuScreen(s.root,
 		"Key: "+key, cb,
-		"Edit", "Rename", "Delete", revealLabel, "Back",
+		"Edit", "Delete", "Back",
 	)})
 }
 
@@ -369,47 +364,6 @@ func (s *secretDetailScreen) View() string {
 		}
 	}
 	return b.String()
-}
-
-// ----- rename key --------------------------------------------------
-
-func newRenameKeyScreen(r *rootModel, bag, oldKey string) screen {
-	return newInputScreen(r, inputOpts{
-		Title:     "rename key",
-		Prompt:    fmt.Sprintf("Rename key %q in bag %q to:", oldKey, bag),
-		Initial:   oldKey,
-		SaveLabel: "Rename",
-	}, func(val string) tea.Cmd {
-		newKey := strings.TrimSpace(val)
-		if newKey == "" {
-			return emit(errorMsg("name required"))
-		}
-		if newKey == oldKey {
-			return emit(popMsg{})
-		}
-		if _, exists := r.cfg.Secrets[bag][newKey]; exists {
-			return emit(errorMsg("key already exists"))
-		}
-		r.cfg.Secrets[bag][newKey] = r.cfg.Secrets[bag][oldKey]
-		delete(r.cfg.Secrets[bag], oldKey)
-		// Update any mappings that picked this key out of the bag.
-		for i, mp := range r.cfg.Mappings {
-			for j, v := range mp.Vars {
-				if v.Key != oldKey || v.Ref != bag {
-					continue
-				}
-				if sc, ok := r.cfg.Sources[v.Source]; ok && sc.Type == "local" {
-					r.cfg.Mappings[i].Vars[j].Key = newKey
-				}
-			}
-		}
-		return tea.Sequence(
-			emit(popMsg{}),
-			emit(dirtyMsg{}),
-			emit(secretChangedMsg{}),
-			emit(statusMsg("renamed key to "+newKey)),
-		)
-	})
 }
 
 // ----- key/value editor --------------------------------------------
