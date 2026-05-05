@@ -13,20 +13,17 @@ import (
 
 // ----- bag list -----------------------------------------------------
 
+// secretsListScreen is a single list. The top entry is a sentinel
+// "< Create New Bag >" — selecting it opens an add-bag input. Selecting
+// any other row opens a popup menu with Edit / Rename / Delete / Back.
 type secretsListScreen struct {
-	root     *rootModel
-	bags     []string
-	cursor   int
-	btnFocus int
-	buttons  []button
+	root   *rootModel
+	bags   []string
+	cursor int
 }
 
 func newSecretsListScreen(r *rootModel) screen {
-	s := &secretsListScreen{
-		root:     r,
-		btnFocus: -1,
-		buttons:  []button{newButton("Add"), newButton("Open"), newButton("Delete"), newButton("Back")},
-	}
+	s := &secretsListScreen{root: r}
 	s.refresh()
 	return s
 }
@@ -37,17 +34,24 @@ func (s *secretsListScreen) refresh() {
 		s.bags = append(s.bags, n)
 	}
 	sort.Strings(s.bags)
-	if s.cursor >= len(s.bags) {
-		s.cursor = len(s.bags) - 1
+	maxRow := len(s.bags) // sentinel + bags = len(bags)+1; valid cursor is 0..len(bags)
+	if s.cursor > maxRow {
+		s.cursor = maxRow
 	}
 	if s.cursor < 0 {
 		s.cursor = 0
 	}
 }
 
-func (s *secretsListScreen) Title() string  { return "local secrets" }
-func (s *secretsListScreen) Status() string { return defaultListStatus }
-func (s *secretsListScreen) Init() tea.Cmd  { return nil }
+func (s *secretsListScreen) Title() string { return "local secrets" }
+func (s *secretsListScreen) Status() string {
+	return renderHelpKeys(
+		[2]string{"↑/↓", "move"},
+		[2]string{"Enter", "open"},
+		[2]string{"Esc", "back"},
+	)
+}
+func (s *secretsListScreen) Init() tea.Cmd { return nil }
 
 func (s *secretsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if _, ok := msg.(secretChangedMsg); ok {
@@ -55,47 +59,21 @@ func (s *secretsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, nil
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
+		total := len(s.bags) + 1 // sentinel + bags
 		switch k.String() {
 		case "up", "k":
-			if s.btnFocus >= 0 {
-				s.btnFocus = -1
-			} else if s.cursor > 0 {
+			if s.cursor > 0 {
 				s.cursor--
 			}
 		case "down", "j":
-			if s.btnFocus < 0 {
-				if s.cursor < len(s.bags)-1 {
-					s.cursor++
-				} else {
-					s.btnFocus = 0
-				}
-			}
-		case "tab":
-			if s.btnFocus < 0 {
-				s.btnFocus = 0
-			} else if s.btnFocus < len(s.buttons)-1 {
-				s.btnFocus++
-			} else {
-				s.btnFocus = -1
-			}
-		case "shift+tab":
-			if s.btnFocus < 0 {
-				s.btnFocus = len(s.buttons) - 1
-			} else if s.btnFocus > 0 {
-				s.btnFocus--
-			} else {
-				s.btnFocus = -1
-			}
-		case "left", "h":
-			if s.btnFocus > 0 {
-				s.btnFocus--
-			}
-		case "right", "l":
-			if s.btnFocus >= 0 && s.btnFocus < len(s.buttons)-1 {
-				s.btnFocus++
+			if s.cursor < total-1 {
+				s.cursor++
 			}
 		case "enter":
-			return s, s.activate()
+			if s.cursor == 0 {
+				return s, emit(pushMsg{s: newAddBagScreen(s.root)})
+			}
+			return s, s.openMenu()
 		case "esc":
 			return s, emit(popMsg{})
 		}
@@ -103,70 +81,72 @@ func (s *secretsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *secretsListScreen) activate() tea.Cmd {
-	if s.btnFocus < 0 {
-		return s.openCurrent()
+func (s *secretsListScreen) selectedBag() string {
+	if s.cursor == 0 || len(s.bags) == 0 {
+		return ""
 	}
-	switch s.buttons[s.btnFocus].label {
-	case "Add":
-		return emit(pushMsg{s: newAddBagScreen(s.root)})
-	case "Open":
-		return s.openCurrent()
-	case "Delete":
-		return s.deleteCurrent()
-	case "Back":
-		return emit(popMsg{})
-	}
-	return nil
+	return s.bags[s.cursor-1]
 }
 
-func (s *secretsListScreen) openCurrent() tea.Cmd {
-	if len(s.bags) == 0 {
-		return emit(statusMsg("no bag selected"))
+func (s *secretsListScreen) openMenu() tea.Cmd {
+	bag := s.selectedBag()
+	if bag == "" {
+		return nil
 	}
-	return emit(pushMsg{s: newSecretDetailScreen(s.root, s.bags[s.cursor])})
-}
-
-func (s *secretsListScreen) deleteCurrent() tea.Cmd {
-	if len(s.bags) == 0 {
-		return emit(statusMsg("no bag selected"))
-	}
-	bag := s.bags[s.cursor]
 	cb := func(choice string) tea.Cmd {
-		if choice == "Yes" {
-			delete(s.root.cfg.Secrets, bag)
-			s.refresh()
-			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(statusMsg("removed bag "+bag)))
+		switch choice {
+		case "Edit":
+			return tea.Sequence(emit(popMsg{}),
+				emit(pushMsg{s: newSecretDetailScreen(s.root, bag)}))
+		case "Rename":
+			return tea.Sequence(emit(popMsg{}),
+				emit(pushMsg{s: newRenameBagScreen(s.root, bag)}))
+		case "Delete":
+			cb := func(choice string) tea.Cmd {
+				if choice == "Yes" {
+					delete(s.root.cfg.Secrets, bag)
+					s.refresh()
+					return tea.Sequence(emit(popMsg{}), emit(popMsg{}),
+						emit(dirtyMsg{}), emit(secretChangedMsg{}),
+						emit(statusMsg("removed bag "+bag)))
+				}
+				return emit(popMsg{})
+			}
+			return emit(pushMsg{s: newConfirmScreen(s.root,
+				fmt.Sprintf("Delete bag %q (and all keys)?", bag), cb, "Yes", "No")})
 		}
 		return emit(popMsg{})
 	}
-	return emit(pushMsg{s: newConfirmScreen(s.root,
-		fmt.Sprintf("Delete bag %q (and all keys)?", bag), cb, "Yes", "No")})
+	return emit(pushMsg{s: newPopupMenuScreen(s.root,
+		"Bag: "+bag, cb,
+		"Edit", "Rename", "Delete", "Back",
+	)})
 }
 
 func (s *secretsListScreen) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Encrypted local bags") + "\n\n")
-	if len(s.bags) == 0 {
-		b.WriteString(dimText("(no bags yet — press Add)") + "\n")
+
+	// Sentinel row.
+	sentinel := "< Create New Bag >"
+	if s.cursor == 0 {
+		b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
 	} else {
-		for i, n := range s.bags {
-			row := fmt.Sprintf("%-24s  %s", n, dimText(fmt.Sprintf("(%d keys)", len(s.root.cfg.Secrets[n]))))
-			focused := s.btnFocus < 0 && i == s.cursor
-			marker := "  "
-			if focused {
-				marker = labelStyle.Render(" ▶")
-				b.WriteString(marker + " " + listItemFocusedStyle.Render(row) + "\n")
-			} else {
-				b.WriteString(marker + " " + listItemStyle.Render(row) + "\n")
-			}
+		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+	}
+
+	for i, n := range s.bags {
+		row := fmt.Sprintf("%-24s  %s", n, dimText(fmt.Sprintf("(%d keys)", len(s.root.cfg.Secrets[n]))))
+		if i+1 == s.cursor {
+			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
+		} else {
+			b.WriteString("   " + listItemStyle.Render(row) + "\n")
 		}
 	}
-	b.WriteString("\n" + renderButtonRow(s.buttons, s.btnFocus) + "\n")
 	return b.String()
 }
 
-// ----- add bag screen ----------------------------------------------
+// ----- add bag -----------------------------------------------------
 
 func newAddBagScreen(r *rootModel) screen {
 	return newInputScreen(r, inputOpts{
@@ -197,31 +177,65 @@ func newAddBagScreen(r *rootModel) screen {
 	})
 }
 
+// ----- rename bag --------------------------------------------------
+
+func newRenameBagScreen(r *rootModel, oldName string) screen {
+	return newInputScreen(r, inputOpts{
+		Title:     "rename bag",
+		Prompt:    fmt.Sprintf("Rename bag %q to:", oldName),
+		Initial:   oldName,
+		SaveLabel: "Rename",
+	}, func(val string) tea.Cmd {
+		newName := strings.TrimSpace(val)
+		if newName == "" {
+			return emit(errorMsg("name required"))
+		}
+		if newName == oldName {
+			return emit(popMsg{})
+		}
+		if _, exists := r.cfg.Secrets[newName]; exists {
+			return emit(errorMsg("bag already exists"))
+		}
+		r.cfg.Secrets[newName] = r.cfg.Secrets[oldName]
+		delete(r.cfg.Secrets, oldName)
+		// Rewrite any mappings that referenced the old bag.
+		for i, mp := range r.cfg.Mappings {
+			for j, v := range mp.Vars {
+				if v.Ref == oldName {
+					if sc, ok := r.cfg.Sources[v.Source]; ok && sc.Type == "local" {
+						r.cfg.Mappings[i].Vars[j].Ref = newName
+					}
+				}
+			}
+		}
+		return tea.Sequence(
+			emit(popMsg{}),
+			emit(dirtyMsg{}),
+			emit(secretChangedMsg{}),
+			emit(statusMsg("renamed bag to "+newName)),
+		)
+	})
+}
+
 // ----- bag detail (key/value rows) ---------------------------------
 
+// secretDetailScreen mirrors the bag list pattern: a single list whose
+// top row is "< Create New Key >" and whose remaining rows are the
+// bag's keys. Selecting a key opens a popup with Edit / Rename /
+// Delete / Reveal-Hide / Back.
 type secretDetailScreen struct {
-	root     *rootModel
-	bag      string
-	keys     []string
-	cursor   int
-	reveal   map[string]bool
-	btnFocus int
-	buttons  []button
+	root   *rootModel
+	bag    string
+	keys   []string
+	cursor int
+	reveal map[string]bool
 }
 
 func newSecretDetailScreen(r *rootModel, bag string) screen {
 	s := &secretDetailScreen{
-		root:     r,
-		bag:      bag,
-		reveal:   map[string]bool{},
-		btnFocus: -1,
-		buttons: []button{
-			newButton("Add"),
-			newButton("Edit"),
-			newButton("Delete"),
-			newButton("Reveal"),
-			newButton("Back"),
-		},
+		root:   r,
+		bag:    bag,
+		reveal: map[string]bool{},
 	}
 	s.refresh()
 	return s
@@ -234,17 +248,24 @@ func (s *secretDetailScreen) refresh() {
 		s.keys = append(s.keys, k)
 	}
 	sort.Strings(s.keys)
-	if s.cursor >= len(s.keys) {
-		s.cursor = len(s.keys) - 1
+	maxRow := len(s.keys)
+	if s.cursor > maxRow {
+		s.cursor = maxRow
 	}
 	if s.cursor < 0 {
 		s.cursor = 0
 	}
 }
 
-func (s *secretDetailScreen) Title() string  { return "bag: " + s.bag }
-func (s *secretDetailScreen) Status() string { return defaultListStatus }
-func (s *secretDetailScreen) Init() tea.Cmd  { return nil }
+func (s *secretDetailScreen) Title() string { return "bag: " + s.bag }
+func (s *secretDetailScreen) Status() string {
+	return renderHelpKeys(
+		[2]string{"↑/↓", "move"},
+		[2]string{"Enter", "open"},
+		[2]string{"Esc", "back"},
+	)
+}
+func (s *secretDetailScreen) Init() tea.Cmd { return nil }
 
 func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if _, ok := msg.(secretChangedMsg); ok {
@@ -252,47 +273,21 @@ func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, nil
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
+		total := len(s.keys) + 1 // sentinel + keys
 		switch k.String() {
 		case "up", "k":
-			if s.btnFocus >= 0 {
-				s.btnFocus = -1
-			} else if s.cursor > 0 {
+			if s.cursor > 0 {
 				s.cursor--
 			}
 		case "down", "j":
-			if s.btnFocus < 0 {
-				if s.cursor < len(s.keys)-1 {
-					s.cursor++
-				} else {
-					s.btnFocus = 0
-				}
-			}
-		case "tab":
-			if s.btnFocus < 0 {
-				s.btnFocus = 0
-			} else if s.btnFocus < len(s.buttons)-1 {
-				s.btnFocus++
-			} else {
-				s.btnFocus = -1
-			}
-		case "shift+tab":
-			if s.btnFocus < 0 {
-				s.btnFocus = len(s.buttons) - 1
-			} else if s.btnFocus > 0 {
-				s.btnFocus--
-			} else {
-				s.btnFocus = -1
-			}
-		case "left", "h":
-			if s.btnFocus > 0 {
-				s.btnFocus--
-			}
-		case "right", "l":
-			if s.btnFocus >= 0 && s.btnFocus < len(s.buttons)-1 {
-				s.btnFocus++
+			if s.cursor < total-1 {
+				s.cursor++
 			}
 		case "enter":
-			return s, s.activate()
+			if s.cursor == 0 {
+				return s, emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, "")})
+			}
+			return s, s.openMenu()
 		case "esc":
 			return s, emit(popMsg{})
 		}
@@ -300,78 +295,121 @@ func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *secretDetailScreen) activate() tea.Cmd {
-	if s.btnFocus < 0 {
-		return s.editCurrent()
+func (s *secretDetailScreen) selectedKey() string {
+	if s.cursor == 0 || len(s.keys) == 0 {
+		return ""
 	}
-	switch s.buttons[s.btnFocus].label {
-	case "Add":
-		return emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, "")})
-	case "Edit":
-		return s.editCurrent()
-	case "Delete":
-		return s.deleteCurrent()
-	case "Reveal":
-		if len(s.keys) > 0 {
-			k := s.keys[s.cursor]
-			s.reveal[k] = !s.reveal[k]
-		}
+	return s.keys[s.cursor-1]
+}
+
+func (s *secretDetailScreen) openMenu() tea.Cmd {
+	key := s.selectedKey()
+	if key == "" {
 		return nil
-	case "Back":
-		return emit(popMsg{})
 	}
-	return nil
-}
-
-func (s *secretDetailScreen) editCurrent() tea.Cmd {
-	if len(s.keys) == 0 {
-		return emit(statusMsg("no key selected"))
+	revealLabel := "Reveal"
+	if s.reveal[key] {
+		revealLabel = "Hide"
 	}
-	return emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, s.keys[s.cursor])})
-}
-
-func (s *secretDetailScreen) deleteCurrent() tea.Cmd {
-	if len(s.keys) == 0 {
-		return emit(statusMsg("no key selected"))
-	}
-	k := s.keys[s.cursor]
 	cb := func(choice string) tea.Cmd {
-		if choice == "Yes" {
-			delete(s.root.cfg.Secrets[s.bag], k)
-			s.refresh()
-			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(secretChangedMsg{}), emit(statusMsg("removed key "+k)))
+		switch choice {
+		case "Edit":
+			return tea.Sequence(emit(popMsg{}),
+				emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, key)}))
+		case "Rename":
+			return tea.Sequence(emit(popMsg{}),
+				emit(pushMsg{s: newRenameKeyScreen(s.root, s.bag, key)}))
+		case "Delete":
+			cb := func(choice string) tea.Cmd {
+				if choice == "Yes" {
+					delete(s.root.cfg.Secrets[s.bag], key)
+					s.refresh()
+					return tea.Sequence(emit(popMsg{}), emit(popMsg{}),
+						emit(dirtyMsg{}), emit(secretChangedMsg{}),
+						emit(statusMsg("removed key "+key)))
+				}
+				return emit(popMsg{})
+			}
+			return emit(pushMsg{s: newConfirmScreen(s.root,
+				fmt.Sprintf("Delete key %q?", key), cb, "Yes", "No")})
+		case "Reveal", "Hide":
+			s.reveal[key] = !s.reveal[key]
+			return emit(popMsg{})
 		}
 		return emit(popMsg{})
 	}
-	return emit(pushMsg{s: newConfirmScreen(s.root,
-		fmt.Sprintf("Delete key %q?", k), cb, "Yes", "No")})
+	return emit(pushMsg{s: newPopupMenuScreen(s.root,
+		"Key: "+key, cb,
+		"Edit", "Rename", "Delete", revealLabel, "Back",
+	)})
 }
 
 func (s *secretDetailScreen) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Keys in "+s.bag) + "\n\n")
-	if len(s.keys) == 0 {
-		b.WriteString(dimText("(empty bag — press Add)") + "\n")
+
+	sentinel := "< Create New Key >"
+	if s.cursor == 0 {
+		b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
 	} else {
-		for i, k := range s.keys {
-			v := s.root.cfg.Secrets[s.bag][k]
-			shown := maskValue(v)
-			if s.reveal[k] {
-				shown = v
-			}
-			row := fmt.Sprintf("%-24s = %s", k, shown)
-			focused := s.btnFocus < 0 && i == s.cursor
-			marker := "  "
-			if focused {
-				marker = labelStyle.Render(" ▶")
-				b.WriteString(marker + " " + listItemFocusedStyle.Render(row) + "\n")
-			} else {
-				b.WriteString(marker + " " + listItemStyle.Render(row) + "\n")
-			}
+		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+	}
+
+	for i, k := range s.keys {
+		v := s.root.cfg.Secrets[s.bag][k]
+		shown := maskValue(v)
+		if s.reveal[k] {
+			shown = v
+		}
+		row := fmt.Sprintf("%-24s = %s", k, shown)
+		if i+1 == s.cursor {
+			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
+		} else {
+			b.WriteString("   " + listItemStyle.Render(row) + "\n")
 		}
 	}
-	b.WriteString("\n" + renderButtonRow(s.buttons, s.btnFocus) + "\n")
 	return b.String()
+}
+
+// ----- rename key --------------------------------------------------
+
+func newRenameKeyScreen(r *rootModel, bag, oldKey string) screen {
+	return newInputScreen(r, inputOpts{
+		Title:     "rename key",
+		Prompt:    fmt.Sprintf("Rename key %q in bag %q to:", oldKey, bag),
+		Initial:   oldKey,
+		SaveLabel: "Rename",
+	}, func(val string) tea.Cmd {
+		newKey := strings.TrimSpace(val)
+		if newKey == "" {
+			return emit(errorMsg("name required"))
+		}
+		if newKey == oldKey {
+			return emit(popMsg{})
+		}
+		if _, exists := r.cfg.Secrets[bag][newKey]; exists {
+			return emit(errorMsg("key already exists"))
+		}
+		r.cfg.Secrets[bag][newKey] = r.cfg.Secrets[bag][oldKey]
+		delete(r.cfg.Secrets[bag], oldKey)
+		// Update any mappings that picked this key out of the bag.
+		for i, mp := range r.cfg.Mappings {
+			for j, v := range mp.Vars {
+				if v.Key != oldKey || v.Ref != bag {
+					continue
+				}
+				if sc, ok := r.cfg.Sources[v.Source]; ok && sc.Type == "local" {
+					r.cfg.Mappings[i].Vars[j].Key = newKey
+				}
+			}
+		}
+		return tea.Sequence(
+			emit(popMsg{}),
+			emit(dirtyMsg{}),
+			emit(secretChangedMsg{}),
+			emit(statusMsg("renamed key to "+newKey)),
+		)
+	})
 }
 
 // ----- key/value editor --------------------------------------------
@@ -420,7 +458,7 @@ func newKeyValueEditor(r *rootModel, bag, existingKey string) screen {
 
 func (s *kvEditScreen) Title() string {
 	if s.existingKey != "" {
-		return fmt.Sprintf("edit key in %s", s.bag)
+		return fmt.Sprintf("edit value in %s", s.bag)
 	}
 	return fmt.Sprintf("add key to %s", s.bag)
 }
@@ -530,7 +568,6 @@ func (s *kvEditScreen) advance(dir int) {
 		s.keyIn.Focus()
 		return
 	}
-	// dir < 0
 	if s.btnFocus > 0 {
 		s.btnFocus--
 		return
