@@ -178,14 +178,7 @@ func newRenameSourceScreen(r *rootModel, oldName string) screen {
 		}
 		r.cfg.Sources[newName] = r.cfg.Sources[oldName]
 		delete(r.cfg.Sources, oldName)
-		// Rewrite any mappings that referenced the old name.
-		for i, mp := range r.cfg.Mappings {
-			for j, v := range mp.Vars {
-				if v.Source == oldName {
-					r.cfg.Mappings[i].Vars[j].Source = newName
-				}
-			}
-		}
+		rewriteSourceRefs(r.cfg, oldName, newName)
 		return tea.Sequence(
 			emit(popMsg{}),
 			emit(dirtyMsg{}),

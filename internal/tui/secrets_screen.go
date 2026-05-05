@@ -198,16 +198,7 @@ func newRenameBagScreen(r *rootModel, oldName string) screen {
 		}
 		r.cfg.Secrets[newName] = r.cfg.Secrets[oldName]
 		delete(r.cfg.Secrets, oldName)
-		// Rewrite any mappings that referenced the old bag.
-		for i, mp := range r.cfg.Mappings {
-			for j, v := range mp.Vars {
-				if v.Ref == oldName {
-					if sc, ok := r.cfg.Sources[v.Source]; ok && sc.Type == "local" {
-						r.cfg.Mappings[i].Vars[j].Ref = newName
-					}
-				}
-			}
-		}
+		rewriteLocalBagRefs(r.cfg, oldName, newName)
 		return tea.Sequence(
 			emit(popMsg{}),
 			emit(dirtyMsg{}),
@@ -561,9 +552,16 @@ func (s *kvEditScreen) commit() tea.Cmd {
 		bag[key] = val
 	} else {
 		if key != s.existingKey {
+			if _, exists := bag[key]; exists {
+				s.err = "key already exists"
+				return emit(errorMsg(s.err))
+			}
 			delete(bag, s.existingKey)
+			bag[key] = val
+			rewriteLocalKeyRefs(s.root.cfg, s.bag, s.existingKey, key)
+		} else {
+			bag[key] = val
 		}
-		bag[key] = val
 	}
 	return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(secretChangedMsg{}), emit(statusMsg("saved key "+key)))
 }
