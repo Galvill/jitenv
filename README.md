@@ -22,17 +22,17 @@ git clone https://github.com/gv/jitenv && cd jitenv && make install
 # 1. Open the TUI. On first run it will prompt you to create the config
 #    and pick a passphrase. From there: add sources, mappings, and any
 #    locally-stored secrets — all from the keyboard.
+#
+#    The first time you save inside the TUI, it offers to install the
+#    shell hook (one line appended to ~/.bashrc or ~/.zshrc). You can
+#    decline and add it manually with `jitenv hook bash|zsh`.
 jitenv config
 
 # 2. Unlock the agent (once per session)
 jitenv unlock
 
-# 3. Install the shell hook
-echo 'eval "$(jitenv hook bash)"' >> ~/.bashrc
-# or for zsh:
-echo 'eval "$(jitenv hook zsh)"' >> ~/.zshrc
-
-# 4. Run a mapped file — the env vars appear only inside it
+# 3. Open a new shell so the hook activates, then run a mapped file —
+#    the env vars appear only inside it
 ./scripts/deploy.sh
 echo "$DATABASE_URL"   # empty in parent shell
 ```

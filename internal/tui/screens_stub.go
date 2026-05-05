@@ -17,7 +17,8 @@ func newStubScreen(r *rootModel, title, body string) *stubScreen {
 	return &stubScreen{root: r, title: title, body: body}
 }
 
-func (s *stubScreen) Title() string { return s.title }
+func (s *stubScreen) Title() string  { return s.title }
+func (s *stubScreen) Status() string { return renderHelpKeys([2]string{"Esc", "back"}) }
 func (s *stubScreen) Init() tea.Cmd { return nil }
 func (s *stubScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {

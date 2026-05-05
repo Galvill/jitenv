@@ -16,9 +16,10 @@ type formField struct {
 	revealed bool
 }
 
-// form is a vertical stack of textinput rows, used by both source and
-// mapping/secret edit screens. It does not own a frame or footer — the
-// containing screen renders both.
+// form is a vertical stack of textinput rows. The containing screen
+// owns the surrounding frame and the button row; form only renders the
+// labelled inputs and exposes focus-navigation helpers so the screen
+// can decide when to leave the form and focus a button.
 type form struct {
 	fields []*formField
 	cursor int
@@ -46,7 +47,6 @@ func newForm(schema []source.ParamField, initial map[string]string) *form {
 	return f
 }
 
-// Values returns the current values keyed by ParamField.Key.
 func (f *form) Values() map[string]string {
 	out := make(map[string]string, len(f.fields))
 	for _, fld := range f.fields {
@@ -55,7 +55,6 @@ func (f *form) Values() map[string]string {
 	return out
 }
 
-// MissingRequired returns the labels of any required fields that are empty.
 func (f *form) MissingRequired() []string {
 	var out []string
 	for _, fld := range f.fields {
@@ -70,16 +69,17 @@ func (f *form) MissingRequired() []string {
 	return out
 }
 
-// Update handles navigation + per-field input. Caller invokes this
-// from its own Update method; it does not consume submit/cancel keys.
+// Update is called by the parent screen when focus is on the form.
+// It DOES NOT consume tab/shift-tab — those are handled by the parent
+// screen so it can move focus out of the form to the button row.
 func (f *form) Update(msg tea.Msg) tea.Cmd {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
-		case "tab", "down":
-			f.focus(f.cursor + 1)
+		case "down":
+			f.focusNext()
 			return nil
-		case "shift+tab", "up":
-			f.focus(f.cursor - 1)
+		case "up":
+			f.focusPrev()
 			return nil
 		case "ctrl+r":
 			if len(f.fields) > 0 {
@@ -104,6 +104,15 @@ func (f *form) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// Focus navigation helpers used by the parent screen so it can decide
+// when tab moves out of the form.
+func (f *form) atFirstField() bool { return len(f.fields) == 0 || f.cursor == 0 }
+func (f *form) atLastField() bool  { return len(f.fields) == 0 || f.cursor >= len(f.fields)-1 }
+func (f *form) focusFirst()        { f.focus(0) }
+func (f *form) focusLast()         { f.focus(len(f.fields) - 1) }
+func (f *form) focusNext()         { f.focus(f.cursor + 1) }
+func (f *form) focusPrev()         { f.focus(f.cursor - 1) }
+
 func (f *form) focus(i int) {
 	if len(f.fields) == 0 {
 		return
@@ -121,16 +130,11 @@ func (f *form) focus(i int) {
 
 func (f *form) View() string {
 	if len(f.fields) == 0 {
-		return hintStyle.Render("(no fields)")
+		return dimText("(no fields)")
 	}
 	var b strings.Builder
 	for i, fld := range f.fields {
-		marker := "  "
-		labelStyle := itemStyle
-		if i == f.cursor {
-			marker = cursorStyle.Render("➜ ")
-			labelStyle = cursorStyle
-		}
+		focused := i == f.cursor
 		label := fld.Label
 		if label == "" {
 			label = fld.Key
@@ -138,13 +142,19 @@ func (f *form) View() string {
 		if fld.Required {
 			label += " *"
 		}
-		if fld.Sensitive {
-			label += " " + maskedStyle.Render("(sensitive)")
+		ls := labelStyle
+		if !focused {
+			ls = mutedStyle
 		}
-		b.WriteString(marker + labelStyle.Render(label) + "\n")
-		b.WriteString("    " + fld.input.View() + "\n")
-		if fld.Help != "" {
-			b.WriteString("    " + hintStyle.Render(fld.Help) + "\n")
+		b.WriteString(ls.Render(label))
+		if fld.Sensitive {
+			b.WriteString("  " + maskedStyle.Render("(sensitive)"))
+		}
+		b.WriteString("\n  ")
+		b.WriteString(fld.input.View())
+		b.WriteString("\n")
+		if fld.Help != "" && focused {
+			b.WriteString("  " + hintStyle.Render(fld.Help) + "\n")
 		}
 		b.WriteString("\n")
 	}
