@@ -1,5 +1,14 @@
 package tui
 
+// NOTE: this file is currently unreached from the main menu. Remote
+// source management (AWS Secrets Manager, GitHub Variables) is hidden
+// in the UI for now — see internal/tui/menu.go where the menu entry
+// is commented out. Everything below remains compiled and ready: when
+// the feature returns, restore the menu entry and these screens light
+// up again. The agent / resolver / pkg/source machinery is unaffected
+// and any pre-existing remote sources in config.toml keep working at
+// runtime.
+
 import (
 	"fmt"
 	"sort"

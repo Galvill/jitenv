@@ -31,11 +31,20 @@ func newMenuScreen(r *rootModel) *menuScreen {
 		root:     r,
 		btnFocus: -1, // start on the list
 		items: []menuItem{
-			{
-				label: "Remote Sources",
-				hint:  func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
-				open:  func(r *rootModel) screen { return newSourcesListScreen(r) },
-			},
+			// Remote Sources (AWS Secrets Manager, GitHub Variables) are
+			// disabled in the UI for now. The screens, type picker,
+			// rename flow, and var-wizard branches in sources_screen.go
+			// and var_wizard.go are still wired up — re-enable by
+			// uncommenting this entry. Existing remote sources already
+			// in config.toml continue to work at runtime; they just
+			// can't be created/edited from the TUI until the menu entry
+			// returns.
+			//
+			// {
+			// 	label: "Remote Sources",
+			// 	hint:  func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
+			// 	open:  func(r *rootModel) screen { return newSourcesListScreen(r) },
+			// },
 			{
 				label: "Mappings",
 				hint:  func() string { return fmt.Sprintf("%d defined", len(r.cfg.Mappings)) },
