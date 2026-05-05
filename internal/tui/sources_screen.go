@@ -13,20 +13,17 @@ import (
 
 // ----- list of sources ---------------------------------------------
 
+// sourcesListScreen is a single list. Top entry is a sentinel
+// "< Create New Source >" that launches the type picker. Enter on any
+// other row opens a popup menu with Edit / Rename / Delete / Back.
 type sourcesListScreen struct {
-	root     *rootModel
-	cursor   int
-	btnFocus int // -1 = list, else index into buttons
-	buttons  []button
-	names    []string
+	root   *rootModel
+	cursor int
+	names  []string
 }
 
 func newSourcesListScreen(r *rootModel) screen {
-	s := &sourcesListScreen{
-		root:     r,
-		btnFocus: -1,
-		buttons:  []button{newButton("Add"), newButton("Edit"), newButton("Delete"), newButton("Back")},
-	}
+	s := &sourcesListScreen{root: r}
 	s.refresh()
 	return s
 }
@@ -40,66 +37,46 @@ func (s *sourcesListScreen) refresh() {
 		s.names = append(s.names, n)
 	}
 	sort.Strings(s.names)
-	if s.cursor >= len(s.names) {
-		s.cursor = len(s.names) - 1
+	maxRow := len(s.names) // sentinel + names; valid cursor is 0..len(names)
+	if s.cursor > maxRow {
+		s.cursor = maxRow
 	}
 	if s.cursor < 0 {
 		s.cursor = 0
 	}
 }
 
-func (s *sourcesListScreen) Title() string  { return "remote sources" }
-func (s *sourcesListScreen) Status() string { return defaultListStatus }
-func (s *sourcesListScreen) Init() tea.Cmd  { return nil }
+func (s *sourcesListScreen) Title() string { return "remote sources" }
+func (s *sourcesListScreen) Status() string {
+	return renderHelpKeys(
+		[2]string{"↑/↓", "move"},
+		[2]string{"Enter", "open"},
+		[2]string{"Esc", "back"},
+	)
+}
+func (s *sourcesListScreen) Init() tea.Cmd { return nil }
 
 func (s *sourcesListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
-	switch msg.(type) {
-	case sourceSavedMsg:
+	if _, ok := msg.(sourceSavedMsg); ok {
 		s.refresh()
 		return s, nil
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
+		total := len(s.names) + 1 // sentinel + names
 		switch k.String() {
 		case "up", "k":
-			if s.btnFocus >= 0 {
-				s.btnFocus = -1
-			} else if s.cursor > 0 {
+			if s.cursor > 0 {
 				s.cursor--
 			}
 		case "down", "j":
-			if s.btnFocus < 0 {
-				if s.cursor < len(s.names)-1 {
-					s.cursor++
-				} else {
-					s.btnFocus = 0
-				}
-			}
-		case "tab":
-			if s.btnFocus < 0 {
-				s.btnFocus = 0
-			} else if s.btnFocus < len(s.buttons)-1 {
-				s.btnFocus++
-			} else {
-				s.btnFocus = -1
-			}
-		case "shift+tab":
-			if s.btnFocus < 0 {
-				s.btnFocus = len(s.buttons) - 1
-			} else if s.btnFocus > 0 {
-				s.btnFocus--
-			} else {
-				s.btnFocus = -1
-			}
-		case "left", "h":
-			if s.btnFocus > 0 {
-				s.btnFocus--
-			}
-		case "right", "l":
-			if s.btnFocus >= 0 && s.btnFocus < len(s.buttons)-1 {
-				s.btnFocus++
+			if s.cursor < total-1 {
+				s.cursor++
 			}
 		case "enter":
-			return s, s.activate()
+			if s.cursor == 0 {
+				return s, emit(pushMsg{s: newSourceTypePickerScreen(s.root)})
+			}
+			return s, s.openMenu()
 		case "esc":
 			return s, emit(popMsg{})
 		}
@@ -107,68 +84,106 @@ func (s *sourcesListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *sourcesListScreen) activate() tea.Cmd {
-	if s.btnFocus < 0 {
-		// enter on list = edit current
-		return s.openEdit()
+func (s *sourcesListScreen) selectedName() string {
+	if s.cursor == 0 || len(s.names) == 0 {
+		return ""
 	}
-	switch s.buttons[s.btnFocus].label {
-	case "Add":
-		return emit(pushMsg{s: newSourceTypePickerScreen(s.root)})
-	case "Edit":
-		return s.openEdit()
-	case "Delete":
-		return s.deleteCurrent()
-	case "Back":
-		return emit(popMsg{})
-	}
-	return nil
+	return s.names[s.cursor-1]
 }
 
-func (s *sourcesListScreen) openEdit() tea.Cmd {
-	if len(s.names) == 0 {
-		return emit(statusMsg("no source selected"))
+func (s *sourcesListScreen) openMenu() tea.Cmd {
+	name := s.selectedName()
+	if name == "" {
+		return nil
 	}
-	return emit(pushMsg{s: newSourceParamsScreenForEdit(s.root, s.names[s.cursor])})
-}
-
-func (s *sourcesListScreen) deleteCurrent() tea.Cmd {
-	if len(s.names) == 0 {
-		return emit(statusMsg("no source selected"))
-	}
-	name := s.names[s.cursor]
 	cb := func(choice string) tea.Cmd {
-		if choice == "Yes" {
-			delete(s.root.cfg.Sources, name)
-			s.refresh()
-			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(statusMsg("removed source "+name)))
+		switch choice {
+		case "Edit":
+			return tea.Sequence(emit(popMsg{}),
+				emit(pushMsg{s: newSourceParamsScreenForEdit(s.root, name)}))
+		case "Rename":
+			return tea.Sequence(emit(popMsg{}),
+				emit(pushMsg{s: newRenameSourceScreen(s.root, name)}))
+		case "Delete":
+			cb := func(choice string) tea.Cmd {
+				if choice == "Yes" {
+					delete(s.root.cfg.Sources, name)
+					s.refresh()
+					return tea.Sequence(emit(popMsg{}), emit(popMsg{}),
+						emit(dirtyMsg{}), emit(sourceSavedMsg{}),
+						emit(statusMsg("removed source "+name)))
+				}
+				return emit(popMsg{})
+			}
+			return emit(pushMsg{s: newConfirmScreen(s.root,
+				fmt.Sprintf("Delete source %q?", name), cb, "Yes", "No")})
 		}
 		return emit(popMsg{})
 	}
-	return emit(pushMsg{s: newConfirmScreen(s.root,
-		fmt.Sprintf("Delete source %q?", name), cb, "Yes", "No")})
+	return emit(pushMsg{s: newPopupMenuScreen(s.root,
+		"Source: "+name, cb,
+		"Edit", "Rename", "Delete", "Back",
+	)})
 }
 
 func (s *sourcesListScreen) View() string {
 	var b strings.Builder
-	b.WriteString(labelStyle.Render("Configured sources") + "\n\n")
-	if len(s.names) == 0 {
-		b.WriteString(dimText("(none yet — press Add)") + "\n")
+	b.WriteString(labelStyle.Render("Remote sources") + "\n\n")
+
+	sentinel := "< Create New Source >"
+	if s.cursor == 0 {
+		b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
 	} else {
-		for i, n := range s.names {
-			row := fmt.Sprintf("%-24s  %s", n, dimText("("+s.root.cfg.Sources[n].Type+")"))
-			focused := s.btnFocus < 0 && i == s.cursor
-			marker := "  "
-			if focused {
-				marker = labelStyle.Render(" ▶")
-				b.WriteString(marker + " " + listItemFocusedStyle.Render(row) + "\n")
-			} else {
-				b.WriteString(marker + " " + listItemStyle.Render(row) + "\n")
-			}
+		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+	}
+
+	for i, n := range s.names {
+		row := fmt.Sprintf("%-24s  %s", n, dimText("("+s.root.cfg.Sources[n].Type+")"))
+		if i+1 == s.cursor {
+			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
+		} else {
+			b.WriteString("   " + listItemStyle.Render(row) + "\n")
 		}
 	}
-	b.WriteString("\n" + renderButtonRow(s.buttons, s.btnFocus) + "\n")
 	return b.String()
+}
+
+// ----- rename source -----------------------------------------------
+
+func newRenameSourceScreen(r *rootModel, oldName string) screen {
+	return newInputScreen(r, inputOpts{
+		Title:     "rename source",
+		Prompt:    fmt.Sprintf("Rename source %q to:", oldName),
+		Initial:   oldName,
+		SaveLabel: "Rename",
+	}, func(val string) tea.Cmd {
+		newName := strings.TrimSpace(val)
+		if newName == "" {
+			return emit(errorMsg("name required"))
+		}
+		if newName == oldName {
+			return emit(popMsg{})
+		}
+		if _, exists := r.cfg.Sources[newName]; exists {
+			return emit(errorMsg("source already exists"))
+		}
+		r.cfg.Sources[newName] = r.cfg.Sources[oldName]
+		delete(r.cfg.Sources, oldName)
+		// Rewrite any mappings that referenced the old name.
+		for i, mp := range r.cfg.Mappings {
+			for j, v := range mp.Vars {
+				if v.Source == oldName {
+					r.cfg.Mappings[i].Vars[j].Source = newName
+				}
+			}
+		}
+		return tea.Sequence(
+			emit(popMsg{}),
+			emit(dirtyMsg{}),
+			emit(sourceSavedMsg{}),
+			emit(statusMsg("renamed source to "+newName)),
+		)
+	})
 }
 
 // ----- type picker (used during add) -------------------------------
