@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // menuScreen is the top-level menu rendered as a centered, bordered
@@ -22,10 +21,9 @@ type menuScreen struct {
 }
 
 type menuItem struct {
-	label   string
-	hint    func() string
-	descrip string
-	open    func(*rootModel) screen
+	label string
+	hint  func() string
+	open  func(*rootModel) screen
 }
 
 func newMenuScreen(r *rootModel) *menuScreen {
@@ -34,28 +32,24 @@ func newMenuScreen(r *rootModel) *menuScreen {
 		btnFocus: -1, // start on the list
 		items: []menuItem{
 			{
-				label:   "Remote Sources",
-				descrip: "Configure remote secret backends (AWS Secrets Manager, GitHub Variables).",
-				hint:    func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
-				open:    func(r *rootModel) screen { return newSourcesListScreen(r) },
+				label: "Remote Sources",
+				hint:  func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
+				open:  func(r *rootModel) screen { return newSourcesListScreen(r) },
 			},
 			{
-				label:   "Mappings",
-				descrip: "Bind file paths to env vars from sources.",
-				hint:    func() string { return fmt.Sprintf("%d defined", len(r.cfg.Mappings)) },
-				open:    func(r *rootModel) screen { return newMappingsListScreen(r) },
+				label: "Mappings",
+				hint:  func() string { return fmt.Sprintf("%d defined", len(r.cfg.Mappings)) },
+				open:  func(r *rootModel) screen { return newMappingsListScreen(r) },
 			},
 			{
-				label:   "Local secrets",
-				descrip: "Encrypted bags of key/value pairs stored in this config.",
-				hint:    func() string { return fmt.Sprintf("%d bags", len(r.cfg.Secrets)) },
-				open:    func(r *rootModel) screen { return newSecretsListScreen(r) },
+				label: "Local secrets",
+				hint:  func() string { return fmt.Sprintf("%d bags", len(r.cfg.Secrets)) },
+				open:  func(r *rootModel) screen { return newSecretsListScreen(r) },
 			},
 			{
-				label:   "Settings",
-				descrip: "Agent idle timeout and other preferences.",
-				hint:    func() string { return "" },
-				open:    func(r *rootModel) screen { return newSettingsScreen(r) },
+				label: "Settings",
+				hint:  func() string { return "" },
+				open:  func(r *rootModel) screen { return newSettingsScreen(r) },
 			},
 		},
 		buttons: []button{newButton("Save"), newButton("Quit")},
@@ -80,7 +74,6 @@ func (m *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			if m.btnFocus < 0 && m.cursor < len(m.items)-1 {
 				m.cursor++
 			} else if m.btnFocus < 0 {
-				// fall off the list end → focus first button
 				m.btnFocus = 0
 			}
 		case "tab":
@@ -118,7 +111,6 @@ func (m *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 func (m *menuScreen) activate() tea.Cmd {
 	if m.btnFocus < 0 {
-		// list activation
 		it := m.items[m.cursor]
 		if it.open == nil {
 			return emit(statusMsg("not implemented yet"))
@@ -158,7 +150,6 @@ func (m *menuScreen) View() string {
 
 	b.WriteString(labelStyle.Render("Choose a section") + "\n\n")
 
-	// List rows.
 	for i, it := range m.items {
 		focused := m.btnFocus < 0 && i == m.cursor
 		row := fmt.Sprintf("%-16s", it.label)
@@ -176,14 +167,6 @@ func (m *menuScreen) View() string {
 		}
 	}
 
-	// Description of current item.
-	desc := ""
-	if m.btnFocus < 0 && m.cursor < len(m.items) {
-		desc = m.items[m.cursor].descrip
-	}
-	b.WriteString("\n" + lipgloss.NewStyle().Foreground(colorMuted).Render(desc) + "\n\n")
-
-	// Button row aligned right.
-	b.WriteString(renderButtonRow(m.buttons, m.btnFocus) + "\n")
+	b.WriteString("\n" + renderButtonRow(m.buttons, m.btnFocus) + "\n")
 	return b.String()
 }
