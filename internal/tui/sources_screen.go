@@ -33,7 +33,10 @@ func newSourcesListScreen(r *rootModel) screen {
 
 func (s *sourcesListScreen) refresh() {
 	s.names = s.names[:0]
-	for n := range s.root.cfg.Sources {
+	for n, sc := range s.root.cfg.Sources {
+		if isManagedSourceType(sc.Type) {
+			continue
+		}
 		s.names = append(s.names, n)
 	}
 	sort.Strings(s.names)
@@ -45,7 +48,7 @@ func (s *sourcesListScreen) refresh() {
 	}
 }
 
-func (s *sourcesListScreen) Title() string  { return "sources" }
+func (s *sourcesListScreen) Title() string  { return "remote sources" }
 func (s *sourcesListScreen) Status() string { return defaultListStatus }
 func (s *sourcesListScreen) Init() tea.Cmd  { return nil }
 
@@ -181,10 +184,43 @@ type sourceTypePickerScreen struct {
 func newSourceTypePickerScreen(r *rootModel) screen {
 	return &sourceTypePickerScreen{
 		root:     r,
-		types:    sources.Types(),
+		types:    remoteSourceTypes(),
 		btnFocus: -1,
 		buttons:  []button{newButton("Next"), newButton("Cancel")},
 	}
+}
+
+// remoteSourceTypes returns the list of source types the user can pick
+// when adding a new remote source. Internal/managed types (the local
+// bag store, the test-only noop source) are excluded.
+func remoteSourceTypes() []string {
+	all := sources.Types()
+	out := all[:0:0]
+	for _, t := range all {
+		if isManagedSourceType(t) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// isManagedSourceType reports whether the named type is auto-managed
+// (so the user shouldn't see/create it from the Remote Sources page).
+func isManagedSourceType(t string) bool {
+	return t == "local" || t == "noop"
+}
+
+// countRemoteSources is the number of user-managed remote sources.
+// Used by the main menu to show "(N configured)".
+func countRemoteSources(r *rootModel) int {
+	n := 0
+	for _, sc := range r.cfg.Sources {
+		if !isManagedSourceType(sc.Type) {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *sourceTypePickerScreen) Title() string  { return "new source — pick type" }

@@ -34,9 +34,9 @@ func newMenuScreen(r *rootModel) *menuScreen {
 		btnFocus: -1, // start on the list
 		items: []menuItem{
 			{
-				label:   "Sources",
-				descrip: "Configure secret backends (AWS, GitHub, Local).",
-				hint:    func() string { return fmt.Sprintf("%d configured", len(r.cfg.Sources)) },
+				label:   "Remote Sources",
+				descrip: "Configure remote secret backends (AWS Secrets Manager, GitHub Variables).",
+				hint:    func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
 				open:    func(r *rootModel) screen { return newSourcesListScreen(r) },
 			},
 			{
