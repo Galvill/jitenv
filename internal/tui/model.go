@@ -1,21 +1,20 @@
 package tui
 
 import (
-	"fmt"
-
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gv/jitenv/internal/config"
 )
 
-// screen is the drilled-into card. Each screen owns its own keymap
-// and View; the rootModel just delegates while the screen is non-nil.
+// screen is one card in the screen stack. Each screen renders the
+// content panel body; the root model wraps it with the title bar and
+// status bar.
 type screen interface {
 	Init() tea.Cmd
 	Update(tea.Msg) (screen, tea.Cmd)
-	View() string
-	// Title is rendered in the frame header.
-	Title() string
+	View() string   // body — rendered inside the centered frame panel
+	Title() string  // shown in the top title bar
+	Status() string // shown in the bottom status bar
 }
 
 // rootModel owns the in-memory config, master key, and screen stack.
@@ -29,14 +28,16 @@ type rootModel struct {
 	dirty                bool
 	savedSinceLastReload bool
 
-	status string // transient line at the bottom (e.g. save errors)
-	err    error  // fatal error returned from prog.Run
+	flash    string // transient overlay: temporary message in the title bar
+	flashErr bool
+
+	err    error // fatal error returned from prog.Run
 	width  int
 	height int
 }
 
 func newRootModel(cfgPath string, cfg *config.Config, key []byte) *rootModel {
-	r := &rootModel{cfgPath: cfgPath, cfg: cfg, key: key}
+	r := &rootModel{cfgPath: cfgPath, cfg: cfg, key: key, width: 80, height: 24}
 	r.push(newMenuScreen(r))
 	return r
 }
@@ -53,15 +54,16 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.width, r.height = msg.Width, msg.Height
 	case tea.KeyMsg:
-		// Global ctrl+c: quit immediately, even with unsaved work.
 		if msg.Type == tea.KeyCtrlC {
 			return r, tea.Quit
 		}
 	case statusMsg:
-		r.status = string(msg)
+		r.flash = string(msg)
+		r.flashErr = false
 		return r, nil
 	case errorMsg:
-		r.status = errorStyle.Render("error: " + string(msg))
+		r.flash = string(msg)
+		r.flashErr = true
 		return r, nil
 	case popMsg:
 		r.pop()
@@ -86,7 +88,8 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case savedMsg:
 		r.dirty = false
 		r.savedSinceLastReload = true
-		r.status = statusStyle.Render("saved")
+		r.flash = "saved"
+		r.flashErr = false
 		return r, nil
 	}
 
@@ -102,16 +105,24 @@ func (r *rootModel) View() string {
 	if len(r.stack) == 0 {
 		return ""
 	}
-	body := r.top().View()
-	header := titleStyle.Render(r.top().Title())
+	titleLeft := " jitenv — " + r.top().Title()
+	var titleRight string
 	if r.dirty {
-		header += " " + dirtyStyle.Render("● unsaved")
+		titleRight = warnStyle.Render("● unsaved ") + " "
+	} else {
+		titleRight = okStyle.Render("● saved ") + " "
 	}
-	footer := r.status
-	if footer == "" {
-		footer = hintStyle.Render(fmt.Sprintf("config: %s", r.cfgPath))
+
+	status := r.top().Status()
+	if r.flash != "" {
+		flashStyle := okStyle
+		if r.flashErr {
+			flashStyle = errorStyle
+		}
+		status = flashStyle.Render("» "+r.flash) + "    " + dimText(status)
 	}
-	return header + "\n" + frameStyle.Render(body) + "\n" + footer
+
+	return renderApp(r.width, r.height, titleLeft, titleRight, r.top().View(), status)
 }
 
 func (r *rootModel) push(s screen) { r.stack = append(r.stack, s) }
