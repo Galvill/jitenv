@@ -29,8 +29,8 @@ type fakeResolver struct {
 	env    map[string]map[string]string
 }
 
-func (f *fakeResolver) Sources() []string                { return []string{"fake"} }
-func (f *fakeResolver) IsMapped(p string) bool           { return f.mapped[p] }
+func (f *fakeResolver) Sources() []string      { return []string{"fake"} }
+func (f *fakeResolver) IsMapped(p string) bool { return f.mapped[p] }
 func (f *fakeResolver) FetchEnv(_ context.Context, p string) (map[string]string, error) {
 	return f.env[p], nil
 }
@@ -38,7 +38,7 @@ func (f *fakeResolver) FetchEnv(_ context.Context, p string) (map[string]string,
 func TestAgentStatusAndLock(t *testing.T) {
 	a, p := newTestAgent(t, nil)
 
-	go a.Serve(context.Background())
+	go a.Serve(context.Background()) //nolint:errcheck // goroutine: error surfaced via Shutdown/Listen pair
 	cli := NewClient(p.Socket)
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -73,7 +73,7 @@ func TestAgentResolverDispatch(t *testing.T) {
 		env:    map[string]map[string]string{"/x": {"FOO": "bar"}},
 	}
 	a, p := newTestAgent(t, fr)
-	go a.Serve(context.Background())
+	go a.Serve(context.Background()) //nolint:errcheck // goroutine: error surfaced via Shutdown/Listen pair
 	cli := NewClient(p.Socket)
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -114,7 +114,7 @@ func TestAgentReload(t *testing.T) {
 	a, p := newTestAgent(t, first)
 	a.SetReload(func() (Resolver, error) { return second, nil })
 
-	go a.Serve(context.Background())
+	go a.Serve(context.Background()) //nolint:errcheck // goroutine: error surfaced via Shutdown/Listen pair
 	cli := NewClient(p.Socket)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -147,7 +147,7 @@ func TestAgentReload(t *testing.T) {
 
 func TestAgentReloadUnsupported(t *testing.T) {
 	a, p := newTestAgent(t, nil)
-	go a.Serve(context.Background())
+	go a.Serve(context.Background()) //nolint:errcheck // goroutine: error surfaced via Shutdown/Listen pair
 	cli := NewClient(p.Socket)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

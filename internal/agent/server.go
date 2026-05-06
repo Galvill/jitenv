@@ -178,7 +178,10 @@ func (a *Agent) handle(ctx context.Context, c *net.UnixConn) {
 		_ = WriteMessage(c, Response{OK: false, Error: "unauthorized"})
 		return
 	}
-	c.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := c.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		_ = WriteMessage(c, Response{OK: false, Error: "set deadline: " + err.Error()})
+		return
+	}
 
 	var req Request
 	if err := ReadMessage(c, &req); err != nil {

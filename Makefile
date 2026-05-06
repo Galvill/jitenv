@@ -2,10 +2,19 @@ GO ?= go
 BIN := jitenv
 PREFIX ?= $(HOME)/.local
 
-.PHONY: build install test fmt vet tidy clean
+.PHONY: build install test fmt vet tidy lint release-snapshot clean
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+LDFLAGS := -s -w \
+	-X github.com/gv/jitenv/internal/cli.Version=$(VERSION) \
+	-X github.com/gv/jitenv/internal/cli.Commit=$(COMMIT) \
+	-X github.com/gv/jitenv/internal/cli.Date=$(DATE)
 
 build:
-	$(GO) build -trimpath -ldflags "-s -w" -o bin/$(BIN) ./cmd/jitenv
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/jitenv
 
 install: build
 	install -Dm0755 bin/$(BIN) $(PREFIX)/bin/$(BIN)
@@ -24,3 +33,9 @@ tidy:
 
 clean:
 	rm -rf bin
+
+lint:
+	golangci-lint run
+
+release-snapshot:
+	goreleaser release --snapshot --clean --skip=publish,sign

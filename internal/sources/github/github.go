@@ -36,8 +36,8 @@ func schema() []source.ParamField {
 
 // New constructs a GitHub source. Recognized cfg keys:
 //
-//   token   string  PAT with scopes for the variables you want to read
-//   api_url string  optional, for GitHub Enterprise
+//	token   string  PAT with scopes for the variables you want to read
+//	api_url string  optional, for GitHub Enterprise
 func New(cfg map[string]any) (source.Source, error) {
 	token, _ := cfg["token"].(string)
 	if token == "" {
@@ -86,11 +86,11 @@ func (g *githubSource) Validate(ctx context.Context) error {
 
 // Fetch reads a variable.
 //
-//   ref.ID    "owner/repo" (repo scope), or "org" (org scope)
-//   ref.Key   variable name (REQUIRED)
-//   ref.Extra keys:
-//     scope        one of: repo (default), org, env
-//     environment  required when scope=env
+//	ref.ID    "owner/repo" (repo scope), or "org" (org scope)
+//	ref.Key   variable name (REQUIRED)
+//	ref.Extra keys:
+//	  scope        one of: repo (default), org, env
+//	  environment  required when scope=env
 func (g *githubSource) Fetch(ctx context.Context, ref source.SecretRef) (map[string]string, error) {
 	if ref.Key == "" {
 		return nil, errors.New("github: ref.Key (variable name) is required")
@@ -163,4 +163,3 @@ func splitOwnerRepo(s string) (owner, repo string, ok bool) {
 	}
 	return parts[0], parts[1], true
 }
-

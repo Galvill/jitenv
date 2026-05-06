@@ -4,7 +4,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.0-dev"
+// Build-time injected via -ldflags. Defaults intentionally identify a
+// non-release build so plain `go build` / `go install` are honest.
+var (
+	Version = "dev"
+	Commit  = ""
+	Date    = ""
+)
 
 var configPath string
 

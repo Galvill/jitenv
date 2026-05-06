@@ -1,5 +1,9 @@
 package tui
 
+//nolint:unused // Reserved for the hidden Remote Sources UI; will be wired
+// back into the TUI menu once the feature is re-enabled (see CLAUDE.md
+// "No third source UI" note).
+
 // NOTE: this file is currently unreached from the main menu. Remote
 // source management (AWS Secrets Manager, GitHub Variables) is hidden
 // in the UI for now — see internal/tui/menu.go where the menu entry
@@ -25,19 +29,19 @@ import (
 // sourcesListScreen is a single list. Top entry is a sentinel
 // "< Create New Source >" that launches the type picker. Enter on any
 // other row opens a popup menu with Edit / Rename / Delete / Back.
-type sourcesListScreen struct {
+type sourcesListScreen struct { //nolint:unused // hidden Remote Sources UI
 	root   *rootModel
 	cursor int
 	names  []string
 }
 
-func newSourcesListScreen(r *rootModel) screen {
+func newSourcesListScreen(r *rootModel) screen { //nolint:unused // hidden Remote Sources UI
 	s := &sourcesListScreen{root: r}
 	s.refresh()
 	return s
 }
 
-func (s *sourcesListScreen) refresh() {
+func (s *sourcesListScreen) refresh() { //nolint:unused // hidden Remote Sources UI
 	s.names = s.names[:0]
 	for n, sc := range s.root.cfg.Sources {
 		if isManagedSourceType(sc.Type) {
@@ -55,17 +59,17 @@ func (s *sourcesListScreen) refresh() {
 	}
 }
 
-func (s *sourcesListScreen) Title() string { return "remote sources" }
-func (s *sourcesListScreen) Status() string {
+func (s *sourcesListScreen) Title() string { return "remote sources" } //nolint:unused // hidden Remote Sources UI
+func (s *sourcesListScreen) Status() string { //nolint:unused // hidden Remote Sources UI
 	return renderHelpKeys(
 		[2]string{"↑/↓", "move"},
 		[2]string{"Enter", "open"},
 		[2]string{"Esc", "back"},
 	)
 }
-func (s *sourcesListScreen) Init() tea.Cmd { return nil }
+func (s *sourcesListScreen) Init() tea.Cmd { return nil } //nolint:unused // hidden Remote Sources UI
 
-func (s *sourcesListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+func (s *sourcesListScreen) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
 	if _, ok := msg.(sourceSavedMsg); ok {
 		s.refresh()
 		return s, nil
@@ -93,14 +97,14 @@ func (s *sourcesListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *sourcesListScreen) selectedName() string {
+func (s *sourcesListScreen) selectedName() string { //nolint:unused // hidden Remote Sources UI
 	if s.cursor == 0 || len(s.names) == 0 {
 		return ""
 	}
 	return s.names[s.cursor-1]
 }
 
-func (s *sourcesListScreen) openMenu() tea.Cmd {
+func (s *sourcesListScreen) openMenu() tea.Cmd { //nolint:unused // hidden Remote Sources UI
 	name := s.selectedName()
 	if name == "" {
 		return nil
@@ -135,7 +139,7 @@ func (s *sourcesListScreen) openMenu() tea.Cmd {
 	)})
 }
 
-func (s *sourcesListScreen) View() string {
+func (s *sourcesListScreen) View() string { //nolint:unused // hidden Remote Sources UI
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Remote sources") + "\n\n")
 
@@ -159,7 +163,7 @@ func (s *sourcesListScreen) View() string {
 
 // ----- rename source -----------------------------------------------
 
-func newRenameSourceScreen(r *rootModel, oldName string) screen {
+func newRenameSourceScreen(r *rootModel, oldName string) screen { //nolint:unused // hidden Remote Sources UI
 	return newInputScreen(r, inputOpts{
 		Title:     "rename source",
 		Prompt:    fmt.Sprintf("Rename source %q to:", oldName),
@@ -190,7 +194,7 @@ func newRenameSourceScreen(r *rootModel, oldName string) screen {
 
 // ----- type picker (used during add) -------------------------------
 
-type sourceTypePickerScreen struct {
+type sourceTypePickerScreen struct { //nolint:unused // hidden Remote Sources UI
 	root     *rootModel
 	types    []string
 	cursor   int
@@ -198,7 +202,7 @@ type sourceTypePickerScreen struct {
 	buttons  []button
 }
 
-func newSourceTypePickerScreen(r *rootModel) screen {
+func newSourceTypePickerScreen(r *rootModel) screen { //nolint:unused // hidden Remote Sources UI
 	return &sourceTypePickerScreen{
 		root:     r,
 		types:    remoteSourceTypes(),
@@ -210,7 +214,7 @@ func newSourceTypePickerScreen(r *rootModel) screen {
 // remoteSourceTypes returns the list of source types the user can pick
 // when adding a new remote source. Internal/managed types (the local
 // bag store, the test-only noop source) are excluded.
-func remoteSourceTypes() []string {
+func remoteSourceTypes() []string { //nolint:unused // hidden Remote Sources UI
 	all := sources.Types()
 	out := all[:0:0]
 	for _, t := range all {
@@ -224,13 +228,13 @@ func remoteSourceTypes() []string {
 
 // isManagedSourceType reports whether the named type is auto-managed
 // (so the user shouldn't see/create it from the Remote Sources page).
-func isManagedSourceType(t string) bool {
+func isManagedSourceType(t string) bool { //nolint:unused // hidden Remote Sources UI
 	return t == "local" || t == "noop"
 }
 
 // countRemoteSources is the number of user-managed remote sources.
 // Used by the main menu to show "(N configured)".
-func countRemoteSources(r *rootModel) int {
+func countRemoteSources(r *rootModel) int { //nolint:unused // hidden Remote Sources UI
 	n := 0
 	for _, sc := range r.cfg.Sources {
 		if !isManagedSourceType(sc.Type) {
@@ -240,11 +244,11 @@ func countRemoteSources(r *rootModel) int {
 	return n
 }
 
-func (s *sourceTypePickerScreen) Title() string  { return "new source — pick type" }
-func (s *sourceTypePickerScreen) Status() string { return defaultListStatus }
-func (s *sourceTypePickerScreen) Init() tea.Cmd  { return nil }
+func (s *sourceTypePickerScreen) Title() string  { return "new source — pick type" } //nolint:unused // hidden Remote Sources UI
+func (s *sourceTypePickerScreen) Status() string { return defaultListStatus }        //nolint:unused // hidden Remote Sources UI
+func (s *sourceTypePickerScreen) Init() tea.Cmd  { return nil }                      //nolint:unused // hidden Remote Sources UI
 
-func (s *sourceTypePickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+func (s *sourceTypePickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "up", "k":
@@ -287,7 +291,7 @@ func (s *sourceTypePickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *sourceTypePickerScreen) View() string {
+func (s *sourceTypePickerScreen) View() string { //nolint:unused // hidden Remote Sources UI
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Source type") + "\n\n")
 	for i, t := range s.types {
@@ -312,7 +316,7 @@ func (s *sourceTypePickerScreen) View() string {
 
 // ----- name input (during add) -------------------------------------
 
-func newSourceNameScreen(r *rootModel, typeName string) screen {
+func newSourceNameScreen(r *rootModel, typeName string) screen { //nolint:unused // hidden Remote Sources UI
 	defaultName := proposeSourceName(r, typeName)
 	return newInputScreen(r,
 		inputOpts{
@@ -337,7 +341,7 @@ func newSourceNameScreen(r *rootModel, typeName string) screen {
 		})
 }
 
-func proposeSourceName(r *rootModel, typeName string) string {
+func proposeSourceName(r *rootModel, typeName string) string { //nolint:unused // hidden Remote Sources UI
 	base := typeName
 	if _, exists := r.cfg.Sources[base]; !exists {
 		return base
@@ -353,7 +357,7 @@ func proposeSourceName(r *rootModel, typeName string) string {
 
 // ----- params form (also used for edit) ----------------------------
 
-type sourceParamsScreen struct {
+type sourceParamsScreen struct { //nolint:unused // hidden Remote Sources UI
 	root     *rootModel
 	name     string
 	typeName string
@@ -364,7 +368,7 @@ type sourceParamsScreen struct {
 	err      string
 }
 
-func newSourceParamsScreenForEdit(r *rootModel, name string) screen {
+func newSourceParamsScreenForEdit(r *rootModel, name string) screen { //nolint:unused // hidden Remote Sources UI
 	sc, ok := r.cfg.Sources[name]
 	if !ok {
 		return newStubScreen(r, "sources", "(source vanished)")
@@ -377,7 +381,7 @@ func newSourceParamsScreenForEdit(r *rootModel, name string) screen {
 	}
 }
 
-func newSourceParamsScreenForNew(r *rootModel, typeName, name string) screen {
+func newSourceParamsScreenForNew(r *rootModel, typeName, name string) screen { //nolint:unused // hidden Remote Sources UI
 	return &sourceParamsScreen{
 		root: r, name: name, typeName: typeName, creating: true,
 		form:     newForm(sources.Schema(typeName), nil),
@@ -386,7 +390,7 @@ func newSourceParamsScreenForNew(r *rootModel, typeName, name string) screen {
 	}
 }
 
-func (s *sourceParamsScreen) Title() string {
+func (s *sourceParamsScreen) Title() string { //nolint:unused // hidden Remote Sources UI
 	verb := "edit"
 	if s.creating {
 		verb = "new"
@@ -394,11 +398,11 @@ func (s *sourceParamsScreen) Title() string {
 	return fmt.Sprintf("%s source: %s (%s)", verb, s.name, s.typeName)
 }
 
-func (s *sourceParamsScreen) Status() string { return defaultFormStatus }
+func (s *sourceParamsScreen) Status() string { return defaultFormStatus } //nolint:unused // hidden Remote Sources UI
 
-func (s *sourceParamsScreen) Init() tea.Cmd { return nil }
+func (s *sourceParamsScreen) Init() tea.Cmd { return nil } //nolint:unused // hidden Remote Sources UI
 
-func (s *sourceParamsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+func (s *sourceParamsScreen) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "esc":
@@ -466,7 +470,7 @@ func (s *sourceParamsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *sourceParamsScreen) save() tea.Cmd {
+func (s *sourceParamsScreen) save() tea.Cmd { //nolint:unused // hidden Remote Sources UI
 	if missing := s.form.MissingRequired(); len(missing) > 0 {
 		s.err = "missing required: " + strings.Join(missing, ", ")
 		return emit(errorMsg(s.err))
@@ -494,7 +498,7 @@ func (s *sourceParamsScreen) save() tea.Cmd {
 	return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(sourceSavedMsg{}), emit(statusMsg(verb+" source "+s.name)))
 }
 
-func (s *sourceParamsScreen) View() string {
+func (s *sourceParamsScreen) View() string { //nolint:unused // hidden Remote Sources UI
 	var b strings.Builder
 	if s.form != nil && len(s.form.fields) > 0 {
 		b.WriteString(s.form.View())
@@ -510,9 +514,9 @@ func (s *sourceParamsScreen) View() string {
 
 // ----- helpers ------------------------------------------------------
 
-type sourceSavedMsg struct{}
+type sourceSavedMsg struct{} //nolint:unused // hidden Remote Sources UI
 
-func paramsToStrings(p map[string]any) map[string]string {
+func paramsToStrings(p map[string]any) map[string]string { //nolint:unused // hidden Remote Sources UI
 	out := map[string]string{}
 	for k, v := range p {
 		if s, ok := v.(string); ok {

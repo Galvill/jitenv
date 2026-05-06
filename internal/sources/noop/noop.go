@@ -35,8 +35,9 @@ type noopSource struct {
 	values map[string]string
 }
 
-func (n *noopSource) Name() string                          { return TypeName }
-func (n *noopSource) Validate(_ context.Context) error      { return nil }
+func (n *noopSource) Name() string                     { return TypeName }
+func (n *noopSource) Validate(_ context.Context) error { return nil }
+
 // Fetch looks up ref.ID in the noop source's static table and returns
 // a one-entry map keyed "value". Callers select that with VarRef.Key=""
 // (single-entry default) or VarRef.Key="value".

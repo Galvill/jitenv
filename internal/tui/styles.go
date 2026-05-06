@@ -6,8 +6,8 @@ import "github.com/charmbracelet/lipgloss"
 var (
 	colorBorder    = lipgloss.Color("63")  // bright blue
 	colorBorderHi  = lipgloss.Color("51")  // bright cyan (focused panel)
-	colorTitleBar  = lipgloss.Color("39")  // cyan
-	colorTitleText = lipgloss.Color("231") // off-white
+	colorTitleBar  = lipgloss.Color("39")  //nolint:unused // cyan; reserved for future title-bar use
+	colorTitleText = lipgloss.Color("231") //nolint:unused // off-white; reserved for future title-bar use
 	colorAccent    = lipgloss.Color("75")  // sky blue
 	colorFocusBG   = lipgloss.Color("33")  // bright blue bg
 	colorFocusFG   = lipgloss.Color("231") // bright text
@@ -23,7 +23,7 @@ var (
 )
 
 var (
-	titleBarStyle = lipgloss.NewStyle().
+	titleBarStyle = lipgloss.NewStyle(). //nolint:unused // reserved for future title-bar use
 			Background(colorTitleBar).
 			Foreground(colorTitleText).
 			Bold(true).
@@ -38,7 +38,7 @@ var (
 			BorderForeground(colorBorder).
 			Padding(1, 2)
 
-	panelFocusedStyle = lipgloss.NewStyle().
+	panelFocusedStyle = lipgloss.NewStyle(). //nolint:unused // used by modalOverlay in hidden Remote Sources UI
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(colorBorderHi).
 				Padding(1, 2)
@@ -62,20 +62,12 @@ var (
 				Bold(true).
 				Padding(0, 2)
 
-	labelStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	hintStyle  = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
-	helpStyle  = lipgloss.NewStyle().Foreground(colorMuted)
-	errorStyle = lipgloss.NewStyle().Foreground(colorError).Bold(true)
-	okStyle    = lipgloss.NewStyle().Foreground(colorOK)
-	warnStyle  = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
-	mutedStyle = lipgloss.NewStyle().Foreground(colorMuted)
+	labelStyle  = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	hintStyle   = lipgloss.NewStyle().Foreground(colorMuted).Italic(true) //nolint:unused // used by form.go in hidden Remote Sources UI
+	helpStyle   = lipgloss.NewStyle().Foreground(colorMuted)              //nolint:unused // used by screens_stub.go in hidden Remote Sources UI
+	errorStyle  = lipgloss.NewStyle().Foreground(colorError).Bold(true)
+	okStyle     = lipgloss.NewStyle().Foreground(colorOK)
+	warnStyle   = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
+	mutedStyle  = lipgloss.NewStyle().Foreground(colorMuted)
 	maskedStyle = lipgloss.NewStyle().Foreground(colorMasked)
-
-	// retained legacy names so existing code keeps building during the
-	// transition; they alias to new equivalents.
-	itemStyle   = listItemStyle
-	cursorStyle = labelStyle
-	statusStyle = okStyle
-	dirtyStyle  = warnStyle
-	frameStyle  = panelStyle
 )

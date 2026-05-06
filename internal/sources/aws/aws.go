@@ -32,9 +32,10 @@ func schema() []source.ParamField {
 }
 
 // New constructs an AWS Secrets Manager source. Recognized cfg keys:
-//   region   string  (optional; falls back to default chain)
-//   profile  string  (optional; AWS_PROFILE)
-//   role_arn string  (optional; assumed via STS)
+//
+//	region   string  (optional; falls back to default chain)
+//	profile  string  (optional; AWS_PROFILE)
+//	role_arn string  (optional; assumed via STS)
 func New(cfg map[string]any) (source.Source, error) {
 	region, _ := cfg["region"].(string)
 	profile, _ := cfg["profile"].(string)
@@ -83,11 +84,11 @@ func (a *awsSource) Validate(ctx context.Context) error {
 
 // Fetch returns secret material from AWS Secrets Manager.
 //
-//   ref.ID  → SecretId (name or ARN)
-//   ref.Key → optional JSON sub-key. When set, the secret string MUST
-//             parse as a JSON object and the value at ref.Key is returned.
-//             When unset, the entire SecretString is returned under the key
-//             "value" (raw scalar) or, if the JSON parses, all top-level keys.
+//	ref.ID  → SecretId (name or ARN)
+//	ref.Key → optional JSON sub-key. When set, the secret string MUST
+//	          parse as a JSON object and the value at ref.Key is returned.
+//	          When unset, the entire SecretString is returned under the key
+//	          "value" (raw scalar) or, if the JSON parses, all top-level keys.
 func (a *awsSource) Fetch(ctx context.Context, ref source.SecretRef) (map[string]string, error) {
 	if ref.ID == "" {
 		return nil, fmt.Errorf("aws: ref.ID (SecretId) is required")

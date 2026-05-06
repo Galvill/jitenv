@@ -16,7 +16,7 @@ type menuScreen struct {
 	items  []menuItem
 	// btnFocus indicates whether focus is on the menu items (false) or
 	// on the bottom button row (true).
-	btnFocus int  // -1 = on list; 0..N for buttons
+	btnFocus int // -1 = on list; 0..N for buttons
 	buttons  []button
 }
 

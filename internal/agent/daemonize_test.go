@@ -45,7 +45,11 @@ func TestSpawnDaemonEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	defer func() { for i := range key { key[i] = 0 } }()
+	defer func() {
+		for i := range key {
+			key[i] = 0
+		}
+	}()
 
 	// Per-test runtime dir.
 	runtimeDir := filepath.Join(dir, "runtime")
@@ -80,7 +84,7 @@ func TestSpawnDaemonEndToEnd(t *testing.T) {
 		t.Fatalf("write key: %v", err)
 	}
 	pw2.Close()
-	defer cmd.Process.Kill()
+	defer func() { _ = cmd.Process.Kill() }() // best-effort cleanup; process may already be gone
 
 	cli := NewClient(paths.Socket)
 	deadline := time.Now().Add(5 * time.Second)
@@ -104,4 +108,3 @@ func TestSpawnDaemonEndToEnd(t *testing.T) {
 	}
 	_, _ = cmd.Process.Wait()
 }
-

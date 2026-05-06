@@ -12,7 +12,18 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print jitenv version",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("jitenv", Version)
+			fmt.Println(formatVersion(Version, Commit, Date))
 		},
+	}
+}
+
+func formatVersion(version, commit, date string) string {
+	switch {
+	case commit != "" && date != "":
+		return fmt.Sprintf("jitenv %s (commit %s, built %s)", version, commit, date)
+	case commit != "":
+		return fmt.Sprintf("jitenv %s (commit %s)", version, commit)
+	default:
+		return fmt.Sprintf("jitenv %s", version)
 	}
 }
