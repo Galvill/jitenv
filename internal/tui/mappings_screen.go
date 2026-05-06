@@ -24,15 +24,24 @@ func newMappingsListScreen(r *rootModel) screen {
 	return &mappingsListScreen{root: r}
 }
 
-func (m *mappingsListScreen) Title() string { return "mappings" }
-func (m *mappingsListScreen) Status() string {
-	return renderHelpKeys(
-		[2]string{"↑/↓", "move"},
-		[2]string{"Enter", "open"},
-		[2]string{"Esc", "back"},
-	)
+func (m *mappingsListScreen) Title() string  { return "mappings" }
+func (m *mappingsListScreen) Status() string { return renderHelpStatus() }
+func (m *mappingsListScreen) Init() tea.Cmd  { return nil }
+
+func (m *mappingsListScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (m *mappingsListScreen) HelpText() string {
+	return `A mapping ties a file (or glob) to a set of env vars. When the shell
+hook sees a mapped command run, it re-execs it through "jitenv run"
+with those vars in scope.
+
+Mappings match in declaration order — exact paths first, then any
+matching globs. When two entries provide the same env var name the
+later one wins, so you can layer "default for ~/work/**/*.sh" with
+"override for ~/work/prod/deploy.sh".
+
+Select < Create New Mapping > to add one, or hit Enter on an existing
+row for Edit / Delete.`
 }
-func (m *mappingsListScreen) Init() tea.Cmd { return nil }
 
 func (m *mappingsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if _, ok := msg.(mappingChangedMsg); ok {
@@ -121,6 +130,12 @@ func (m *mappingsListScreen) View() string {
 		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
 	}
 
+	if len(m.root.cfg.Mappings) == 0 {
+		b.WriteString("\n" + dimText("No mappings yet — pick the row above to add one. A mapping ties") + "\n")
+		b.WriteString(dimText("a file or glob to a set of env vars that the shell hook injects") + "\n")
+		b.WriteString(dimText("when you run that file. Press ? for the full help.") + "\n")
+	}
+
 	for i, mp := range m.root.cfg.Mappings {
 		row := fmt.Sprintf("%-44s  %s",
 			truncate(mappingLabel(mp), 44),
@@ -179,14 +194,31 @@ func (s *mappingFormScreen) Title() string {
 	}
 	return "edit mapping"
 }
-func (s *mappingFormScreen) Status() string {
-	return renderHelpKeys(
-		[2]string{"↑/↓", "move"},
-		[2]string{"Enter", "open"},
-		[2]string{"Esc", "back"},
-	)
+func (s *mappingFormScreen) Status() string { return renderHelpStatus() }
+func (s *mappingFormScreen) Init() tea.Cmd  { return nil }
+
+func (s *mappingFormScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (s *mappingFormScreen) HelpText() string {
+	return `kind:       "path" matches one exact filesystem path.
+            "glob" matches any file under a doublestar pattern, e.g.
+            "~/work/**/*.sh" or "**/scripts/deploy*". Globs are
+            matched after exact paths in declaration order.
+
+target:     The path or glob to match. Tilde-relative ("~/...") is
+            expanded; relative paths are resolved against the current
+            directory at edit time.
+
+variables:  Opens a bag → key tree. Tick a bag to expand the entire
+            bag (every key becomes its own env var named after the
+            key). Tick individual keys for explicit named env vars.
+            While the bag-level box is on, individual key boxes
+            render dimmed — toggling them is a no-op until you
+            uncheck the bag.
+
+Save the config (Ctrl-S from the menu, or via the menu's Save button)
+to commit. Saving auto-pings the running agent to reload, so the new
+mapping takes effect without a relock.`
 }
-func (s *mappingFormScreen) Init() tea.Cmd { return nil }
 
 func (s *mappingFormScreen) mp() *config.Mapping {
 	if s.idx < 0 || s.idx >= len(s.root.cfg.Mappings) {
