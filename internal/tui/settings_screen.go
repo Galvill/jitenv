@@ -94,34 +94,36 @@ func (s *settingsScreen) openHookPopup() tea.Cmd {
 
 	heading := "Shell hook"
 	choices := []string{"Install", "Back"}
-	if st.Installed {
+	if st.Installed && (st.Shell != "bash" || st.LoginPath == "" || st.LoginSources) {
 		heading = "Shell hook (installed)"
 		choices = []string{"Reinstall", "Back"}
+	} else if st.Installed {
+		heading = "Shell hook — login chain not wired"
+		choices = []string{"Fix login chain", "Back"}
 	}
 	cb := func(choice string) tea.Cmd {
 		switch choice {
-		case "Install":
-			added, err := shell.Install(st.RcPath, st.Line)
+		case "Install", "Reinstall", "Fix login chain":
+			rep, err := shell.InstallShell(st.Shell)
 			if err != nil {
 				return tea.Sequence(emit(popMsg{}), emit(errorMsg("install hook: "+err.Error())))
 			}
-			msg := fmt.Sprintf("hook installed in %s — open a new shell to activate", st.RcPath)
-			if !added {
-				msg = "hook already present in " + st.RcPath
+			parts := []string{}
+			if rep.RcAdded {
+				parts = append(parts, "added hook line to "+rep.RcPath)
+			} else {
+				parts = append(parts, "hook line already in "+rep.RcPath)
 			}
-			return tea.Sequence(emit(popMsg{}), emit(statusMsg(msg)))
-		case "Reinstall":
-			// The eval line never changes between versions, so a
-			// "reinstall" while already present is just a sanity
-			// check — confirm and report.
-			added, err := shell.Install(st.RcPath, st.Line)
-			if err != nil {
-				return tea.Sequence(emit(popMsg{}), emit(errorMsg("reinstall hook: "+err.Error())))
+			if st.Shell == "bash" {
+				switch {
+				case rep.LoginAdded && rep.LoginPath != "":
+					parts = append(parts, "wired login chain via "+rep.LoginPath)
+				case rep.LoginAlreadyOK && rep.LoginPath != "":
+					parts = append(parts, rep.LoginPath+" already sources ~/.bashrc")
+				}
 			}
-			msg := "hook line already present and correct in " + st.RcPath
-			if added {
-				msg = "hook line restored in " + st.RcPath
-			}
+			parts = append(parts, "open a new shell to activate")
+			msg := strings.Join(parts, " — ")
 			return tea.Sequence(emit(popMsg{}), emit(statusMsg(msg)))
 		}
 		return emit(popMsg{})
@@ -142,10 +144,13 @@ func (s *settingsScreen) View() string {
 	switch {
 	case st.Shell == "":
 		hookValue = dimText("(unsupported shell — only bash and zsh)")
-	case st.Installed:
-		hookValue = okStyle.Render("installed") + "  " + dimText("("+st.RcPath+")")
-	default:
+	case !st.Installed:
 		hookValue = warnStyle.Render("not installed") + "  " + dimText("("+st.RcPath+")")
+	case st.Shell == "bash" && st.LoginPath != "" && !st.LoginSources:
+		hookValue = warnStyle.Render("interactive only") + "  " +
+			dimText("(login chain "+st.LoginPath+" doesn't source ~/.bashrc)")
+	default:
+		hookValue = okStyle.Render("installed") + "  " + dimText("("+st.RcPath+")")
 	}
 
 	rows := []struct{ label, value string }{
