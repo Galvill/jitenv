@@ -105,9 +105,10 @@ No issue exclusions to start. The first run on the existing codebase will likely
 
 - Trigger: `push` on `main`.
 - Permissions: `contents: write`, `pull-requests: write`.
-- Step: `googleapis/release-please-action@v4` using `GITHUB_TOKEN` by default.
+- Concurrency: serial (`group: release-please`, `cancel-in-progress: false`) to avoid races on the manifest commit.
+- Step: `googleapis/release-please-action@v4` authenticated with a fine-grained PAT `RELEASE_PLEASE_TOKEN` (NOT the default `GITHUB_TOKEN` — see below).
 
-**Known token caveat:** if the repository later adopts a branch protection rule that forbids the `github-actions[bot]` from opening PRs, release-please will silently fail to open the release PR. The mitigation is a fine-grained PAT stored as a `RELEASE_PLEASE_TOKEN` secret. We do not pre-emptively add this for v0.1; we add it only if the default token is rejected.
+**Token model: PAT is required, not optional.** `googleapis/release-please-action` does two things: it opens a release PR, and when that PR merges it creates the corresponding `vX.Y.Z` git tag. Both operations honour the action's `token` input. With `GITHUB_TOKEN` the PR opens fine *but* the tag is created under the GitHub Actions identity, and **GitHub deliberately suppresses workflow runs triggered by the default `GITHUB_TOKEN`** (recursion guard). Consequence: `.github/workflows/release.yml`, which listens on `push: tags: [v*]`, never fires, and the published "release" has no artifacts attached. The fix is to authenticate release-please with a fine-grained PAT scoped to this repo (`contents: read+write`, `pull-requests: read+write`) stored as `RELEASE_PLEASE_TOKEN`. Tags created by a user-owned PAT trigger downstream workflows normally. This is documented as a hard requirement, not a "consider if branch protection rejects bot PRs" optional escape hatch — it bites the very first release if absent.
 
 ## 8. GoReleaser config — `.goreleaser.yaml`
 
