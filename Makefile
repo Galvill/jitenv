@@ -2,7 +2,7 @@ GO ?= go
 BIN := jitenv
 PREFIX ?= $(HOME)/.local
 
-.PHONY: build install test fmt vet tidy clean
+.PHONY: build install test fmt vet tidy lint release-snapshot clean
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -33,3 +33,9 @@ tidy:
 
 clean:
 	rm -rf bin
+
+lint:
+	golangci-lint run
+
+release-snapshot:
+	goreleaser release --snapshot --clean --skip=publish,sign
