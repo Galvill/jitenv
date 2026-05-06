@@ -29,8 +29,17 @@ func init() {
 
 func schema() []source.ParamField {
 	return []source.ParamField{
-		{Key: "token", Label: "Personal access token", Required: true, Sensitive: true, Help: "PAT with read access to the variables"},
-		{Key: "api_url", Label: "API URL", Help: "set for GitHub Enterprise; default is https://api.github.com"},
+		{
+			Key: "token", Label: "Personal access token", Required: true, Sensitive: true,
+			Help: "Classic or fine-grained PAT with read access to repo/org variables. " +
+				"Encrypted at rest under the master key.",
+		},
+		{
+			Key: "api_url", Label: "API URL",
+			Help: "Default https://api.github.com. For GHES use https://your.host/api/v3/. " +
+				"NOTE: GitHub does not expose Actions secret VALUES via the API — only names. " +
+				"Map secret values from a different source (local bag / AWS) by matching the name.",
+		},
 	}
 }
 
