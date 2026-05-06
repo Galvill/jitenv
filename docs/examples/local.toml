@@ -1,0 +1,56 @@
+# Example: local-only config.
+#
+# Shows the on-disk shape after a few common TUI actions:
+#   - one bag of Stripe keys
+#   - one bag of database creds
+#   - an exact-path mapping that pulls a single key from each bag
+#   - a glob mapping that expands a whole bag
+#
+# Sensitive values shown as `enc:v1:...` are placeholders — the real
+# encryptor produces a base64 blob roughly 80 characters long. Never
+# hand-edit these; round-trip them through `jitenv config`.
+
+version = 1
+
+[_meta]
+kdf              = "argon2id"
+argon_time       = 3
+argon_memory_kib = 65536
+argon_threads    = 4
+salt             = "base64-of-16-bytes"
+verify           = "enc:v1:base64-of-nonce-and-ciphertext"
+
+[agent]
+idle_timeout = "30m"
+
+[sources.local]
+type = "local"
+
+[secrets.stripe]
+STRIPE_PK = "enc:v1:..."
+STRIPE_SK = "enc:v1:..."
+
+[secrets.db]
+DATABASE_URL      = "enc:v1:..."
+DATABASE_PASSWORD = "enc:v1:..."
+DATABASE_USER     = "enc:v1:..."
+
+# Exact-path mapping: when the user runs this exact file, set
+# STRIPE_SK from the stripe bag.
+[[mappings]]
+path = "/home/me/scripts/charge.sh"
+[[mappings.vars]]
+name   = "STRIPE_SK"
+source = "local"
+ref    = "stripe"
+key    = "STRIPE_SK"
+
+# Glob mapping with whole-bag expansion: every script under
+# ~/work/**/*.sh gets all three DATABASE_* vars.
+[[mappings]]
+glob = "~/work/**/*.sh"
+[[mappings.vars]]
+source = "local"
+ref    = "db"
+# `name` and `key` empty -> expand every key in the bag as its own
+# env var. DATABASE_URL / DATABASE_PASSWORD / DATABASE_USER all set.
