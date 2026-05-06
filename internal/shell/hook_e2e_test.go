@@ -107,3 +107,53 @@ echo "IS_MAPPED_RC=$(jitenv is-mapped %q >/dev/null 2>&1; echo $?)"
 		t.Fatalf("expected hook to inject FOO; output:\n%s", got)
 	}
 }
+
+// TestBashHookAgentDownWarnsThenRuns verifies that when the agent is
+// not running, the bash hook prints the red warning, waits for the
+// (env-shortened) delay, and then runs the command anyway. The script
+// produces "RAN" so we can confirm execution went through.
+func TestBashHookAgentDownWarnsThenRuns(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "show.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho RAN\n"), 0755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Point XDG_RUNTIME_DIR at an empty dir so no agent socket exists
+	// — that's what triggers the agent-unreachable path in is-mapped.
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0700)
+
+	binDir := filepath.Dir(bin)
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		`PATH=%q:$PATH
+eval "$(%s/jitenv hook bash)"
+%q
+`, binDir, binDir, scriptPath,
+	))
+	cmd.Env = append(os.Environ(),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_HOOK_DELAY=1", // shrink the 10s wait for the test
+	)
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("bash run: %v\noutput=%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "agent is not loaded") {
+		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
+	}
+	if !strings.Contains(got, "RAN") {
+		t.Errorf("expected the script to still run after the delay; got:\n%s", got)
+	}
+	if elapsed < 800*time.Millisecond {
+		t.Errorf("expected the hook to wait ~1s; only %s elapsed", elapsed)
+	}
+}
