@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/Galvill/jitenv/compare/v0.1.1...v0.1.2) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ci:** authenticate release-please with PAT so tags fire release.yml ([50a467c](https://github.com/Galvill/jitenv/commit/50a467c76be4114bb09923dea8a1047ab130a947))
+* **ci:** authenticate release-please with PAT so tags trigger releases ([c1914ea](https://github.com/Galvill/jitenv/commit/c1914eaa59b15582c333d45c578a5bf6cfeb8995))
+
 ## [0.1.1](https://github.com/Galvill/jitenv/compare/v0.1.0...v0.1.1) (2026-05-06)
 
 
