@@ -1,12 +1,20 @@
 # jitenv
 
-Just-in-time environment variable loader. Fetches secrets from pluggable sources (AWS Secrets Manager, GitHub Variables, encrypted local bags) and injects them only into the process tree of a configured file — never into the parent shell.
+Just-in-time environment variable loader. Holds your secrets in an
+encrypted config, and injects them into a configured file's process
+tree only — never into the parent shell.
 
 ## How it works
 
-1. You declare per-file env-var mappings in `~/.config/jitenv/config.toml` (encrypted at rest). Editing happens through an interactive **TUI** (`jitenv config`) — there is no plaintext-on-disk edit step.
-2. `jitenv unlock` prompts your passphrase once per session, derives the master key with Argon2id, and starts a per-user agent on a Unix socket (ssh-agent style).
-3. A shell hook intercepts execution of mapped files and reroutes them through `jitenv run`, which asks the agent for the env vars, exec's the file with them, and lets the OS clean them up when the child exits.
+1. You declare per-file env-var mappings in `~/.config/jitenv/config.toml`,
+   encrypted at rest. Editing happens through an interactive **TUI**
+   (`jitenv config`) — there is no plaintext-on-disk edit step.
+2. `jitenv unlock` prompts your passphrase once per session, derives the
+   master key with Argon2id, and starts a per-user agent on a Unix socket
+   (ssh-agent style).
+3. A shell hook intercepts execution of mapped files and reroutes them
+   through `jitenv run`, which asks the agent for the env vars, exec's
+   the file with them, and lets the OS clean them up when the child exits.
 
 ## Install
 
@@ -19,56 +27,86 @@ git clone https://github.com/gv/jitenv && cd jitenv && make install
 ## Quick start
 
 ```sh
-# 1. Open the TUI. On first run it will prompt you to create the config
-#    and pick a passphrase. From there: add sources, mappings, and any
-#    locally-stored secrets — all from the keyboard.
+# 1. Open the TUI. On first run it offers to create the config and
+#    asks for a passphrase. From there: add local secret bags and
+#    mappings, all from the keyboard.
 #
-#    The first time you save inside the TUI, it offers to install the
-#    shell hook (one line appended to ~/.bashrc or ~/.zshrc). You can
-#    decline and add it manually with `jitenv hook bash|zsh`.
+#    The first time you save inside the TUI, it offers to install
+#    the shell hook (one line appended to ~/.bashrc or ~/.zshrc).
+#    You can decline and add it manually with `jitenv hook bash|zsh`.
 jitenv config
 
 # 2. Unlock the agent (once per session)
 jitenv unlock
 
 # 3. Open a new shell so the hook activates, then run a mapped file —
-#    the env vars appear only inside it
+#    the env vars appear only inside it.
 ./scripts/deploy.sh
-echo "$DATABASE_URL"   # empty in parent shell
+echo "$DATABASE_URL"   # empty in the parent shell
 ```
 
 ## TUI
 
-`jitenv config` is the home screen for everything:
+`jitenv config` is the home screen for everything. The whole UI is
+**menu-driven** — every place that references a configured object
+(a bag name, a key inside a bag, the path/glob kind for a mapping…) is
+selected from a list rather than typed, so identifiers stay consistent.
+
+The main menu lists three sections; each opens a list-style page:
 
 ```
-┌─ jitenv ─────────────────────────────┐
-│ > Sources       (2)                  │
-│   Mappings      (5)                  │
-│   Local secrets (3)                  │
-│   Settings                           │
-└──────────────────────────────────────┘
-[a] add  [enter] edit  [d] delete  [esc] back
+Mappings      (5 defined)
+Local secrets (3 bags)
+Settings
 ```
 
-The UI is **menu-driven**: anywhere a configured object is referenced (a source name in a mapping, a bag name when wiring a local secret, a specific key inside a bag, the GitHub scope, the path/glob kind) you pick from a list — never type the identifier. Adding a mapping is a small wizard:
+### List + popup pattern
+
+Every list page is the same shape: a `< Create New … >` sentinel at
+the top, then existing items. Selecting the sentinel opens an input
+popup; selecting an existing item opens a small bordered popup menu
+with the available actions:
 
 ```
-+ Add new mapping
-   ↳ kind:    [pick path / glob]
-   ↳ target:  [type the path or glob once]
-   ↳ + Add variable
-        ↳ pick source       (configured sources, listed)
-        ↳ pick bag          (for local sources)
-        ↳ pick mode         (inject all keys / pick one key)
-        ↳ pick key          (when picking one)
-        ↳ env var name      (defaulted, edit if needed)
-   ↳ Save mapping
+< Create New Bag >                ← Enter opens a "name new bag" input
+stripe       (2 keys)
+db           (3 keys)             ← Enter opens:  Edit / Rename / Delete / Back
 ```
 
-Sensitive fields are masked as you type (`••••`); press `ctrl+r` to reveal. Save inside any form with `ctrl+s` (or by selecting the "Save" row). The unsaved-changes badge in the header reminds you work is pending; quitting with unsaved work prompts to save first. Saving auto-pings a running agent so changes take effect without `jitenv lock` + `unlock`.
+The same shape repeats for the bag detail page (keys inside a bag) and
+the mappings page.
 
-You can also invoke explicitly without the hook:
+### Editing a mapping
+
+Selecting a mapping (or `< Create New Mapping >`) drills into a
+3-row editor:
+
+```
+kind:      path
+target:    /home/me/scripts/deploy.sh
+variables: 4 selected
+```
+
+Enter on each row opens its own popup:
+
+- **kind** — choose `path` or `glob`.
+- **target** — type the path or glob.
+- **variables** — opens a bag→key tree with checkboxes.
+
+The variable tree shows every local-secret bag with its keys indented
+beneath. Ticking the bag includes the whole bag (now and any future
+keys); ticking individual keys produces named env vars per key. While
+a bag is in "all" mode, the individual key boxes render dimmed.
+
+### Local secrets
+
+Local-secret values are AEAD-encrypted with the master key and stored
+inline in `config.toml` — no extra file, no plaintext on disk.
+
+Renaming a bag, a source, or a key automatically rewrites every
+mapping that referenced it, so existing mappings stay valid.
+
+You can also invoke a mapped file explicitly without the hook:
 
 ```sh
 jitenv run ./scripts/deploy.sh arg1 arg2
@@ -77,7 +115,7 @@ jitenv run ./scripts/deploy.sh arg1 arg2
 ## Commands
 
 ```
-jitenv config           Open the interactive TUI (sources, mappings, local secrets, settings)
+jitenv config           Open the interactive TUI (mappings, local secrets, settings)
 jitenv config init      Non-interactive: create a fresh encrypted config
 jitenv config show      Print the decrypted config to stdout
 jitenv config validate  Parse + structural check
@@ -94,57 +132,87 @@ jitenv hook bash|zsh    Print shell hook for eval
 
 ## Sources
 
-### AWS Secrets Manager (`type = "aws"`)
-
-Params: `region`, `profile`, `role_arn`. Auth uses the standard AWS chain. With `key`, the secret must parse as a JSON object and the named key is returned. Without `key`, a JSON object is expanded to all keys, or a raw scalar is returned under `value`.
-
-### GitHub (`type = "github"`)
-
-Params: `token` (PAT), `api_url` (optional, for GHE).
-
-Reads **Variables**, not Secrets. Per-mapping `extra.scope`:
-
-| scope | meaning | `ref` format |
-|-------|---------|--------------|
-| `repo` (default) | Repo Variables | `owner/repo` |
-| `org` | Org Variables | `org` |
-| `env` | Environment Variables (also set `extra.environment`) | `owner/repo` |
-
-GitHub does **not** expose Actions/Codespaces/Dependabot Secret values via API. Only Variables are readable; the source returns a clear error if a Secret is referenced.
+The user-facing surface is currently the **local** source — encrypted
+bags stored in the config file. The agent and resolver still support a
+pluggable source interface (see `pkg/source`), and the AWS Secrets
+Manager and GitHub Variables backends are compiled in but their
+create/edit UI is hidden in the TUI for now. Pre-existing remote-source
+entries in `config.toml` keep working at runtime; they just can't be
+managed interactively until the Remote Sources page is re-enabled.
 
 ### Local (`type = "local"`)
 
-Encrypted-at-rest secret bags stored in the same `config.toml` as everything else. Each bag holds multiple `KEY = value` pairs; values are AEAD-encrypted with the master key, never written in plaintext.
+Each bag holds multiple `KEY = value` pairs. Values are encrypted with
+the master key as `enc:v1:<base64(nonce ‖ ciphertext)>` envelopes, so
+the on-disk form looks like:
 
-Edit bags from `jitenv config → Local secrets`. The TUI auto-creates a `[sources.local]` block the first time you add a bag, so mappings can immediately reference it:
+```toml
+[secrets.stripe]
+STRIPE_PK = "enc:v1:…"
+STRIPE_SK = "enc:v1:…"
+```
+
+The TUI auto-creates a `[sources.local]` entry the first time you add
+a bag so mappings can immediately reference it:
 
 ```toml
 [[mappings]]
 path = "/home/me/scripts/deploy.sh"
 [[mappings.vars]]
-name = "STRIPE_SK"
+name   = "STRIPE_SK"
 source = "local"
-ref = "stripe"          # bag name
-key = "STRIPE_SK"       # optional; without it, every key in the bag is exported
+ref    = "stripe"          # bag name
+key    = "STRIPE_SK"       # optional; without it, every key in the bag is exported
 ```
 
-When `name` and `key` are both empty, every key in the named bag becomes its own env var (using the bag's keys as env names). This is the natural way to inject a related set of credentials with a single mapping.
+When `name` and `key` are both empty, every key in the named bag
+becomes its own env var (using the bag's keys as env-var names) — the
+"include the whole bag" mode you tick in the variable tree.
+
+### AWS Secrets Manager and GitHub Variables (hidden in the UI)
+
+Compiled in but not currently reachable from the TUI menu. If you need
+them, edit the config in code or wait for the Remote Sources page to
+return. The agent / resolver still honour any entries already in
+`config.toml`.
 
 ## Encryption & threat model
 
-- Master key derived via Argon2id (time=3, mem=64MiB, threads=4) from your passphrase + per-config salt.
-- Sensitive fields stored as `enc:v1:<base64(nonce ‖ XChaCha20-Poly1305(plaintext))>` envelopes.
+- Master key derived via Argon2id (time=3, mem=64MiB, threads=4) from
+  your passphrase + per-config salt.
+- Sensitive fields stored as `enc:v1:<base64(nonce ‖ XChaCha20-Poly1305(plaintext))>`
+  envelopes.
 - Local-secret bag values **always** live in this envelope form on disk.
-- Unlocked key lives only in the agent's memory.
-- Trust boundary = local user, same as `ssh-agent`. The socket is mode 0600 and the agent verifies the connecting peer's UID via `SO_PEERCRED`.
-- Local root sees plaintext memory. mlock helps casual exposure, not root.
+- The unlocked key lives only in the agent's memory.
+- Trust boundary = local user, same as `ssh-agent`. The socket is mode
+  0600 and the agent verifies the connecting peer's UID via `SO_PEERCRED`.
+- Local root sees plaintext memory. `mlock` helps against casual
+  exposure, not against root.
+
+## Agent lifecycle
+
+- The idle timeout in **Settings** is rolling — every request bumps
+  `last_seen`, and the agent shuts down (closes its socket and removes
+  its pidfile) once the gap exceeds the configured duration. The check
+  runs on a 30-second tick, so actual shutdown lags the timeout by up
+  to one tick.
+- Because the shell hook calls `jitenv is-mapped` on every command, an
+  active hooked shell counts as continuous activity and keeps the
+  agent alive indefinitely.
+- An empty / zero idle timeout disables the auto-shutdown loop.
+- Saving in the TUI best-effort pings the running agent (`OpReload`)
+  to pick up your changes without `jitenv lock` + `unlock`.
 
 ## Limitations
 
-- The bash hook only intercepts commands whose first token is an absolute or `./`-relative path — not bare PATH lookups. Intentional, keeps the hook fast and predictable.
+- The bash hook only intercepts commands whose first token is an
+  absolute or `./`-relative path — not bare PATH lookups. Intentional,
+  keeps the hook fast and predictable.
 - Single agent per user; multiple terminals share one unlocked instance.
-- Linux-focused (uses `SO_PEERCRED`, `XDG_RUNTIME_DIR`, double-fork via `Setsid`).
-- The TUI requires a TTY. For scripted setup, use `jitenv config init` then re-run interactively.
+- Linux-focused (uses `SO_PEERCRED`, `XDG_RUNTIME_DIR`, double-fork via
+  `Setsid`).
+- The TUI requires a TTY. For scripted setup, use `jitenv config init`
+  then re-run interactively.
 
 ## Building from source
 
@@ -155,3 +223,7 @@ make install         # installs to $PREFIX/bin (default ~/.local/bin)
 ```
 
 Go 1.22+ required.
+
+## License
+
+[MIT](LICENSE).
