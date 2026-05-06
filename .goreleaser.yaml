@@ -1,0 +1,102 @@
+version: 2
+
+project_name: jitenv
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: jitenv
+    main: ./cmd/jitenv
+    binary: jitenv
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/gv/jitenv/internal/cli.Version={{.Version}}
+      - -X github.com/gv/jitenv/internal/cli.Commit={{.ShortCommit}}
+      - -X github.com/gv/jitenv/internal/cli.Date={{.Date}}
+
+archives:
+  - id: jitenv
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - src: internal/shell/snippets/bash.sh
+        dst: snippets/bash.sh
+      - src: internal/shell/snippets/zsh.sh
+        dst: snippets/zsh.sh
+
+nfpms:
+  - id: jitenv
+    package_name: jitenv
+    vendor: Galvill
+    homepage: https://github.com/Galvill/jitenv
+    maintainer: Galvill <nexvill.ai@gmail.com>
+    description: |
+      jitenv loads environment variables on demand from pluggable sources
+      when configured executables are run, keeping secrets out of the parent
+      shell.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: internal/shell/snippets/bash.sh
+        dst: /usr/share/jitenv/snippets/bash.sh
+      - src: internal/shell/snippets/zsh.sh
+        dst: /usr/share/jitenv/snippets/zsh.sh
+      - src: LICENSE
+        dst: /usr/share/doc/jitenv/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/jitenv/README.md
+
+checksum:
+  name_template: SHA256SUMS
+
+signs:
+  - id: cosign-checksum
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+
+snapshot:
+  version_template: "0.1.0-snapshot-{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: Galvill
+    name: jitenv
+  draft: false
+  prerelease: auto
+  header: |
+    ## jitenv {{ .Tag }}
+
+    Linux artifacts for `amd64` and `arm64`. Verify integrity:
+
+    ```sh
+    sha256sum -c SHA256SUMS
+
+    cosign verify-blob \
+      --certificate-identity-regexp "^https://github.com/Galvill/jitenv" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      --signature SHA256SUMS.sig --certificate SHA256SUMS.pem SHA256SUMS
+    ```
