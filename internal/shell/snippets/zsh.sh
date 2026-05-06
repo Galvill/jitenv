@@ -41,6 +41,11 @@ __jitenv_warn_no_agent() {
     return 0
 }
 
+# Set JITENV_HOOK_DEBUG=1 to log each branch the widget takes.
+__jitenv_log() {
+    [[ -n "${JITENV_HOOK_DEBUG:-}" ]] && printf 'jitenv-hook: %s\n' "$*" >&2
+}
+
 __jitenv_accept_line() {
     emulate -L zsh
     local first_raw first rest resolved
@@ -57,17 +62,24 @@ __jitenv_accept_line() {
             *)         resolved="" ;;
         esac
         if [[ -n "$resolved" && -f "$resolved" ]]; then
+            __jitenv_log "candidate cmd=[$BUFFER] resolved=[$resolved]"
             jitenv is-mapped "$resolved" >/dev/null 2>&1
             local rc=$?
+            __jitenv_log "is-mapped rc=$rc"
             case "$rc" in
                 0)
+                    __jitenv_log "branch=case0 (mapped → jitenv run)"
                     BUFFER="jitenv run \"$resolved\"$rest"
                     ;;
                 2)
+                    __jitenv_log "branch=case2 (agent unreachable → warn)"
                     # Agent unreachable — wrap the user's command so the
                     # warning + 10s grace runs first. && short-circuits
                     # the real command if the user aborts via Ctrl+C.
                     BUFFER="__jitenv_warn_no_agent \"$resolved\" && { $BUFFER ; }"
+                    ;;
+                *)
+                    __jitenv_log "branch=case* (rc=$rc — unmapped, let it run)"
                     ;;
             esac
         fi

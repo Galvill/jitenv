@@ -43,6 +43,11 @@ __jitenv_warn_no_agent() {
     return 0
 }
 
+# Set JITENV_HOOK_DEBUG=1 to log each branch the trap takes.
+__jitenv_log() {
+    [[ -n "${JITENV_HOOK_DEBUG:-}" ]] && printf 'jitenv-hook: %s\n' "$*" >&2
+}
+
 __jitenv_debug_trap() {
     [[ -n "${__JITENV_REENTRY:-}" ]] && return 0
 
@@ -65,10 +70,13 @@ __jitenv_debug_trap() {
     fi
     [[ ! -f "$resolved" ]] && return 0
 
+    __jitenv_log "candidate cmd=[$cmd] resolved=[$resolved]"
     jitenv is-mapped "$resolved" >/dev/null 2>&1
     local rc=$?
+    __jitenv_log "is-mapped rc=$rc"
     case "$rc" in
         0)
+            __jitenv_log "branch=case0 (mapped → jitenv run)"
             local rest="${cmd#"$first_raw"}"
             __JITENV_REENTRY=1
             eval "jitenv run \"$resolved\"$rest"
@@ -76,6 +84,7 @@ __jitenv_debug_trap() {
             return 1
             ;;
         2)
+            __jitenv_log "branch=case2 (agent unreachable → warn)"
             # Agent unreachable. We can't tell whether the file is
             # mapped, but the user clearly intends to use jitenv (the
             # hook is installed) so warn loudly and offer an abort.
@@ -85,6 +94,7 @@ __jitenv_debug_trap() {
             return 0
             ;;
         *)
+            __jitenv_log "branch=case* (rc=$rc — unmapped, let it run)"
             return 0
             ;;
     esac
