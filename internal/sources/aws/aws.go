@@ -8,6 +8,7 @@ import (
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -26,50 +27,137 @@ func init() {
 func schema() []source.ParamField {
 	return []source.ParamField{
 		{Key: "region", Label: "AWS region", Required: true, Help: "e.g. us-east-1"},
-		{Key: "profile", Label: "Shared-config profile", Help: "from ~/.aws/credentials; optional"},
-		{Key: "role_arn", Label: "Assume-role ARN", Sensitive: true, Help: "optional; assumed via STS"},
+		{Key: "access_key_id", Label: "Access key ID",
+			Help: "Leave all credential fields empty to fall back to the AWS default chain (env vars / shared config / instance role)."},
+		{Key: "secret_access_key", Label: "Secret access key", Sensitive: true,
+			Help: "Encrypted at rest under the master key."},
+		{Key: "session_token", Label: "Session token", Sensitive: true,
+			Help: "Optional STS session token (encrypted at rest)."},
+		{Key: "role_arn", Label: "Assume-role ARN",
+			Help: "Optional: assume this role via STS after the credentials above load."},
+		{Key: "role_external_id", Label: "Assume-role external ID", Sensitive: true,
+			Help: "Optional: external-ID for cross-account assume-role (encrypted at rest)."},
+		{Key: "role_session_name", Label: "Assume-role session name",
+			Help: "Optional; default: jitenv"},
+		{Key: "endpoint_override", Label: "Endpoint URL override",
+			Help: "Optional: override STS / Secrets Manager endpoints (e.g. http://localhost:4566 for LocalStack)."},
+		{Key: "profile", Label: "Shared-config profile",
+			Help: "Optional: AWS_PROFILE name when falling back to the default chain. Ignored if Access key ID is set."},
 	}
 }
 
-// New constructs an AWS Secrets Manager source. Recognized cfg keys:
+// New constructs an AWS Secrets Manager source.
 //
-//	region   string  (optional; falls back to default chain)
-//	profile  string  (optional; AWS_PROFILE)
-//	role_arn string  (optional; assumed via STS)
+// Credential resolution order:
+//
+//   - access_key_id non-empty → static credentials from the UI fields
+//     (secret_access_key required; session_token optional).
+//   - access_key_id empty     → AWS default credential chain
+//     (env vars, shared config, instance/IRSA), optionally scoped to
+//     `profile`.
+//
+// In either case, if `role_arn` is set, the source assumes that role via
+// STS using the resolved base credentials. `endpoint_override`, when
+// set, applies to both STS and Secrets Manager clients (LocalStack etc.).
 func New(cfg map[string]any) (source.Source, error) {
-	region, _ := cfg["region"].(string)
-	profile, _ := cfg["profile"].(string)
-	roleArn, _ := cfg["role_arn"].(string)
-	return &awsSource{region: region, profile: profile, roleArn: roleArn}, nil
+	s := &awsSource{
+		region:            asString(cfg["region"]),
+		accessKeyID:       asString(cfg["access_key_id"]),
+		secretAccessKey:   asString(cfg["secret_access_key"]),
+		sessionToken:      asString(cfg["session_token"]),
+		roleArn:           asString(cfg["role_arn"]),
+		roleExternalID:    asString(cfg["role_external_id"]),
+		roleSessionName:   asString(cfg["role_session_name"]),
+		endpointOverride:  asString(cfg["endpoint_override"]),
+		profile:           asString(cfg["profile"]),
+	}
+	if s.accessKeyID != "" && s.secretAccessKey == "" {
+		return nil, fmt.Errorf("aws: access_key_id is set but secret_access_key is empty")
+	}
+	return s, nil
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 type awsSource struct {
-	region  string
-	profile string
-	roleArn string
+	region           string
+	accessKeyID      string
+	secretAccessKey  string
+	sessionToken     string
+	roleArn          string
+	roleExternalID   string
+	roleSessionName  string
+	endpointOverride string
+	profile          string
 }
 
 func (a *awsSource) Name() string { return TypeName }
 
 func (a *awsSource) Schema() []source.ParamField { return schema() }
 
+// loadAwsCfg returns an aws.Config wired to the credential source the
+// user picked (static or ambient), with optional STS assume-role and
+// endpoint override applied.
 func (a *awsSource) loadAwsCfg(ctx context.Context) (awsv2.Config, error) {
 	opts := []func(*config.LoadOptions) error{}
 	if a.region != "" {
 		opts = append(opts, config.WithRegion(a.region))
 	}
-	if a.profile != "" {
+
+	switch {
+	case a.accessKeyID != "":
+		opts = append(opts, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(a.accessKeyID, a.secretAccessKey, a.sessionToken),
+		))
+	case a.profile != "":
 		opts = append(opts, config.WithSharedConfigProfile(a.profile))
 	}
+
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return awsv2.Config{}, err
 	}
+
 	if a.roleArn != "" {
-		stsClient := sts.NewFromConfig(cfg)
-		cfg.Credentials = stscreds.NewAssumeRoleProvider(stsClient, a.roleArn)
+		stsClient := sts.NewFromConfig(cfg, a.stsOptions()...)
+		cfg.Credentials = stscreds.NewAssumeRoleProvider(stsClient, a.roleArn, func(o *stscreds.AssumeRoleOptions) {
+			if a.roleExternalID != "" {
+				o.ExternalID = awsv2.String(a.roleExternalID)
+			}
+			if a.roleSessionName != "" {
+				o.RoleSessionName = a.roleSessionName
+			} else {
+				o.RoleSessionName = "jitenv"
+			}
+		})
 	}
+
 	return cfg, nil
+}
+
+// stsOptions and smOptions apply the endpoint override (if any) to the
+// respective service clients. We keep the override on the *client*
+// rather than the global aws.Config so users only redirect the calls
+// jitenv actually makes.
+func (a *awsSource) stsOptions() []func(*sts.Options) {
+	if a.endpointOverride == "" {
+		return nil
+	}
+	return []func(*sts.Options){
+		func(o *sts.Options) { o.BaseEndpoint = awsv2.String(a.endpointOverride) },
+	}
+}
+
+func (a *awsSource) smOptions() []func(*secretsmanager.Options) {
+	if a.endpointOverride == "" {
+		return nil
+	}
+	return []func(*secretsmanager.Options){
+		func(o *secretsmanager.Options) { o.BaseEndpoint = awsv2.String(a.endpointOverride) },
+	}
 }
 
 func (a *awsSource) Validate(ctx context.Context) error {
@@ -77,7 +165,7 @@ func (a *awsSource) Validate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	stsClient := sts.NewFromConfig(cfg)
+	stsClient := sts.NewFromConfig(cfg, a.stsOptions()...)
 	_, err = stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	return err
 }
@@ -97,7 +185,7 @@ func (a *awsSource) Fetch(ctx context.Context, ref source.SecretRef) (map[string
 	if err != nil {
 		return nil, err
 	}
-	cli := secretsmanager.NewFromConfig(cfg)
+	cli := secretsmanager.NewFromConfig(cfg, a.smOptions()...)
 	out, err := cli.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
 		SecretId: awsv2.String(ref.ID),
 	})

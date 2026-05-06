@@ -132,13 +132,12 @@ jitenv hook bash|zsh    Print shell hook for eval
 
 ## Sources
 
-The user-facing surface is currently the **local** source — encrypted
-bags stored in the config file. The agent and resolver still support a
-pluggable source interface (see `pkg/source`), and the AWS Secrets
-Manager and GitHub Variables backends are compiled in but their
-create/edit UI is hidden in the TUI for now. Pre-existing remote-source
-entries in `config.toml` keep working at runtime; they just can't be
-managed interactively until the Remote Sources page is re-enabled.
+Three first-party sources ship in the binary: **local** (encrypted
+bags in `config.toml`), **AWS Secrets Manager**, and **GitHub
+Variables/Secrets**. Each is configured from the TUI's *Local secrets*
+or *Remote Sources* page; sensitive params are stored as `enc:v1:`
+envelopes encrypted under the master key. Adding a new source is two
+files — see [docs/source-plugins.md](docs/source-plugins.md).
 
 ### Local (`type = "local"`)
 
@@ -169,12 +168,22 @@ When `name` and `key` are both empty, every key in the named bag
 becomes its own env var (using the bag's keys as env-var names) — the
 "include the whole bag" mode you tick in the variable tree.
 
-### AWS Secrets Manager and GitHub Variables (hidden in the UI)
+### AWS Secrets Manager (`type = "aws"`)
 
-Compiled in but not currently reachable from the TUI menu. If you need
-them, edit the config in code or wait for the Remote Sources page to
-return. The agent / resolver still honour any entries already in
-`config.toml`.
+Configure via *Remote Sources* in the TUI. All credential fields
+(access key ID, secret access key, optional session token, optional
+assume-role ARN + external ID, optional endpoint override) are stored
+as `enc:v1:` envelopes for sensitive items. Leaving the credential
+fields empty falls back to the AWS default credential chain
+(env vars, shared config, IRSA). Use the *Test* button on the source
+form to ping STS `GetCallerIdentity` for immediate feedback.
+
+### GitHub (`type = "github"`)
+
+Configure via *Remote Sources*. Keep in mind the GitHub API does not
+expose secret *values*; the source pulls Variables (readable) and
+Secret names (for mapping completeness). Map secret values from a
+different source.
 
 ## Encryption & threat model
 

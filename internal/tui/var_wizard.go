@@ -1,9 +1,5 @@
 package tui
 
-//nolint:unused // Reserved for the hidden Remote Sources UI; will be wired
-// back into the TUI menu once the feature is re-enabled (see CLAUDE.md
-// "No third source UI" note).
-
 import (
 	"fmt"
 	"sort"
@@ -24,13 +20,13 @@ import (
 //   - mutating the parent mapping (append or replace the var)
 //   - returning a tea.Sequence that includes popUntilMsg to unwind the
 //     wizard back to the parent screen.
-func startVarWizard(r *rootModel, initial config.VarRef, onComplete func(config.VarRef) tea.Cmd) tea.Cmd { //nolint:unused // hidden Remote Sources UI
+func startVarWizard(r *rootModel, initial config.VarRef, onComplete func(config.VarRef) tea.Cmd) tea.Cmd {
 	return emit(pushMsg{s: newPickSourceStep(r, initial, onComplete)})
 }
 
 // ---------- step 1: pick source ----------
 
-type pickSourceStep struct { //nolint:unused // hidden Remote Sources UI
+type pickSourceStep struct {
 	root       *rootModel
 	cursor     int
 	btnFocus   int
@@ -40,7 +36,7 @@ type pickSourceStep struct { //nolint:unused // hidden Remote Sources UI
 	onComplete func(config.VarRef) tea.Cmd
 }
 
-func newPickSourceStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newPickSourceStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	names := configuredSourceNames(r)
 	if len(names) == 0 {
 		return newStubScreen(r, "no sources",
@@ -61,11 +57,11 @@ func newPickSourceStep(r *rootModel, ref config.VarRef, onComplete func(config.V
 	}
 }
 
-func (s *pickSourceStep) Title() string  { return "var: pick source" } //nolint:unused // hidden Remote Sources UI
-func (s *pickSourceStep) Status() string { return defaultListStatus }  //nolint:unused // hidden Remote Sources UI
-func (s *pickSourceStep) Init() tea.Cmd  { return nil }                //nolint:unused // hidden Remote Sources UI
+func (s *pickSourceStep) Title() string  { return "var: pick source" }
+func (s *pickSourceStep) Status() string { return defaultListStatus } 
+func (s *pickSourceStep) Init() tea.Cmd  { return nil }               
 
-func (s *pickSourceStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
+func (s *pickSourceStep) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if cmd, handled := wizardListNav(&s.cursor, len(s.names), &s.btnFocus, len(s.buttons), msg); handled {
 		return s, cmd
 	}
@@ -84,7 +80,7 @@ func (s *pickSourceStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused
 	return s, nil
 }
 
-func (s *pickSourceStep) View() string { //nolint:unused // hidden Remote Sources UI
+func (s *pickSourceStep) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Pick source") + "\n\n")
 	for i, n := range s.names {
@@ -104,7 +100,7 @@ func (s *pickSourceStep) View() string { //nolint:unused // hidden Remote Source
 
 // ---------- dispatch ----------
 
-func dispatchByType(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func dispatchByType(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	sc, ok := r.cfg.Sources[ref.Source]
 	if !ok {
 		return newStubScreen(r, "(error)", "source vanished")
@@ -121,7 +117,7 @@ func dispatchByType(r *rootModel, ref config.VarRef, onComplete func(config.VarR
 
 // ---------- local: pick bag → pick mode → (pick key) → name ----------
 
-type pickBagStep struct { //nolint:unused // hidden Remote Sources UI
+type pickBagStep struct {
 	root       *rootModel
 	cursor     int
 	btnFocus   int
@@ -131,7 +127,7 @@ type pickBagStep struct { //nolint:unused // hidden Remote Sources UI
 	onComplete func(config.VarRef) tea.Cmd
 }
 
-func newPickBagStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newPickBagStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	bags := bagNames(r)
 	if len(bags) == 0 {
 		return newStubScreen(r, "no bags",
@@ -152,11 +148,11 @@ func newPickBagStep(r *rootModel, ref config.VarRef, onComplete func(config.VarR
 	}
 }
 
-func (s *pickBagStep) Title() string  { return "var: pick bag" }   //nolint:unused // hidden Remote Sources UI
-func (s *pickBagStep) Status() string { return defaultListStatus } //nolint:unused // hidden Remote Sources UI
-func (s *pickBagStep) Init() tea.Cmd  { return nil }               //nolint:unused // hidden Remote Sources UI
+func (s *pickBagStep) Title() string  { return "var: pick bag" }  
+func (s *pickBagStep) Status() string { return defaultListStatus }
+func (s *pickBagStep) Init() tea.Cmd  { return nil }              
 
-func (s *pickBagStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
+func (s *pickBagStep) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if cmd, handled := wizardListNav(&s.cursor, len(s.bags), &s.btnFocus, len(s.buttons), msg); handled {
 		return s, cmd
 	}
@@ -175,7 +171,7 @@ func (s *pickBagStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused //
 	return s, nil
 }
 
-func (s *pickBagStep) View() string { //nolint:unused // hidden Remote Sources UI
+func (s *pickBagStep) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Pick bag") + "\n\n")
 	for i, n := range s.bags {
@@ -195,7 +191,7 @@ func (s *pickBagStep) View() string { //nolint:unused // hidden Remote Sources U
 
 // ---------- mode: all keys / one key ----------
 
-type pickLocalModeStep struct { //nolint:unused // hidden Remote Sources UI
+type pickLocalModeStep struct {
 	root       *rootModel
 	cursor     int
 	btnFocus   int
@@ -204,7 +200,7 @@ type pickLocalModeStep struct { //nolint:unused // hidden Remote Sources UI
 	onComplete func(config.VarRef) tea.Cmd
 }
 
-func newPickLocalModeStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newPickLocalModeStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	cursor := 0
 	if ref.Key != "" {
 		cursor = 1
@@ -217,11 +213,11 @@ func newPickLocalModeStep(r *rootModel, ref config.VarRef, onComplete func(confi
 	}
 }
 
-func (s *pickLocalModeStep) Title() string  { return "var: bag mode" }   //nolint:unused // hidden Remote Sources UI
-func (s *pickLocalModeStep) Status() string { return defaultListStatus } //nolint:unused // hidden Remote Sources UI
-func (s *pickLocalModeStep) Init() tea.Cmd  { return nil }               //nolint:unused // hidden Remote Sources UI
+func (s *pickLocalModeStep) Title() string  { return "var: bag mode" }  
+func (s *pickLocalModeStep) Status() string { return defaultListStatus }
+func (s *pickLocalModeStep) Init() tea.Cmd  { return nil }              
 
-func (s *pickLocalModeStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
+func (s *pickLocalModeStep) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if cmd, handled := wizardListNav(&s.cursor, 2, &s.btnFocus, len(s.buttons), msg); handled {
 		return s, cmd
 	}
@@ -244,7 +240,7 @@ func (s *pickLocalModeStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unu
 	return s, nil
 }
 
-func (s *pickLocalModeStep) View() string { //nolint:unused // hidden Remote Sources UI
+func (s *pickLocalModeStep) View() string {
 	keys := sortedBagKeys(s.root, s.ref.Ref)
 	choices := []string{
 		fmt.Sprintf("Inject ALL keys from this bag  %s",
@@ -269,7 +265,7 @@ func (s *pickLocalModeStep) View() string { //nolint:unused // hidden Remote Sou
 
 // ---------- key: pick from bag's keys ----------
 
-type pickBagKeyStep struct { //nolint:unused // hidden Remote Sources UI
+type pickBagKeyStep struct {
 	root       *rootModel
 	cursor     int
 	btnFocus   int
@@ -279,7 +275,7 @@ type pickBagKeyStep struct { //nolint:unused // hidden Remote Sources UI
 	onComplete func(config.VarRef) tea.Cmd
 }
 
-func newPickBagKeyStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newPickBagKeyStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	keys := sortedBagKeys(r, ref.Ref)
 	if len(keys) == 0 {
 		return newStubScreen(r, "empty bag", "This bag has no keys yet.")
@@ -299,11 +295,11 @@ func newPickBagKeyStep(r *rootModel, ref config.VarRef, onComplete func(config.V
 	}
 }
 
-func (s *pickBagKeyStep) Title() string  { return "var: pick key" }   //nolint:unused // hidden Remote Sources UI
-func (s *pickBagKeyStep) Status() string { return defaultListStatus } //nolint:unused // hidden Remote Sources UI
-func (s *pickBagKeyStep) Init() tea.Cmd  { return nil }               //nolint:unused // hidden Remote Sources UI
+func (s *pickBagKeyStep) Title() string  { return "var: pick key" }  
+func (s *pickBagKeyStep) Status() string { return defaultListStatus }
+func (s *pickBagKeyStep) Init() tea.Cmd  { return nil }              
 
-func (s *pickBagKeyStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
+func (s *pickBagKeyStep) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if cmd, handled := wizardListNav(&s.cursor, len(s.keys), &s.btnFocus, len(s.buttons), msg); handled {
 		return s, cmd
 	}
@@ -322,7 +318,7 @@ func (s *pickBagKeyStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused
 	return s, nil
 }
 
-func (s *pickBagKeyStep) View() string { //nolint:unused // hidden Remote Sources UI
+func (s *pickBagKeyStep) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Pick key in "+s.ref.Ref) + "\n\n")
 	for i, k := range s.keys {
@@ -341,7 +337,7 @@ func (s *pickBagKeyStep) View() string { //nolint:unused // hidden Remote Source
 
 // ---------- github: pick scope → input identifiers → input variable name ----------
 
-type pickGithubScopeStep struct { //nolint:unused // hidden Remote Sources UI
+type pickGithubScopeStep struct {
 	root       *rootModel
 	cursor     int
 	btnFocus   int
@@ -352,7 +348,7 @@ type pickGithubScopeStep struct { //nolint:unused // hidden Remote Sources UI
 	onComplete func(config.VarRef) tea.Cmd
 }
 
-func newPickGithubScopeStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newPickGithubScopeStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	choices := []string{
 		"Repo Variables       (ref = owner/repo)",
 		"Org Variables        (ref = org)",
@@ -378,11 +374,11 @@ func newPickGithubScopeStep(r *rootModel, ref config.VarRef, onComplete func(con
 	}
 }
 
-func (s *pickGithubScopeStep) Title() string  { return "var: github scope" } //nolint:unused // hidden Remote Sources UI
-func (s *pickGithubScopeStep) Status() string { return defaultListStatus }   //nolint:unused // hidden Remote Sources UI
-func (s *pickGithubScopeStep) Init() tea.Cmd  { return nil }                 //nolint:unused // hidden Remote Sources UI
+func (s *pickGithubScopeStep) Title() string  { return "var: github scope" }
+func (s *pickGithubScopeStep) Status() string { return defaultListStatus }  
+func (s *pickGithubScopeStep) Init() tea.Cmd  { return nil }                
 
-func (s *pickGithubScopeStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
+func (s *pickGithubScopeStep) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if cmd, handled := wizardListNav(&s.cursor, len(s.choices), &s.btnFocus, len(s.buttons), msg); handled {
 		return s, cmd
 	}
@@ -404,7 +400,7 @@ func (s *pickGithubScopeStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:u
 	return s, nil
 }
 
-func (s *pickGithubScopeStep) View() string { //nolint:unused // hidden Remote Sources UI
+func (s *pickGithubScopeStep) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("GitHub scope") + "\n\n")
 	for i, c := range s.choices {
@@ -421,7 +417,7 @@ func (s *pickGithubScopeStep) View() string { //nolint:unused // hidden Remote S
 	return b.String()
 }
 
-func newGithubIdentifierStep(r *rootModel, ref config.VarRef, scope string, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newGithubIdentifierStep(r *rootModel, ref config.VarRef, scope string, onComplete func(config.VarRef) tea.Cmd) screen {
 	switch scope {
 	case "org":
 		return newInputScreen(r, inputOpts{
@@ -458,7 +454,7 @@ func newGithubIdentifierStep(r *rootModel, ref config.VarRef, scope string, onCo
 	}
 }
 
-func newGithubVarNameStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newGithubVarNameStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	return newInputScreen(r, inputOpts{
 		Title: "variable name", Prompt: "Name of the GitHub Variable to read",
 		Placeholder: "DEPLOY_FLAG", Initial: ref.Key,
@@ -471,7 +467,7 @@ func newGithubVarNameStep(r *rootModel, ref config.VarRef, onComplete func(confi
 
 // ---------- generic / aws ----------
 
-func newGenericRefStep(r *rootModel, ref config.VarRef, typeName string, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newGenericRefStep(r *rootModel, ref config.VarRef, typeName string, onComplete func(config.VarRef) tea.Cmd) screen {
 	prompt := fmt.Sprintf("Identifier for source %q (type=%s)", ref.Source, typeName)
 	placeholder := ""
 	switch typeName {
@@ -490,7 +486,7 @@ func newGenericRefStep(r *rootModel, ref config.VarRef, typeName string, onCompl
 	})
 }
 
-func newGenericKeyStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newGenericKeyStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen {
 	return newInputScreen(r, inputOpts{
 		Title:       "sub-key (optional)",
 		Prompt:      "JSON key inside the secret. Leave blank to take the whole value.",
@@ -510,7 +506,7 @@ func newGenericKeyStep(r *rootModel, ref config.VarRef, onComplete func(config.V
 
 // ---------- env name (final input) ----------
 
-func newEnvNameStep(r *rootModel, ref config.VarRef, defaultName string, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
+func newEnvNameStep(r *rootModel, ref config.VarRef, defaultName string, onComplete func(config.VarRef) tea.Cmd) screen {
 	return newInputScreen(r, inputOpts{
 		Title:       "env var name",
 		Prompt:      "Name of the environment variable to inject.",
@@ -523,7 +519,7 @@ func newEnvNameStep(r *rootModel, ref config.VarRef, defaultName string, onCompl
 	})
 }
 
-func pickInitial(existing, fallback string) string { //nolint:unused // hidden Remote Sources UI
+func pickInitial(existing, fallback string) string {
 	if existing != "" {
 		return existing
 	}
@@ -532,13 +528,13 @@ func pickInitial(existing, fallback string) string { //nolint:unused // hidden R
 
 // ---------- finish ----------
 
-func finishVar(_ *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) tea.Cmd { //nolint:unused // hidden Remote Sources UI
+func finishVar(_ *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) tea.Cmd {
 	return onComplete(ref)
 }
 
 // ---------- helpers ----------
 
-func configuredSourceNames(r *rootModel) []string { //nolint:unused // hidden Remote Sources UI
+func configuredSourceNames(r *rootModel) []string {
 	out := make([]string, 0, len(r.cfg.Sources))
 	for n := range r.cfg.Sources {
 		out = append(out, n)
@@ -568,7 +564,7 @@ func sortedBagKeys(r *rootModel, bag string) []string {
 
 // summariseVar returns a one-line description of a var for use in the
 // mapping form's var list.
-func summariseVar(r *rootModel, v config.VarRef) string { //nolint:unused // hidden Remote Sources UI
+func summariseVar(r *rootModel, v config.VarRef) string {
 	src, ok := r.cfg.Sources[v.Source]
 	srcDesc := v.Source
 	if !ok {
@@ -601,7 +597,7 @@ func summariseVar(r *rootModel, v config.VarRef) string { //nolint:unused // hid
 // shared across every list-style wizard step. Returns (cmd, true) when
 // the message was handled. The caller uses the boolean to short-circuit
 // its own handling.
-func wizardListNav(cursor *int, listLen int, btnFocus *int, btnLen int, msg tea.Msg) (tea.Cmd, bool) { //nolint:unused // hidden Remote Sources UI
+func wizardListNav(cursor *int, listLen int, btnFocus *int, btnLen int, msg tea.Msg) (tea.Cmd, bool) {
 	k, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return nil, false
