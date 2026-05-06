@@ -10,6 +10,7 @@ import (
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
+	"github.com/gv/jitenv/internal/shell"
 )
 
 var unlockForeground bool
@@ -61,11 +62,43 @@ func newUnlockCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "agent started (socket: %s)\n", paths.Socket)
+			warnIfHookMissing(cmd.ErrOrStderr())
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&unlockForeground, "foreground", false, "run agent in foreground (for development)")
 	return c
+}
+
+// warnIfHookMissing prints a yellow notice to w when the shell hook
+// isn't fully wired up. Two failure modes are flagged:
+//   - the eval line is not in the user's interactive rc file at all;
+//   - the eval line is in ~/.bashrc but bash login shells don't end up
+//     sourcing ~/.bashrc, so the hook only fires in interactive shells
+//     (this is the situation that hides the agent-down warning when
+//     the user opens a new terminal as a login shell).
+func warnIfHookMissing(w interface {
+	Write(p []byte) (n int, err error)
+}) {
+	st, err := shell.CurrentStatus()
+	if err != nil || st.Shell == "" {
+		return
+	}
+	const yellow = "\033[33m"
+	const reset = "\033[0m"
+	if !st.Installed {
+		fmt.Fprintf(w,
+			"%snote:%s shell hook not installed in %s — run `jitenv hook install` "+
+				"or open `jitenv config` → Settings to add it.\n",
+			yellow, reset, st.RcPath)
+		return
+	}
+	if st.Shell == "bash" && st.LoginPath != "" && !st.LoginSources {
+		fmt.Fprintf(w,
+			"%snote:%s ~/.bashrc has the hook line, but %s does not source ~/.bashrc — "+
+				"login shells will skip it. Run `jitenv hook install` to fix.\n",
+			yellow, reset, st.LoginPath)
+	}
 }
 
 func parseIdle(s string) time.Duration {

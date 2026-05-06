@@ -29,5 +29,92 @@ func newHookCmd() *cobra.Command {
 			fmt.Fprint(cmd.OutOrStdout(), shell.Zsh)
 		},
 	})
+	c.AddCommand(newHookInstallCmd())
+	c.AddCommand(newHookStatusCmd())
 	return c
+}
+
+func newHookInstallCmd() *cobra.Command {
+	var shellFlag string
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Append the activation line to the user's shell startup files (idempotent)",
+		Long: `For bash, the eval line is appended to ~/.bashrc; if the user's bash
+login chain (.bash_profile / .bash_login / .profile) doesn't already
+end up sourcing ~/.bashrc, a guarded source line is added so that
+login shells pick up the hook too. For zsh, the eval line is
+appended to ~/.zshrc (sourced for both interactive and login).
+Re-running this command is a safe no-op when nothing needs to change.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			sh := shellFlag
+			if sh == "" {
+				sh = shell.DetectShell()
+			}
+			if sh == "" {
+				return fmt.Errorf("could not detect shell from $SHELL; pass --shell bash|zsh")
+			}
+			rep, err := shell.InstallShell(sh)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if rep.RcAdded {
+				fmt.Fprintf(out, "added hook line to %s\n", rep.RcPath)
+			} else {
+				fmt.Fprintf(out, "hook line already present in %s\n", rep.RcPath)
+			}
+			if sh == "bash" {
+				switch {
+				case rep.LoginAdded && rep.LoginPath != "":
+					fmt.Fprintf(out, "added '. ~/.bashrc' to %s so login shells load the hook\n", rep.LoginPath)
+				case rep.LoginAlreadyOK && rep.LoginPath != "":
+					fmt.Fprintf(out, "%s already sources ~/.bashrc — login shells covered\n", rep.LoginPath)
+				}
+			}
+			fmt.Fprintln(out, "open a new shell to activate")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&shellFlag, "shell", "", "shell to install for (bash|zsh); auto-detect by default")
+	return cmd
+}
+
+func newHookStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Print whether the shell hook is installed in the current shell's rc file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, err := shell.CurrentStatus()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if st.Shell == "" {
+				fmt.Fprintln(out, "shell: unsupported (only bash and zsh)")
+				return nil
+			}
+			fmt.Fprintf(out, "shell:     %s\n", st.Shell)
+			fmt.Fprintf(out, "rc file:   %s\n", st.RcPath)
+			if st.Installed {
+				fmt.Fprintln(out, "installed: yes")
+			} else {
+				fmt.Fprintln(out, "installed: no")
+			}
+			if st.Shell == "bash" {
+				if st.LoginPath == "" {
+					fmt.Fprintln(out, "login chain: no .bash_profile / .bash_login / .profile")
+				} else if st.LoginSources {
+					fmt.Fprintf(out, "login chain: %s sources ~/.bashrc — login shells covered\n", st.LoginPath)
+				} else {
+					fmt.Fprintf(out, "login chain: %s does NOT source ~/.bashrc — login shells will skip the hook\n", st.LoginPath)
+				}
+			}
+			if !st.Installed || (st.Shell == "bash" && st.LoginPath != "" && !st.LoginSources) {
+				fmt.Fprintln(out, "to install: jitenv hook install")
+			}
+			return nil
+		},
+	}
 }
