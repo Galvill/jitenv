@@ -130,11 +130,11 @@ func CurrentStatus() (Status, error) {
 
 // InstallReport summarises what InstallShell did.
 type InstallReport struct {
-	RcPath          string
-	RcAdded         bool
-	LoginPath       string
-	LoginAdded      bool
-	LoginAlreadyOK  bool
+	RcPath         string
+	RcAdded        bool
+	LoginPath      string
+	LoginAdded     bool
+	LoginAlreadyOK bool
 }
 
 // InstallShell does a full install for shellName:

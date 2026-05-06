@@ -85,9 +85,11 @@ func TestRunInjectsEnvAndExecs(t *testing.T) {
 		t.Fatalf("daemon start: %v", err)
 	}
 	pr.Close()
-	pw2.Write(key)
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
 	pw2.Close()
-	defer daemon.Process.Kill()
+	defer func() { _ = daemon.Process.Kill() }() // best-effort cleanup; process may already be gone
 
 	// Wait for socket.
 	deadline := time.Now().Add(3 * time.Second)
@@ -201,9 +203,11 @@ func TestRunLocalBag(t *testing.T) {
 		t.Fatalf("daemon start: %v", err)
 	}
 	pr.Close()
-	pw2.Write(key)
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
 	pw2.Close()
-	defer daemon.Process.Kill()
+	defer func() { _ = daemon.Process.Kill() }() // best-effort cleanup; process may already be gone
 
 	// Wait for socket.
 	deadline := time.Now().Add(3 * time.Second)

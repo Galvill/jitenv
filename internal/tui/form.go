@@ -1,5 +1,9 @@
 package tui
 
+//nolint:unused // Reserved for the hidden Remote Sources UI; will be wired
+// back into the TUI menu once the feature is re-enabled (see CLAUDE.md
+// "No third source UI" note).
+
 import (
 	"strings"
 
@@ -10,7 +14,7 @@ import (
 )
 
 // formField is one row in a form.
-type formField struct {
+type formField struct { //nolint:unused // hidden Remote Sources UI
 	source.ParamField
 	input    textinput.Model
 	revealed bool
@@ -20,12 +24,12 @@ type formField struct {
 // owns the surrounding frame and the button row; form only renders the
 // labelled inputs and exposes focus-navigation helpers so the screen
 // can decide when to leave the form and focus a button.
-type form struct {
+type form struct { //nolint:unused // hidden Remote Sources UI
 	fields []*formField
 	cursor int
 }
 
-func newForm(schema []source.ParamField, initial map[string]string) *form {
+func newForm(schema []source.ParamField, initial map[string]string) *form { //nolint:unused // hidden Remote Sources UI
 	f := &form{}
 	for _, sf := range schema {
 		ti := textinput.New()
@@ -47,7 +51,7 @@ func newForm(schema []source.ParamField, initial map[string]string) *form {
 	return f
 }
 
-func (f *form) Values() map[string]string {
+func (f *form) Values() map[string]string { //nolint:unused // hidden Remote Sources UI
 	out := make(map[string]string, len(f.fields))
 	for _, fld := range f.fields {
 		out[fld.Key] = fld.input.Value()
@@ -55,7 +59,7 @@ func (f *form) Values() map[string]string {
 	return out
 }
 
-func (f *form) MissingRequired() []string {
+func (f *form) MissingRequired() []string { //nolint:unused // hidden Remote Sources UI
 	var out []string
 	for _, fld := range f.fields {
 		if fld.Required && strings.TrimSpace(fld.input.Value()) == "" {
@@ -72,7 +76,7 @@ func (f *form) MissingRequired() []string {
 // Update is called by the parent screen when focus is on the form.
 // It DOES NOT consume tab/shift-tab — those are handled by the parent
 // screen so it can move focus out of the form to the button row.
-func (f *form) Update(msg tea.Msg) tea.Cmd {
+func (f *form) Update(msg tea.Msg) tea.Cmd { //nolint:unused // hidden Remote Sources UI
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "down":
@@ -106,14 +110,14 @@ func (f *form) Update(msg tea.Msg) tea.Cmd {
 
 // Focus navigation helpers used by the parent screen so it can decide
 // when tab moves out of the form.
-func (f *form) atFirstField() bool { return len(f.fields) == 0 || f.cursor == 0 }
-func (f *form) atLastField() bool  { return len(f.fields) == 0 || f.cursor >= len(f.fields)-1 }
-func (f *form) focusFirst()        { f.focus(0) }
-func (f *form) focusLast()         { f.focus(len(f.fields) - 1) }
-func (f *form) focusNext()         { f.focus(f.cursor + 1) }
-func (f *form) focusPrev()         { f.focus(f.cursor - 1) }
+func (f *form) atFirstField() bool { return len(f.fields) == 0 || f.cursor == 0 }               //nolint:unused // hidden Remote Sources UI
+func (f *form) atLastField() bool  { return len(f.fields) == 0 || f.cursor >= len(f.fields)-1 } //nolint:unused // hidden Remote Sources UI
+func (f *form) focusFirst()        { f.focus(0) }                                               //nolint:unused // hidden Remote Sources UI
+func (f *form) focusLast()         { f.focus(len(f.fields) - 1) }                               //nolint:unused // hidden Remote Sources UI
+func (f *form) focusNext()         { f.focus(f.cursor + 1) }                                    //nolint:unused // hidden Remote Sources UI
+func (f *form) focusPrev()         { f.focus(f.cursor - 1) }                                    //nolint:unused // hidden Remote Sources UI
 
-func (f *form) focus(i int) {
+func (f *form) focus(i int) { //nolint:unused // hidden Remote Sources UI
 	if len(f.fields) == 0 {
 		return
 	}
@@ -128,7 +132,7 @@ func (f *form) focus(i int) {
 	f.fields[i].input.Focus()
 }
 
-func (f *form) View() string {
+func (f *form) View() string { //nolint:unused // hidden Remote Sources UI
 	if len(f.fields) == 0 {
 		return dimText("(no fields)")
 	}

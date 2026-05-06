@@ -46,7 +46,7 @@ func renderHelpKeys(pairs ...[2]string) string {
 }
 
 // boxLabel renders a "field label" + value pair like "Name: aws-prod".
-func boxLabel(label, value string) string {
+func boxLabel(label, value string) string { //nolint:unused // reserved for source detail views in hidden Remote Sources UI
 	return labelStyle.Render(label) + "  " + value
 }
 

@@ -59,7 +59,9 @@ func TestBashHookInterceptsMappedFile(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 	tmp.Close()
-	os.Rename(tmp.Name(), cfgPath)
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatalf("rename config: %v", err)
+	}
 
 	runtimeDir := filepath.Join(dir, "runtime")
 	_ = os.MkdirAll(runtimeDir, 0700)
@@ -74,9 +76,11 @@ func TestBashHookInterceptsMappedFile(t *testing.T) {
 		t.Fatalf("daemon: %v", err)
 	}
 	pr.Close()
-	pw2.Write(key)
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
 	pw2.Close()
-	defer daemon.Process.Kill()
+	defer func() { _ = daemon.Process.Kill() }() // best-effort cleanup; process may already be gone
 
 	cli := agent.NewClient(paths.Socket)
 	deadline := time.Now().Add(3 * time.Second)

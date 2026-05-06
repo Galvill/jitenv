@@ -61,11 +61,11 @@ var copyrightStyle = lipgloss.NewStyle().
 // modalOverlay returns a small centered bordered popup of the given
 // width, ready to be rendered in lieu of the body. Used by confirm
 // dialogs.
-func modalOverlay(width int, body string) string {
+func modalOverlay(width int, body string) string { //nolint:unused // reserved for hidden Remote Sources UI
 	return panelFocusedStyle.Width(width).Render(body)
 }
 
 // joinHCenter joins parts horizontally with center alignment.
-func joinHCenter(parts ...string) string {
+func joinHCenter(parts ...string) string { //nolint:unused // reserved for hidden Remote Sources UI
 	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }

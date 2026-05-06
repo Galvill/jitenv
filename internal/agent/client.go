@@ -28,7 +28,9 @@ func (c *Client) call(ctx context.Context, req Request) (Response, error) {
 	if !ok {
 		deadline = time.Now().Add(c.timeout)
 	}
-	conn.SetDeadline(deadline)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return Response{}, fmt.Errorf("set deadline: %w", err)
+	}
 
 	if err := WriteMessage(conn, req); err != nil {
 		return Response{}, err

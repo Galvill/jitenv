@@ -78,4 +78,3 @@ func ReadMessage(r io.Reader, v any) error {
 	}
 	return json.Unmarshal(body, v)
 }
-
