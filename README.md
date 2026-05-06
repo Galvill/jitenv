@@ -185,7 +185,8 @@ return. The agent / resolver still honour any entries already in
 - Local-secret bag values **always** live in this envelope form on disk.
 - The unlocked key lives only in the agent's memory.
 - Trust boundary = local user, same as `ssh-agent`. The socket is mode
-  0600 and the agent verifies the connecting peer's UID via `SO_PEERCRED`.
+  0600 and the agent verifies the connecting peer's UID via
+  `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS).
 - Local root sees plaintext memory. `mlock` helps against casual
   exposure, not against root.
 
@@ -209,8 +210,11 @@ return. The agent / resolver still honour any entries already in
   absolute or `./`-relative path — not bare PATH lookups. Intentional,
   keeps the hook fast and predictable.
 - Single agent per user; multiple terminals share one unlocked instance.
-- Linux-focused (uses `SO_PEERCRED`, `XDG_RUNTIME_DIR`, double-fork via
-  `Setsid`).
+- Linux + macOS only. Linux uses `SO_PEERCRED` + `XDG_RUNTIME_DIR`;
+  macOS uses `LOCAL_PEERCRED` + `$TMPDIR`. The agent's `Setsid`
+  double-fork is portable to both. Windows is not supported.
+- macOS release binaries are not Apple-notarized; first run requires
+  `xattr -d com.apple.quarantine ./jitenv` or right-click → Open.
 - The TUI requires a TTY. For scripted setup, use `jitenv config init`
   then re-run interactively.
 

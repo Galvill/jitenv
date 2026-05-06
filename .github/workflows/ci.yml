@@ -56,6 +56,11 @@ jobs:
       - name: Test
         run: go test -race -covermode=atomic ./...
 
+      - name: Cross-compile for macOS
+        run: |
+          GOOS=darwin GOARCH=amd64 go build -o /tmp/jitenv-darwin-amd64 ./cmd/jitenv
+          GOOS=darwin GOARCH=arm64 go build -o /tmp/jitenv-darwin-arm64 ./cmd/jitenv
+
       - name: GoReleaser snapshot
         uses: goreleaser/goreleaser-action@v6
         with:

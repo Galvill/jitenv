@@ -14,6 +14,7 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
+      - darwin
     goarch:
       - amd64
       - arm64
@@ -90,7 +91,10 @@ release:
   header: |
     ## jitenv {{ .Tag }}
 
-    Linux artifacts for `amd64` and `arm64`. Verify integrity:
+    Linux + macOS artifacts for `amd64` and `arm64`. macOS binaries are
+    **not** Apple-notarized — first run requires `xattr -d
+    com.apple.quarantine ./jitenv` or a right-click → Open. See #13
+    for the notarization tracking issue. Verify integrity:
 
     ```sh
     sha256sum -c SHA256SUMS
