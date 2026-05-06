@@ -223,3 +223,7 @@ make install         # installs to $PREFIX/bin (default ~/.local/bin)
 ```
 
 Go 1.22+ required.
+
+## License
+
+[MIT](LICENSE).
