@@ -61,6 +61,9 @@ nfpms:
         dst: /usr/share/doc/jitenv/LICENSE
       - src: README.md
         dst: /usr/share/doc/jitenv/README.md
+    scripts:
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
 
 checksum:
   name_template: SHA256SUMS

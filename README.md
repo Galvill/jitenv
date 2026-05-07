@@ -18,11 +18,45 @@ tree only — never into the parent shell.
 
 ## Install
 
+### From a release artifact (Linux)
+
+```sh
+# Debian / Ubuntu
+sudo dpkg -i jitenv_X.Y.Z_linux_amd64.deb
+
+# Fedora / RHEL / openSUSE
+sudo rpm -i jitenv_X.Y.Z_linux_amd64.rpm
+```
+
+The package's post-install prints a one-liner reminder. Activate the
+shell hook **once, as your normal user** (not as root):
+
+```sh
+jitenv hook install   # appends one line to ~/.bashrc or ~/.zshrc
+```
+
+`jitenv hook install` is idempotent — re-running it (or re-installing
+the package) won't duplicate lines. Removing the package leaves the
+hook line in place; the `preremove` script reminds you how to delete
+it manually.
+
+### From source
+
 ```sh
 go install github.com/gv/jitenv/cmd/jitenv@latest
 # or
 git clone https://github.com/gv/jitenv && cd jitenv && make install
+
+# Activate the shell hook
+jitenv hook install
 ```
+
+### Homebrew
+
+A formula is planned alongside the macOS port (see
+[#13](https://github.com/Galvill/jitenv/issues/13)). When it lands, the
+formula will print caveats with the same `jitenv hook install`
+command — Homebrew formulae do not modify a user's shell rc files.
 
 ## Quick start
 
