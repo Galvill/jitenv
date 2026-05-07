@@ -51,6 +51,24 @@ __jitenv_log() {
 __jitenv_debug_trap() {
     [[ -n "${__JITENV_REENTRY:-}" ]] && return 0
 
+    # Skip while bash is running a programmable-completion function —
+    # the DEBUG trap fires on commands inside compfuncs too, and we
+    # don't want to paint the agent-unreachable countdown when the
+    # user just hit Tab. COMP_LINE / COMP_POINT are only set during
+    # completion, so they're a clean signal. (issue #30)
+    [[ -n "${COMP_LINE-}" || -n "${COMP_POINT-}" ]] && return 0
+
+    # Skip when bash is running its command-not-found handler. On
+    # Debian/Ubuntu the handler shells out to /usr/lib/command-not-found
+    # to suggest an apt package; that path-prefixed call would
+    # otherwise hit the warn branch with a locked agent and paint the
+    # countdown for every typo. The handler runs as the bash function
+    # `command_not_found_handle` (or `_handler` on some distros), so
+    # FUNCNAME shows it on the call stack while the trap fires.
+    case " ${FUNCNAME[*]} " in
+        *" command_not_found_handle "*|*" command_not_found_handler "*) return 0 ;;
+    esac
+
     local cmd="$BASH_COMMAND"
     local first_raw; first_raw="${cmd%% *}"
     [[ -z "$first_raw" ]] && return 0
