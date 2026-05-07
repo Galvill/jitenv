@@ -161,3 +161,59 @@ eval "$(%s/jitenv hook bash)"
 		t.Errorf("expected the hook to wait ~1s; only %s elapsed", elapsed)
 	}
 }
+
+// TestBashHookSkipsCommandNotFoundHandle is the regression for the
+// user report: typing a non-existent command with the agent locked
+// painted the agent-unreachable warning for /usr/lib/command-not-found.
+// That path comes from bash's command_not_found_handle wrapper
+// (Debian/Ubuntu's apt-suggest helper). The DEBUG trap fires on the
+// command inside the wrapper, sees a path-prefixed name, and warns —
+// once per typo. The hook now bails out when FUNCNAME shows the
+// handler on the call stack, so a typo with a locked agent stays
+// quiet.
+func TestBashHookSkipsCommandNotFoundHandle(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	// Stand in for /usr/lib/command-not-found: a real script the
+	// fake handler will invoke. The mere fact that the trap fires
+	// for a path-prefixed file with a locked agent is what used to
+	// paint the warning, so the script's contents don't matter.
+	cnf := filepath.Join(dir, "command-not-found")
+	if err := os.WriteFile(cnf, []byte("#!/bin/sh\necho 'apt would suggest something here' >&2\nexit 127\n"), 0755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Empty runtime dir → no agent socket → locked-agent path.
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+
+	binDir := filepath.Dir(bin)
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		`PATH=%q:$PATH
+eval "$(%s/jitenv hook bash)"
+command_not_found_handle() {
+    %q "$@"
+    return 127
+}
+xyzfdsa-typo
+`, binDir, binDir, cnf,
+	))
+	cmd.Env = append(os.Environ(),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_HOOK_DELAY=1",
+	)
+	start := time.Now()
+	out, _ := cmd.CombinedOutput()
+	elapsed := time.Since(start)
+	got := string(out)
+	if strings.Contains(got, "agent is not loaded") {
+		t.Errorf("hook leaked the agent-down warning for command_not_found_handle; got:\n%s", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("hook should short-circuit on command_not_found_handle; took %s\n%s", elapsed, got)
+	}
+}
