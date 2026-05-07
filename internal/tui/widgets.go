@@ -56,7 +56,14 @@ func dimText(s string) string { return mutedStyle.Render(s) }
 
 // Common status-bar hints reused by multiple screens.
 var (
-	defaultListStatus = renderHelpKeys(
+	// defaultListStatus is the historic list-screen hint. Visible
+	// list/menu screens now expose `?` via renderHelpStatus(); this
+	// constant is still referenced by the currently-hidden Remote
+	// Sources screens (see #16/#17 for the re-enable work). Keeping it
+	// here so the var-decl block stays together; the //nolint silences
+	// the unused-linter false positive while those screens are
+	// unreachable.
+	defaultListStatus = renderHelpKeys( //nolint:unused // referenced only by hidden Remote Sources screens; reactivated by #16/#17
 		[2]string{"↑/↓", "move"},
 		[2]string{"Tab", "buttons"},
 		[2]string{"Enter", "activate"},
