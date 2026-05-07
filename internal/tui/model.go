@@ -58,6 +58,11 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyCtrlC {
 			return r, tea.Quit
 		}
+		if msg.String() == "?" && len(r.stack) > 0 {
+			if h, ok := r.top().(helpfulScreen); ok {
+				return r, helpOverlayCmd(r, h)
+			}
+		}
 	case statusMsg:
 		r.flash = string(msg)
 		r.flashErr = false
