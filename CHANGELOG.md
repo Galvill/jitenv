@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/Galvill/jitenv/compare/v0.1.2...v0.1.3) (2026-05-06)
+
+
+### Documentation
+
+* add release runbook (RELEASING.md) ([3c49ef5](https://github.com/Galvill/jitenv/commit/3c49ef5ced44588cc12b5dfe14459d0eaf4d5701))
+* add RELEASING.md runbook ([7327c8c](https://github.com/Galvill/jitenv/commit/7327c8cf321f0470702dbdd4d24eeaea7100e466))
+
 ## [0.1.2](https://github.com/Galvill/jitenv/compare/v0.1.1...v0.1.2) (2026-05-06)
 
 
