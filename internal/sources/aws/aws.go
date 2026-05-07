@@ -61,15 +61,15 @@ func schema() []source.ParamField {
 // set, applies to both STS and Secrets Manager clients (LocalStack etc.).
 func New(cfg map[string]any) (source.Source, error) {
 	s := &awsSource{
-		region:            asString(cfg["region"]),
-		accessKeyID:       asString(cfg["access_key_id"]),
-		secretAccessKey:   asString(cfg["secret_access_key"]),
-		sessionToken:      asString(cfg["session_token"]),
-		roleArn:           asString(cfg["role_arn"]),
-		roleExternalID:    asString(cfg["role_external_id"]),
-		roleSessionName:   asString(cfg["role_session_name"]),
-		endpointOverride:  asString(cfg["endpoint_override"]),
-		profile:           asString(cfg["profile"]),
+		region:           asString(cfg["region"]),
+		accessKeyID:      asString(cfg["access_key_id"]),
+		secretAccessKey:  asString(cfg["secret_access_key"]),
+		sessionToken:     asString(cfg["session_token"]),
+		roleArn:          asString(cfg["role_arn"]),
+		roleExternalID:   asString(cfg["role_external_id"]),
+		roleSessionName:  asString(cfg["role_session_name"]),
+		endpointOverride: asString(cfg["endpoint_override"]),
+		profile:          asString(cfg["profile"]),
 	}
 	if s.accessKeyID != "" && s.secretAccessKey == "" {
 		return nil, fmt.Errorf("aws: access_key_id is set but secret_access_key is empty")

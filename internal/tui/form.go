@@ -106,12 +106,12 @@ func (f *form) Update(msg tea.Msg) tea.Cmd {
 
 // Focus navigation helpers used by the parent screen so it can decide
 // when tab moves out of the form.
-func (f *form) atFirstField() bool { return len(f.fields) == 0 || f.cursor == 0 }              
+func (f *form) atFirstField() bool { return len(f.fields) == 0 || f.cursor == 0 }
 func (f *form) atLastField() bool  { return len(f.fields) == 0 || f.cursor >= len(f.fields)-1 }
-func (f *form) focusFirst()        { f.focus(0) }                                              
-func (f *form) focusLast()         { f.focus(len(f.fields) - 1) }                              
-func (f *form) focusNext()         { f.focus(f.cursor + 1) }                                   
-func (f *form) focusPrev()         { f.focus(f.cursor - 1) }                                   
+func (f *form) focusFirst()        { f.focus(0) }
+func (f *form) focusLast()         { f.focus(len(f.fields) - 1) }
+func (f *form) focusNext()         { f.focus(f.cursor + 1) }
+func (f *form) focusPrev()         { f.focus(f.cursor - 1) }
 
 func (f *form) focus(i int) {
 	if len(f.fields) == 0 {

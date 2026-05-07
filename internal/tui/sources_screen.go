@@ -234,8 +234,8 @@ func countRemoteSources(r *rootModel) int {
 }
 
 func (s *sourceTypePickerScreen) Title() string  { return "new source — pick type" }
-func (s *sourceTypePickerScreen) Status() string { return defaultListStatus }       
-func (s *sourceTypePickerScreen) Init() tea.Cmd  { return nil }                     
+func (s *sourceTypePickerScreen) Status() string { return defaultListStatus }
+func (s *sourceTypePickerScreen) Init() tea.Cmd  { return nil }
 
 func (s *sourceTypePickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
