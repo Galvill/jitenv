@@ -366,7 +366,7 @@ func newSourceParamsScreenForEdit(r *rootModel, name string) screen {
 		root: r, name: name, typeName: sc.Type,
 		form:     newForm(sources.Schema(sc.Type), paramsToStrings(sc.Params)),
 		btnFocus: -1,
-		buttons:  []button{newButton("Save"), newButton("Test"), newButton("Cancel")},
+		buttons:  paramButtonsForType(sc.Type),
 	}
 }
 
@@ -375,7 +375,20 @@ func newSourceParamsScreenForNew(r *rootModel, typeName, name string) screen {
 		root: r, name: name, typeName: typeName, creating: true,
 		form:     newForm(sources.Schema(typeName), nil),
 		btnFocus: -1,
-		buttons:  []button{newButton("Save"), newButton("Test"), newButton("Cancel")},
+		buttons:  paramButtonsForType(typeName),
+	}
+}
+
+// paramButtonsForType returns the button row for a source params screen.
+// Source types that maintain a curated ID list (currently AWS Secrets
+// Manager and its `arns` list) get an extra "ARNs" button between
+// Test and Cancel.
+func paramButtonsForType(typeName string) []button {
+	switch typeName {
+	case "aws":
+		return []button{newButton("Save"), newButton("Test"), newButton("ARNs"), newButton("Cancel")}
+	default:
+		return []button{newButton("Save"), newButton("Test"), newButton("Cancel")}
 	}
 }
 
@@ -439,6 +452,8 @@ func (s *sourceParamsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, s.save()
 			case "Test":
 				return s, s.testConnection()
+			case "ARNs":
+				return s, s.openARNs()
 			case "Cancel":
 				return s, emit(popMsg{})
 			}
@@ -518,6 +533,29 @@ func (s *sourceParamsScreen) save() tea.Cmd {
 		verb = "added"
 	}
 	return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(sourceSavedMsg{}), emit(statusMsg(verb+" source "+s.name)))
+}
+
+// openARNs commits the current form to the in-memory cfg (so the user
+// doesn't lose edits when they jump to the ARN list) and pushes the
+// ARN list screen for this source.
+func (s *sourceParamsScreen) openARNs() tea.Cmd {
+	if s.root.cfg.Sources == nil {
+		s.root.cfg.Sources = map[string]config.SourceConfig{}
+	}
+	sc := s.root.cfg.Sources[s.name]
+	sc.Type = s.typeName
+	if sc.Params == nil {
+		sc.Params = map[string]any{}
+	}
+	for k, v := range s.form.Values() {
+		if v == "" {
+			delete(sc.Params, k)
+			continue
+		}
+		sc.Params[k] = v
+	}
+	s.root.cfg.Sources[s.name] = sc
+	return emit(pushMsg{s: newArnListScreen(s.root, s.name)})
 }
 
 func (s *sourceParamsScreen) View() string {

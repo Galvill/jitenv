@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -333,85 +332,7 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 }
 
 func (s *mappingFormScreen) openVarTree() tea.Cmd {
-	remotes := remoteSourceNames(s.root)
-	if len(remotes) == 0 {
-		return emit(pushMsg{s: newVarTreeScreen(s.root, s.idx)})
-	}
-	choices := []string{"Local secrets…"}
-	for _, n := range remotes {
-		choices = append(choices, "Add from "+n+"…")
-	}
-	choices = append(choices, "Back")
-	cb := func(choice string) tea.Cmd {
-		switch {
-		case choice == "Local secrets…":
-			return tea.Sequence(emit(popMsg{}),
-				emit(pushMsg{s: newVarTreeScreen(s.root, s.idx)}))
-		case strings.HasPrefix(choice, "Add from "):
-			name := strings.TrimSuffix(strings.TrimPrefix(choice, "Add from "), "…")
-			return tea.Sequence(emit(popMsg{}),
-				s.startRemoteVarWizard(name))
-		}
-		return emit(popMsg{})
-	}
-	return emit(pushMsg{s: newPopupMenuScreen(s.root,
-		"Variables", cb, choices...)})
-}
-
-// startRemoteVarWizard launches the var wizard pre-seeded with the
-// chosen source. The wizard's onComplete appends the finished VarRef to
-// this mapping and unwinds back to the form.
-func (s *mappingFormScreen) startRemoteVarWizard(sourceName string) tea.Cmd {
-	idx := s.idx
-	onComplete := func(ref config.VarRef) tea.Cmd {
-		mp := s.mp()
-		if mp == nil {
-			return emit(popMsg{})
-		}
-		// If a var with the same source/ref/key/name already exists,
-		// replace it; otherwise append. Keeps re-running the wizard
-		// for the same target idempotent.
-		replaced := false
-		for i, existing := range mp.Vars {
-			if existing.Source == ref.Source && existing.Ref == ref.Ref &&
-				existing.Key == ref.Key && existing.Name == ref.Name {
-				mp.Vars[i] = ref
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			mp.Vars = append(mp.Vars, ref)
-		}
-		// Unwind every wizard screen back to the mapping form.
-		isForm := func(scr screen) bool {
-			f, ok := scr.(*mappingFormScreen)
-			return ok && f.idx == idx
-		}
-		return tea.Sequence(
-			emit(popUntilMsg{pred: isForm}),
-			emit(dirtyMsg{}),
-			emit(mappingChangedMsg{}),
-			emit(statusMsg(fmt.Sprintf("added %s ← %s", ref.Name, ref.Source))),
-		)
-	}
-	// Skip the source-picker step — we already know which source the
-	// user clicked. Dispatch straight to the per-type flow.
-	return emit(pushMsg{s: dispatchByType(s.root, config.VarRef{Source: sourceName}, onComplete)})
-}
-
-// remoteSourceNames returns the sorted list of configured non-local
-// source names (managed types like local/noop are excluded).
-func remoteSourceNames(r *rootModel) []string {
-	var out []string
-	for n, sc := range r.cfg.Sources {
-		if isManagedSourceType(sc.Type) {
-			continue
-		}
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out
+	return emit(pushMsg{s: newVarTreeScreen(s.root, s.idx)})
 }
 
 func (s *mappingFormScreen) View() string {
@@ -449,27 +370,7 @@ func (s *mappingFormScreen) View() string {
 			b.WriteString("   " + listItemStyle.Render(line) + "\n")
 		}
 	}
-	if remotes := remoteVarSummary(s.root, mp); len(remotes) > 0 {
-		b.WriteString("\n" + dimText("Remote variables:") + "\n")
-		for _, r := range remotes {
-			b.WriteString("   " + dimText("• "+r) + "\n")
-		}
-	}
 	return b.String()
-}
-
-// remoteVarSummary returns a one-line summary per non-local VarRef in
-// the mapping, for read-only display on the mapping form.
-func remoteVarSummary(r *rootModel, mp *config.Mapping) []string {
-	var out []string
-	for _, v := range mp.Vars {
-		sc, ok := r.cfg.Sources[v.Source]
-		if ok && sc.Type == "local" {
-			continue
-		}
-		out = append(out, summariseVar(r, v))
-	}
-	return out
 }
 
 // localVarCount counts how many env vars this mapping currently

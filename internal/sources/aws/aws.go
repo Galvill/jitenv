@@ -4,7 +4,9 @@ package aws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -59,6 +61,11 @@ func schema() []source.ParamField {
 // In either case, if `role_arn` is set, the source assumes that role via
 // STS using the resolved base credentials. `endpoint_override`, when
 // set, applies to both STS and Secrets Manager clients (LocalStack etc.).
+//
+// `arns`, when present, is the user-curated list of secret ARNs this
+// source is allowed to read. The TUI surfaces them as bags in the
+// var-tree picker; the agent only ever Fetches IDs the user explicitly
+// added.
 func New(cfg map[string]any) (source.Source, error) {
 	s := &awsSource{
 		region:           asString(cfg["region"]),
@@ -70,6 +77,7 @@ func New(cfg map[string]any) (source.Source, error) {
 		roleSessionName:  asString(cfg["role_session_name"]),
 		endpointOverride: asString(cfg["endpoint_override"]),
 		profile:          asString(cfg["profile"]),
+		arns:             asStringList(cfg["arns"]),
 	}
 	if s.accessKeyID != "" && s.secretAccessKey == "" {
 		return nil, fmt.Errorf("aws: access_key_id is set but secret_access_key is empty")
@@ -82,6 +90,26 @@ func asString(v any) string {
 	return s
 }
 
+// asStringList accepts either a TOML []any of strings (default after
+// load) or a Go []string (when the TUI sets it before save).
+func asStringList(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		out := make([]string, len(x))
+		copy(out, x)
+		return out
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, e := range x {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 type awsSource struct {
 	region           string
 	accessKeyID      string
@@ -92,6 +120,7 @@ type awsSource struct {
 	roleSessionName  string
 	endpointOverride string
 	profile          string
+	arns             []string
 }
 
 func (a *awsSource) Name() string { return TypeName }
@@ -160,40 +189,82 @@ func (a *awsSource) smOptions() []func(*secretsmanager.Options) {
 	}
 }
 
-// List paginates ListSecrets and returns one SecretMeta per secret.
-// The label includes the description when one is set.
-func (a *awsSource) List(ctx context.Context) ([]source.SecretMeta, error) {
+// Bags returns one Bag per configured ARN. Each bag is populated by
+// running GetSecretValue on the ARN and parsing the JSON top-level
+// keys. Scalar secrets land with empty Keys.
+//
+// Errors fetching one ARN do NOT abort the others: a failed bag is
+// returned with empty Keys plus the underlying error preserved on
+// the joined error so the TUI can flag it without losing the rest.
+func (a *awsSource) Bags(ctx context.Context) ([]source.Bag, error) {
+	if len(a.arns) == 0 {
+		return nil, nil
+	}
 	cfg, err := a.loadAwsCfg(ctx)
 	if err != nil {
 		return nil, err
 	}
 	cli := secretsmanager.NewFromConfig(cfg, a.smOptions()...)
-	var out []source.SecretMeta
-	var nextToken *string
-	for {
-		page, err := cli.ListSecrets(ctx, &secretsmanager.ListSecretsInput{
-			NextToken: nextToken,
+	out := make([]source.Bag, 0, len(a.arns))
+	var perARN []error
+	for _, arn := range a.arns {
+		bag := source.Bag{RefID: arn, DisplayName: arnDisplayName(arn)}
+		v, err := cli.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+			SecretId: awsv2.String(arn),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("aws ListSecrets: %w", err)
+			perARN = append(perARN, fmt.Errorf("%s: %w", bag.DisplayName, err))
+			out = append(out, bag)
+			continue
 		}
-		for _, s := range page.SecretList {
-			id := awsv2.ToString(s.Name)
-			if id == "" {
-				continue
+		if v.SecretString != nil {
+			var obj map[string]any
+			if jsonErr := json.Unmarshal([]byte(*v.SecretString), &obj); jsonErr == nil {
+				keys := make([]string, 0, len(obj))
+				for k := range obj {
+					keys = append(keys, k)
+				}
+				bag.Keys = keys
 			}
-			label := id
-			if d := awsv2.ToString(s.Description); d != "" {
-				label = id + " — " + d
-			}
-			out = append(out, source.SecretMeta{ID: id, Label: label})
 		}
-		if page.NextToken == nil {
-			break
-		}
-		nextToken = page.NextToken
+		out = append(out, bag)
+	}
+	if len(perARN) > 0 {
+		return out, errors.Join(perARN...)
 	}
 	return out, nil
+}
+
+// arnDisplayName extracts the user-facing secret name out of a
+// Secrets Manager ARN, dropping the random `-XXXXXX` suffix AWS adds.
+//
+//	arn:aws:secretsmanager:us-east-1:1234:secret:prod/db-AbCdEf
+//	                                          └────────┬────────┘
+//	                                                   └──→ "prod/db"
+//
+// Falls back to the ARN itself when it doesn't fit the expected shape.
+func arnDisplayName(arn string) string {
+	const marker = ":secret:"
+	i := strings.Index(arn, marker)
+	if i < 0 {
+		return arn
+	}
+	name := arn[i+len(marker):]
+	// AWS appends `-` plus 6 alphanumerics. Strip if it matches.
+	if len(name) > 7 && name[len(name)-7] == '-' {
+		suffix := name[len(name)-6:]
+		alnum := true
+		for _, c := range suffix {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+				alnum = false
+				break
+			}
+		}
+		if alnum {
+			return name[:len(name)-7]
+		}
+	}
+	return name
 }
 
 func (a *awsSource) Validate(ctx context.Context) error {
