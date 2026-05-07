@@ -52,3 +52,20 @@ type ParamField struct {
 type Schemed interface {
 	Schema() []ParamField
 }
+
+// SecretMeta describes one item returned by a Lister.
+type SecretMeta struct {
+	// ID is the value to put in SecretRef.ID for a subsequent Fetch.
+	// e.g. SecretId for AWS Secrets Manager.
+	ID string
+	// Label is a short human-readable label shown in pickers.
+	// Falls back to ID when empty.
+	Label string
+}
+
+// Lister is implemented by Sources whose backend can enumerate the
+// available IDs without revealing values. Optional. The TUI uses it to
+// render a pick-from-list UX in place of free-form ID input.
+type Lister interface {
+	List(ctx context.Context) ([]SecretMeta, error)
+}

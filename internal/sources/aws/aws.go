@@ -160,6 +160,42 @@ func (a *awsSource) smOptions() []func(*secretsmanager.Options) {
 	}
 }
 
+// List paginates ListSecrets and returns one SecretMeta per secret.
+// The label includes the description when one is set.
+func (a *awsSource) List(ctx context.Context) ([]source.SecretMeta, error) {
+	cfg, err := a.loadAwsCfg(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cli := secretsmanager.NewFromConfig(cfg, a.smOptions()...)
+	var out []source.SecretMeta
+	var nextToken *string
+	for {
+		page, err := cli.ListSecrets(ctx, &secretsmanager.ListSecretsInput{
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("aws ListSecrets: %w", err)
+		}
+		for _, s := range page.SecretList {
+			id := awsv2.ToString(s.Name)
+			if id == "" {
+				continue
+			}
+			label := id
+			if d := awsv2.ToString(s.Description); d != "" {
+				label = id + " — " + d
+			}
+			out = append(out, source.SecretMeta{ID: id, Label: label})
+		}
+		if page.NextToken == nil {
+			break
+		}
+		nextToken = page.NextToken
+	}
+	return out, nil
+}
+
 func (a *awsSource) Validate(ctx context.Context) error {
 	cfg, err := a.loadAwsCfg(ctx)
 	if err != nil {
