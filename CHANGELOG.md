@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/Galvill/jitenv/compare/v0.2.0...v0.3.0) (2026-05-07)
+
+
+### Features
+
+* **aws:** UI-driven encrypted credentials for AWS Secrets Manager ([aa956a0](https://github.com/Galvill/jitenv/commit/aa956a01c492596f0bf2db319c1648c1df278913))
+* **tui:** list-driven AWS secret picker (folded into PR [#23](https://github.com/Galvill/jitenv/issues/23)) ([414cfca](https://github.com/Galvill/jitenv/commit/414cfcaff363e5dd21c1724efa8a4a9e76c1dd3a))
+* **tui:** list-driven AWS secret picker, skip redundant source step ([d48db91](https://github.com/Galvill/jitenv/commit/d48db91978a01e793fa353adb13590abe2f75cbf))
+
+
+### Bug Fixes
+
+* **ci:** gofmt + restore var_wizard.go //nolint markers ([fcae126](https://github.com/Galvill/jitenv/commit/fcae126b8b3e7d0ff2b383a6c05a685814ea688b))
+* **hook:** also skip DEBUG trap inside command_not_found_handle ([4d5cd26](https://github.com/Galvill/jitenv/commit/4d5cd262f8b4a09bad8f19b410610e7468a341e1))
+* **hook:** skip DEBUG trap during bash completion ([2e27963](https://github.com/Galvill/jitenv/commit/2e279634f9accc0668f813ebd62f58331b3ec141))
+* **hook:** skip DEBUG trap during bash completion ([#30](https://github.com/Galvill/jitenv/issues/30)) ([9ffe287](https://github.com/Galvill/jitenv/commit/9ffe287501882538abccea03cfe8f92b2f973e7b))
+* **tui:** wire remote-source variables into the mapping form ([c92cf7d](https://github.com/Galvill/jitenv/commit/c92cf7dd7427354bc3152e93f4056d5a32d9a597))
+* **tui:** wire remote-source variables into the mapping form (squashed into AWS TUI work) ([1fed564](https://github.com/Galvill/jitenv/commit/1fed564a7dde4a59d566b6199a657f417d32e12a))
+
 ## [0.2.0](https://github.com/Galvill/jitenv/compare/v0.1.3...v0.2.0) (2026-05-07)
 
 
