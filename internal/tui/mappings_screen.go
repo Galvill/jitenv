@@ -150,11 +150,16 @@ func (m *mappingsListScreen) View() string {
 }
 
 func mappingLabel(mp config.Mapping) string {
-	if mp.Glob != "" {
+	switch {
+	case mp.Glob != "":
 		return mp.Glob
-	}
-	if mp.Path != "" {
+	case mp.Path != "":
 		return mp.Path
+	case mp.CwdGlob != "":
+		if mp.Command != "" {
+			return "cwd:" + mp.CwdGlob + "  " + mp.Command
+		}
+		return "cwd:" + mp.CwdGlob
 	}
 	return "(empty)"
 }
@@ -229,7 +234,7 @@ func (s *mappingFormScreen) mp() *config.Mapping {
 
 func (s *mappingFormScreen) isEmpty() bool {
 	mp := s.mp()
-	return mp != nil && mp.Path == "" && mp.Glob == "" && len(mp.Vars) == 0
+	return mp != nil && mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" && len(mp.Vars) == 0
 }
 
 func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
@@ -240,7 +245,8 @@ func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.cursor--
 			}
 		case "down", "j":
-			if s.cursor < 2 {
+			max := s.maxCursor()
+			if s.cursor < max {
 				s.cursor++
 			}
 		case "enter":
@@ -258,8 +264,32 @@ func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
+// maxCursor returns the highest valid cursor row. The form has either
+// 3 rows (kind / target / variables) for path & glob mappings, or 4
+// rows (kind / target / command / variables) for cwd mappings.
+func (s *mappingFormScreen) maxCursor() int {
+	if mp := s.mp(); mp != nil && mp.CwdGlob != "" {
+		return 3
+	}
+	return 2
+}
+
 func (s *mappingFormScreen) activate() tea.Cmd {
-	if s.mp() == nil {
+	mp := s.mp()
+	if mp == nil {
+		return nil
+	}
+	if mp.CwdGlob != "" {
+		switch s.cursor {
+		case 0:
+			return s.openKindMenu()
+		case 1:
+			return s.openTargetInput()
+		case 2:
+			return s.openCommandInput()
+		case 3:
+			return s.openVarTree()
+		}
 		return nil
 	}
 	switch s.cursor {
@@ -279,22 +309,41 @@ func (s *mappingFormScreen) openKindMenu() tea.Cmd {
 		if mp == nil {
 			return emit(popMsg{})
 		}
+		// Carry the previous target across kind changes so the user
+		// doesn't lose typing.
+		prev := mp.Path
+		if mp.Glob != "" {
+			prev = mp.Glob
+		} else if mp.CwdGlob != "" {
+			prev = mp.CwdGlob
+		}
+		mp.Path, mp.Glob, mp.CwdGlob = "", "", ""
 		switch choice {
 		case "path":
-			if mp.Glob != "" {
-				mp.Path = mp.Glob
-				mp.Glob = ""
-			}
+			mp.Path = prev
 		case "glob":
-			if mp.Path != "" {
-				mp.Glob = mp.Path
-				mp.Path = ""
+			mp.Glob = prev
+		case "cwd":
+			mp.CwdGlob = prev
+		default:
+			// Back / unknown: restore previous shape.
+			switch {
+			case prev != "":
+				mp.Path = prev // sensible fallback; user can re-pick
 			}
+		}
+		// Command is only meaningful with cwd; clear when leaving cwd.
+		if choice != "cwd" {
+			mp.Command = ""
+		}
+		// Clamp cursor so we don't end up beyond the new max row.
+		if s.cursor > s.maxCursor() {
+			s.cursor = s.maxCursor()
 		}
 		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
 	}
 	return emit(pushMsg{s: newPopupMenuScreen(s.root,
-		"Mapping kind", cb, "path", "glob", "Back")})
+		"Mapping kind", cb, "path", "glob", "cwd", "Back")})
 }
 
 func (s *mappingFormScreen) openTargetInput() tea.Cmd {
@@ -302,15 +351,16 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	if mp == nil {
 		return nil
 	}
-	title := "edit path"
-	prompt := "Absolute path to the file."
-	ph := "/home/me/scripts/deploy.sh"
-	init := mp.Path
-	if mp.Glob != "" {
-		title = "edit glob"
-		prompt = "Doublestar glob — matches multiple files."
-		ph = "/home/me/scripts/**/*.sh"
-		init = mp.Glob
+	var title, prompt, ph, init string
+	switch {
+	case mp.Glob != "":
+		title, prompt, ph, init = "edit glob", "Doublestar glob — matches multiple files.", "/home/me/scripts/**/*.sh", mp.Glob
+	case mp.CwdGlob != "":
+		title, prompt, ph, init = "edit cwd glob",
+			"Match by current working directory. The glob also covers any subdirectory of a match (~/work/acme matches inside ~/work/acme/sub).",
+			"~/work/acme/**", mp.CwdGlob
+	default:
+		title, prompt, ph, init = "edit path", "Absolute path to the file.", "/home/me/scripts/deploy.sh", mp.Path
 	}
 	commit := func(val string) tea.Cmd {
 		v := strings.TrimSpace(val)
@@ -318,9 +368,12 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 		if m == nil {
 			return emit(popMsg{})
 		}
-		if m.Glob != "" {
+		switch {
+		case m.Glob != "":
 			m.Glob = v
-		} else {
+		case m.CwdGlob != "":
+			m.CwdGlob = v
+		default:
 			m.Path = v
 		}
 		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
@@ -328,6 +381,33 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
 		Title: title, Prompt: prompt, Placeholder: ph, Initial: init,
 		SaveLabel: "OK", CancelLabel: "Cancel",
+	}, commit)})
+}
+
+// openCommandInput is the cwd-only "command" row editor. Empty means
+// the mapping fires for ANY command run inside the matched cwd; a
+// non-empty value scopes it to a single bare command name (npm,
+// python, …).
+func (s *mappingFormScreen) openCommandInput() tea.Cmd {
+	mp := s.mp()
+	if mp == nil {
+		return nil
+	}
+	commit := func(val string) tea.Cmd {
+		m := s.mp()
+		if m == nil {
+			return emit(popMsg{})
+		}
+		m.Command = strings.TrimSpace(val)
+		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
+	}
+	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
+		Title:       "scope to command",
+		Prompt:      "Bare command name to scope this mapping to (e.g. npm). Leave blank to match every command run inside the cwd.",
+		Placeholder: "npm",
+		Initial:     mp.Command,
+		AllowBlank:  true,
+		SaveLabel:   "OK", CancelLabel: "Cancel",
 	}, commit)})
 }
 
@@ -342,13 +422,18 @@ func (s *mappingFormScreen) View() string {
 		return errorStyle.Render("(mapping vanished)")
 	}
 
-	kind := "path"
-	if mp.Glob != "" {
-		kind = "glob"
+	kind := mp.Kind()
+	if kind == "" {
+		kind = "path"
 	}
-	target := mp.Path
-	if mp.Glob != "" {
+	var target string
+	switch {
+	case mp.Glob != "":
 		target = mp.Glob
+	case mp.CwdGlob != "":
+		target = mp.CwdGlob
+	default:
+		target = mp.Path
 	}
 	if target == "" {
 		target = dimText("(not set)")
@@ -359,8 +444,17 @@ func (s *mappingFormScreen) View() string {
 	}{
 		{"kind", kind},
 		{"target", target},
-		{"variables", fmt.Sprintf("%d selected", localVarCount(s.root, mp))},
 	}
+	if mp.CwdGlob != "" {
+		cmd := mp.Command
+		if cmd == "" {
+			cmd = dimText("(any command)")
+		}
+		rows = append(rows, struct{ label, value string }{"command", cmd})
+	}
+	rows = append(rows, struct{ label, value string }{
+		"variables", fmt.Sprintf("%d selected", localVarCount(s.root, mp)),
+	})
 
 	for i, r := range rows {
 		line := fmt.Sprintf("%-12s %s", r.label+":", r.value)

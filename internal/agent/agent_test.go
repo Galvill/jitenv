@@ -29,10 +29,15 @@ type fakeResolver struct {
 	env    map[string]map[string]string
 }
 
-func (f *fakeResolver) Sources() []string      { return []string{"fake"} }
-func (f *fakeResolver) IsMapped(p string) bool { return f.mapped[p] }
+func (f *fakeResolver) Sources() []string            { return []string{"fake"} }
+func (f *fakeResolver) IsMapped(p string) bool       { return f.mapped[p] }
+func (f *fakeResolver) HasCwdMappings() bool         { return false }
+func (f *fakeResolver) IsMappedCwd(_, _ string) bool { return false }
 func (f *fakeResolver) FetchEnv(_ context.Context, p string) (map[string]string, error) {
 	return f.env[p], nil
+}
+func (f *fakeResolver) FetchEnvCwd(_ context.Context, _, _ string) (map[string]string, error) {
+	return nil, nil
 }
 
 func TestAgentStatusAndLock(t *testing.T) {

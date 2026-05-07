@@ -66,8 +66,27 @@ func (c *Client) IsMapped(ctx context.Context, path string) (bool, error) {
 	return r.Mapped, nil
 }
 
+// IsMappedCwd is the cwd_glob counterpart to IsMapped: returns whether
+// any cwd-keyed mapping matches (pwd, command).
+func (c *Client) IsMappedCwd(ctx context.Context, pwd, command string) (bool, error) {
+	r, err := c.call(ctx, Request{Op: OpIsMapped, Cwd: pwd, Command: command})
+	if err != nil {
+		return false, err
+	}
+	return r.Mapped, nil
+}
+
 func (c *Client) FetchEnv(ctx context.Context, path string) (map[string]string, error) {
 	r, err := c.call(ctx, Request{Op: OpFetchEnv, Path: path})
+	if err != nil {
+		return nil, err
+	}
+	return r.Env, nil
+}
+
+// FetchEnvCwd is the cwd_glob counterpart to FetchEnv.
+func (c *Client) FetchEnvCwd(ctx context.Context, pwd, command string) (map[string]string, error) {
+	r, err := c.call(ctx, Request{Op: OpFetchEnv, Cwd: pwd, Command: command})
 	if err != nil {
 		return nil, err
 	}

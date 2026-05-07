@@ -41,9 +41,24 @@ type SourceConfig struct {
 }
 
 type Mapping struct {
-	Path string   `toml:"path,omitempty"`
-	Glob string   `toml:"glob,omitempty"`
-	Vars []VarRef `toml:"vars"`
+	Path    string   `toml:"path,omitempty"`
+	Glob    string   `toml:"glob,omitempty"`
+	CwdGlob string   `toml:"cwd_glob,omitempty"`
+	Command string   `toml:"command,omitempty"` // optional, only valid with CwdGlob
+	Vars    []VarRef `toml:"vars"`
+}
+
+// Kind reports which match-shape a mapping uses.
+func (m Mapping) Kind() string {
+	switch {
+	case m.Path != "":
+		return "path"
+	case m.Glob != "":
+		return "glob"
+	case m.CwdGlob != "":
+		return "cwd"
+	}
+	return ""
 }
 
 type VarRef struct {
@@ -92,8 +107,21 @@ func (c *Config) Validate() error {
 		}
 	}
 	for i, m := range c.Mappings {
-		if (m.Path == "") == (m.Glob == "") {
-			return fmt.Errorf("mapping[%d]: exactly one of path or glob is required", i)
+		set := 0
+		if m.Path != "" {
+			set++
+		}
+		if m.Glob != "" {
+			set++
+		}
+		if m.CwdGlob != "" {
+			set++
+		}
+		if set != 1 {
+			return fmt.Errorf("mapping[%d]: exactly one of path, glob, or cwd_glob is required", i)
+		}
+		if m.Command != "" && m.CwdGlob == "" {
+			return fmt.Errorf("mapping[%d]: command is only valid with cwd_glob", i)
 		}
 		if len(m.Vars) == 0 {
 			return fmt.Errorf("mapping[%d]: at least one var is required", i)

@@ -21,6 +21,10 @@ const (
 type Request struct {
 	Op   Op     `json:"op"`
 	Path string `json:"path,omitempty"`
+	// Cwd + Command, when both set, switch is_mapped / fetch_env to the
+	// cwd_glob lookup. Path is ignored in that case.
+	Cwd     string `json:"cwd,omitempty"`
+	Command string `json:"command,omitempty"`
 }
 
 type Response struct {

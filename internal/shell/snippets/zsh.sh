@@ -1,10 +1,18 @@
 # jitenv zsh hook -- source via: eval "$(jitenv hook zsh)"
 # Uses a zle widget bound to "accept-line" to rewrite BUFFER before
-# submission. Only acts on commands whose first token resolves to /, ./
-# or ../ paths.
+# submission. By default only acts on commands whose first token
+# resolves to /, ./ or ../ paths. Bare PATH commands are checked
+# against cwd_glob mappings only when the agent has flagged at least
+# one such mapping exists (sentinel file in $XDG_RUNTIME_DIR/jitenv/has-cwd).
 
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0; fi
 __JITENV_LOADED=1
+
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    __JITENV_RUNTIME_DIR="$XDG_RUNTIME_DIR/jitenv"
+else
+    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}/jitenv-$UID"
+fi
 
 # Warn loudly when the agent isn't reachable, count down 10 seconds,
 # and let Ctrl+C abort. Returns non-zero on abort so the caller's `&&`
@@ -82,6 +90,19 @@ __jitenv_accept_line() {
                     __jitenv_log "branch=case* (rc=$rc — unmapped, let it run)"
                     ;;
             esac
+        elif [[ -z "$resolved" && -e "$__JITENV_RUNTIME_DIR/has-cwd" ]]; then
+            # Bare PATH command and the agent has flagged at least one
+            # cwd_glob mapping. Ask whether $PWD + this command match.
+            __jitenv_log "candidate cmd=[$BUFFER] cwd=[$PWD] cmdname=[$first]"
+            jitenv is-mapped --cwd "$PWD" --cmd "$first" >/dev/null 2>&1
+            local rc=$?
+            __jitenv_log "is-mapped (cwd) rc=$rc"
+            if [[ "$rc" == "0" ]]; then
+                __jitenv_log "branch=cwd-case0 (mapped → jitenv run)"
+                BUFFER="jitenv run --cwd \"$PWD\" --cmd \"$first\"$rest"
+            fi
+            # rc=1 (no match) and rc=2 (agent unreachable) silently
+            # fall through — bare commands are too noisy to warn on.
         fi
     fi
     zle .accept-line

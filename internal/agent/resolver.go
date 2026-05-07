@@ -63,12 +63,29 @@ func (r *resolver) IsMapped(absPath string) bool {
 	return r.index.Mapped(abs)
 }
 
+func (r *resolver) HasCwdMappings() bool {
+	return r.index.HasCwdMappings()
+}
+
+func (r *resolver) IsMappedCwd(pwd, command string) bool {
+	return r.index.MappedCwd(pwd, command)
+}
+
+func (r *resolver) FetchEnvCwd(ctx context.Context, pwd, command string) (map[string]string, error) {
+	return r.fetchVars(ctx, r.index.LookupCwd(pwd, command))
+}
+
 func (r *resolver) FetchEnv(ctx context.Context, absPath string) (map[string]string, error) {
 	abs, err := filepath.Abs(absPath)
 	if err != nil {
 		abs = absPath
 	}
-	vars := r.index.Lookup(abs)
+	return r.fetchVars(ctx, r.index.Lookup(abs))
+}
+
+// fetchVars runs the existing per-VarRef Fetch loop. Shared between
+// path-keyed FetchEnv and cwd-keyed FetchEnvCwd.
+func (r *resolver) fetchVars(ctx context.Context, vars []config.VarRef) (map[string]string, error) {
 	out := map[string]string{}
 	for _, v := range vars {
 		s, ok := r.sources[v.Source]

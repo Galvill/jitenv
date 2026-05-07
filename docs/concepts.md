@@ -65,19 +65,59 @@ The "expand" shape is the one most people miss reading the schema.
 It's exactly what the TUI's "tick the bag" mode produces — useful when
 a bag's keys already match the env var names you want.
 
-## Path vs. glob
+## Mapping kinds: path, glob, cwd_glob
 
-A mapping's target is either a `path` (string, absolute or
-`~`-relative) or a `glob` (matched with [doublestar](https://github.com/bmatcuk/doublestar/v4)).
+A mapping picks **one** target shape:
 
-- Path matches are exact and faster.
-- Glob patterns support `**` (recursive), `*`, `?`, `[…]` and curly
-  alternation. Common useful patterns: `~/work/**/*.sh`,
-  `**/scripts/deploy*`.
-- Lookup order is **declaration order**: exact paths first, then each
-  matching glob. When two entries provide the same env var name, the
-  later one wins. This is intentional — a glob can supply defaults
-  while a more specific path overrides individual vars.
+- `path` — exact filesystem path. Fast lookup.
+- `glob` — [doublestar](https://github.com/bmatcuk/doublestar/v4)
+  pattern matched against the executed file's resolved path. Supports
+  `**`, `*`, `?`, `[…]` and curly alternation. Common patterns:
+  `~/work/**/*.sh`, `**/scripts/deploy*`.
+- `cwd_glob` — pattern matched against `$PWD` (and any ancestor). For
+  cwd mappings the shell hook intercepts **bare-PATH commands**
+  (`npm`, `python`, `bundle`, …) run from inside the matched directory
+  — useful for "anything I run inside this project gets the project's
+  env vars". An optional `command = "<bare-name>"` field scopes the
+  mapping to a single command; empty means every command run inside
+  the matched cwd.
+
+Lookup order is **declaration order** within each kind: exact paths
+first, then each matching glob, then each matching cwd_glob. When two
+entries provide the same env var name, the later one wins — so a
+glob can supply defaults while a more specific path overrides
+individual vars.
+
+```toml
+# Anything run inside ~/work/acme gets ACME_API_TOKEN.
+[[mappings]]
+cwd_glob = "~/work/acme"
+[[mappings.vars]]
+name   = "ACME_API_TOKEN"
+source = "local"
+ref    = "acme"
+key    = "API_TOKEN"
+
+# Only npm in that directory needs the registry token.
+[[mappings]]
+cwd_glob = "~/work/acme"
+command  = "npm"
+[[mappings.vars]]
+name   = "NPM_TOKEN"
+source = "local"
+ref    = "acme"
+key    = "NPM_TOKEN"
+```
+
+### Performance: the has-cwd sentinel
+
+The bash and zsh hooks short-circuit on bare-PATH commands when no
+cwd_glob mapping is configured, so users who never use cwd mappings
+pay zero overhead. The agent maintains a tiny sentinel file at
+`$XDG_RUNTIME_DIR/jitenv/has-cwd` (or `$TMPDIR/jitenv-<uid>/has-cwd`)
+when at least one cwd_glob mapping exists; the hook checks for the
+file's existence (one stat) before spending a socket round-trip. The
+sentinel is created on agent start and refreshed on every reload.
 
 ## Agent
 

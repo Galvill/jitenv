@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -36,11 +37,17 @@ type Agent struct {
 }
 
 // Resolver is the agent-internal hook to resolve mapping + fetch env vars.
-// Step 5 leaves this nil; step 10 wires it up.
 type Resolver interface {
 	Sources() []string
 	IsMapped(absPath string) bool
 	FetchEnv(ctx context.Context, absPath string) (map[string]string, error)
+
+	// HasCwdMappings reports whether any cwd_glob mapping is
+	// configured. The agent uses this to maintain the has-cwd
+	// sentinel file the shell hooks check.
+	HasCwdMappings() bool
+	IsMappedCwd(pwd, command string) bool
+	FetchEnvCwd(ctx context.Context, pwd, command string) (map[string]string, error)
 }
 
 // NewAgent constructs an Agent ready to Serve.
@@ -84,7 +91,23 @@ func (a *Agent) Listen() error {
 		return err
 	}
 	a.listener = ln
+	a.refreshCwdSentinel()
 	return WritePidFile(a.paths.PidFile, os.Getpid())
+}
+
+// refreshCwdSentinel writes (or removes) the has-cwd file that the
+// shell hooks use to decide whether to pay the cost of asking the
+// agent on every bare-PATH command. Called from Listen and after a
+// successful Reload; safe to call concurrently because it only
+// writes/removes one file in the per-user runtime dir.
+func (a *Agent) refreshCwdSentinel() {
+	flag := filepath.Join(a.paths.Dir, "has-cwd")
+	r := a.currentResolver()
+	if r != nil && r.HasCwdMappings() {
+		_ = os.WriteFile(flag, nil, 0600)
+		return
+	}
+	_ = os.Remove(flag)
 }
 
 // Serve runs the accept loop until ctx is cancelled or Shutdown is called.
@@ -127,6 +150,7 @@ func (a *Agent) Shutdown() {
 	}
 	_ = os.Remove(a.paths.Socket)
 	_ = RemovePidFile(a.paths.PidFile)
+	_ = os.Remove(filepath.Join(a.paths.Dir, "has-cwd"))
 }
 
 func (a *Agent) idleLoop(ctx context.Context) {
@@ -229,13 +253,24 @@ func (a *Agent) dispatch(ctx context.Context, req Request) Response {
 		if r == nil {
 			return Response{OK: true, Mapped: false}
 		}
+		if req.Cwd != "" {
+			return Response{OK: true, Mapped: r.IsMappedCwd(req.Cwd, req.Command)}
+		}
 		return Response{OK: true, Mapped: r.IsMapped(req.Path)}
 	case OpFetchEnv:
 		r := a.currentResolver()
 		if r == nil {
 			return Response{OK: true, Env: map[string]string{}}
 		}
-		env, err := r.FetchEnv(ctx, req.Path)
+		var (
+			env map[string]string
+			err error
+		)
+		if req.Cwd != "" {
+			env, err = r.FetchEnvCwd(ctx, req.Cwd, req.Command)
+		} else {
+			env, err = r.FetchEnv(ctx, req.Path)
+		}
 		if err != nil {
 			return Response{OK: false, Error: err.Error()}
 		}
@@ -254,6 +289,7 @@ func (a *Agent) dispatch(ctx context.Context, req Request) Response {
 		a.mu.Lock()
 		a.resolver = next
 		a.mu.Unlock()
+		a.refreshCwdSentinel()
 		return Response{OK: true}
 	default:
 		return Response{OK: false, Error: fmt.Sprintf("unknown op %q", req.Op)}

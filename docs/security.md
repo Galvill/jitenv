@@ -118,6 +118,45 @@ Atomic save via `config.AtomicSave` (sibling tempfile + rename, mode
   fiddling and offers little against the local-root threat that
   actually matters.
 
+## cwd_glob mappings widen the blast radius
+
+Path and glob mappings only inject env vars into the *one specific
+file* you executed — same one-process boundary as `jitenv run`. A
+cwd_glob mapping is broader: **every command run inside the matched
+directory** that matches the optional `command` filter gets the env
+vars. The boundary is now "one descendant process at a time", but
+the set of triggering commands is anything you (or anything you run)
+types in that directory.
+
+What's still protected:
+
+- The parent shell never has the secrets in its own environ. Each
+  triggering command gets them at exec, and they live in that
+  child's process tree only.
+- `cd`-ing out of the mapped directory in the calling shell does
+  **not** strip the secrets from already-running children — they
+  inherited them at spawn time, exactly like manual exports work.
+- The hook's `command` filter (when set) restricts firing to that
+  bare name. `command = "npm"` will not fire for `git`, `ls`, or
+  anything else even inside the matched cwd.
+
+What to be aware of:
+
+- Inside a matched cwd, **any** command (or the optional
+  `command`-scoped one) gets the secrets. If a malicious binary on
+  your `$PATH` is invocable from there, it gets injected too. Treat
+  cwd_glob like a per-directory `.envrc` — same trust model as
+  `direnv` for the broadening, but secrets still don't leak into the
+  parent shell.
+- The agent maintains a tiny sentinel file
+  (`$XDG_RUNTIME_DIR/jitenv/has-cwd`) so the hook can skip the
+  bare-PATH branch entirely when no cwd_glob mapping exists. With at
+  least one cwd_glob configured, the hook does a `stat` per command
+  + a Unix-socket round-trip on miss; sub-millisecond, but not zero.
+
+If you don't want this widening, simply don't define any `cwd_glob`
+mapping — the hook reverts to its zero-overhead exec-only behaviour.
+
 ## Why this design over `.env` files
 
 A `.env` file in your project (or `direnv`-style auto-export) puts
