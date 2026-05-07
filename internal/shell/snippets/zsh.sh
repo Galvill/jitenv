@@ -102,17 +102,23 @@ __jitenv_accept_line() {
             esac
         elif [[ -z "$resolved" && -e "$__JITENV_RUNTIME_DIR/has-cwd" ]]; then
             # Bare PATH command and the agent has flagged at least one
-            # cwd_glob mapping. Ask whether $PWD + this command match.
-            __jitenv_log "candidate cmd=[$BUFFER] cwd=[$PWD] cmdname=[$first]"
-            jitenv is-mapped --cwd "$PWD" --cmd "$first" >/dev/null 2>&1
-            local rc=$?
-            __jitenv_log "is-mapped (cwd) rc=$rc"
-            if [[ "$rc" == "0" ]]; then
-                __jitenv_log "branch=cwd-case0 (mapped → jitenv run)"
-                BUFFER="jitenv run --cwd \"$PWD\" --cmd \"$first\"$rest"
+            # cwd_glob mapping. Skip shell builtins, functions, and
+            # unknown names — `jitenv run` re-execs via syscall.Exec
+            # and only PATH binaries can be wrapped that way.
+            local resolved_path
+            resolved_path="$(whence -p "$first" 2>/dev/null)"
+            if [[ -n "$resolved_path" ]]; then
+                __jitenv_log "candidate cmd=[$BUFFER] cwd=[$PWD] cmdname=[$first]"
+                jitenv is-mapped --cwd "$PWD" --cmd "$first" >/dev/null 2>&1
+                local rc=$?
+                __jitenv_log "is-mapped (cwd) rc=$rc"
+                if [[ "$rc" == "0" ]]; then
+                    __jitenv_log "branch=cwd-case0 (mapped → jitenv run)"
+                    BUFFER="jitenv run --cwd \"$PWD\" --cmd \"$first\"$rest"
+                fi
+                # rc=1 (no match) and rc=2 (agent unreachable) silently
+                # fall through — bare commands are too noisy to warn on.
             fi
-            # rc=1 (no match) and rc=2 (agent unreachable) silently
-            # fall through — bare commands are too noisy to warn on.
         fi
     fi
     zle .accept-line

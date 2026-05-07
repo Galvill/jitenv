@@ -104,6 +104,15 @@ __jitenv_debug_trap() {
         # cwd mappings) we exit immediately, preserving today's
         # zero-overhead behaviour.
         [[ -e "$__JITENV_RUNTIME_DIR/has-cwd" ]] || return 0
+        # Skip shell builtins, functions, aliases, and unknown names.
+        # Only PATH binaries can be re-exec'd by `jitenv run`; trying
+        # to wrap something like __git_ps1 (a PROMPT_COMMAND function)
+        # ends in `exec: "..." : executable file not found`. command
+        # -v prints "/abs/path" for a PATH binary, otherwise the bare
+        # name (builtin/function) or nothing (unknown).
+        local resolved_path
+        resolved_path="$(command -v "$first" 2>/dev/null)"
+        [[ "$resolved_path" = /* ]] || return 0
         __jitenv_log "candidate cmd=[$cmd] cwd=[$PWD] cmdname=[$first]"
         jitenv is-mapped --cwd "$PWD" --cmd "$first" >/dev/null 2>&1
         local rc=$?
