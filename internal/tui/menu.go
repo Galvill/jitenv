@@ -67,8 +67,20 @@ func newMenuScreen(r *rootModel) *menuScreen {
 }
 
 func (m *menuScreen) Title() string  { return "main menu" }
-func (m *menuScreen) Status() string { return defaultListStatus }
+func (m *menuScreen) Status() string { return renderHelpStatus() }
 func (m *menuScreen) Init() tea.Cmd  { return nil }
+
+func (m *menuScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (m *menuScreen) HelpText() string {
+	return `jitenv config is the home for editing the encrypted configuration.
+Pick a section, drill in, edit. The ● indicator in the status bar
+shows whether the file has unsaved changes; Save (or Ctrl-S from any
+list page) writes them with envelope encryption and pings the running
+agent to reload.
+
+The Remote Sources page (AWS / GitHub) is hidden in this build — see
+issues #16 and #17 for the re-enable work.`
+}
 
 func (m *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {

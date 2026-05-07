@@ -22,15 +22,26 @@ func newSettingsScreen(r *rootModel) screen {
 	return &settingsScreen{root: r}
 }
 
-func (s *settingsScreen) Title() string { return "settings" }
-func (s *settingsScreen) Status() string {
-	return renderHelpKeys(
-		[2]string{"↑/↓", "move"},
-		[2]string{"Enter", "open"},
-		[2]string{"Esc", "back"},
-	)
+func (s *settingsScreen) Title() string  { return "settings" }
+func (s *settingsScreen) Status() string { return renderHelpStatus() }
+func (s *settingsScreen) Init() tea.Cmd  { return nil }
+
+func (s *settingsScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (s *settingsScreen) HelpText() string {
+	return `agent idle timeout — Go duration string (e.g. "30m", "1h", "5s"). The
+        agent shuts down once the gap since the last request exceeds
+        this. The check runs on a 30-second tick, so actual shutdown
+        lags the timeout by up to one tick. An empty / zero value
+        disables the auto-shutdown loop. Because the shell hook
+        calls "jitenv is-mapped" on every command, an active hooked
+        shell keeps the agent alive indefinitely.
+
+shell hook   — installed: yes / no for the current shell. Selecting
+        this row re-runs "jitenv hook install", which is idempotent.
+        For bash, the installer also wires the login chain
+        (.bash_profile / .bash_login / .profile) so login shells end
+        up sourcing ~/.bashrc.`
 }
-func (s *settingsScreen) Init() tea.Cmd { return nil }
 
 func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {

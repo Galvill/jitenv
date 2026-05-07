@@ -57,9 +57,35 @@ func (s *varTreeScreen) Status() string {
 		[2]string{"↑/↓", "move"},
 		[2]string{"Space/Enter", "toggle"},
 		[2]string{"Esc", "done"},
+		[2]string{"?", "help"},
 	)
 }
 func (s *varTreeScreen) Init() tea.Cmd { return nil }
+
+func (s *varTreeScreen) HelpKeys() []helpEntry {
+	return []helpEntry{
+		{"↑/↓ or k/j", "move"},
+		{"Space or Enter", "toggle the row under the cursor"},
+		{"Esc", "done — return to the mapping form"},
+	}
+}
+func (s *varTreeScreen) HelpText() string {
+	return `This tree picks which env vars the mapping injects.
+
+Tick a BAG row to expand the entire bag — every key in the bag
+becomes its own env var named after the key. This is the
+"Name == \"\"" shape in the underlying VarRef and is the right choice
+when the bag's keys already match the env-var names you want.
+
+Tick individual KEY rows for explicit named env vars. While the
+bag-level box is on, the individual key boxes render dimmed and
+toggling them is a no-op — uncheck the bag first if you want
+per-key control.
+
+Non-local source vars (AWS / GitHub) are preserved and pass through
+unchanged when this tree saves, so any pre-existing remote-source
+vars in the mapping aren't lost.`
+}
 
 func (s *varTreeScreen) mp() *config.Mapping {
 	if s.mappingIdx < 0 || s.mappingIdx >= len(s.root.cfg.Mappings) {
