@@ -186,11 +186,34 @@ type mappingFormScreen struct {
 	root     *rootModel
 	idx      int
 	creating bool
-	cursor   int // 0 = kind, 1 = target, 2 = variables
+	cursor   int // 0 = kind, 1 = target, 2 = command (cwd only) / variables
+	// pendingKind tracks the user's chosen kind while all target fields
+	// are still empty. config.Mapping has no "kind" field of its own —
+	// it's inferred from which of Path/Glob/CwdGlob is set — so on a
+	// fresh mapping we'd otherwise have no way to remember which one
+	// the user picked. Cleared once a target value lands in a concrete
+	// field; ignored whenever Mapping.Kind() returns non-empty.
+	pendingKind string
 }
 
 func newMappingFormScreen(r *rootModel, idx int, creating bool) screen {
 	return &mappingFormScreen{root: r, idx: idx, creating: creating}
+}
+
+// effectiveKind returns the kind the form should treat as current:
+// the mapping's stored kind when one of Path/Glob/CwdGlob is set,
+// otherwise the user's most-recent picker selection, defaulting to
+// "path" for a brand-new mapping.
+func (s *mappingFormScreen) effectiveKind() string {
+	if mp := s.mp(); mp != nil {
+		if k := mp.Kind(); k != "" {
+			return k
+		}
+	}
+	if s.pendingKind != "" {
+		return s.pendingKind
+	}
+	return "path"
 }
 
 func (s *mappingFormScreen) Title() string {
@@ -268,7 +291,7 @@ func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 // 3 rows (kind / target / variables) for path & glob mappings, or 4
 // rows (kind / target / command / variables) for cwd mappings.
 func (s *mappingFormScreen) maxCursor() int {
-	if mp := s.mp(); mp != nil && mp.CwdGlob != "" {
+	if s.effectiveKind() == "cwd" {
 		return 3
 	}
 	return 2
@@ -279,7 +302,7 @@ func (s *mappingFormScreen) activate() tea.Cmd {
 	if mp == nil {
 		return nil
 	}
-	if mp.CwdGlob != "" {
+	if s.effectiveKind() == "cwd" {
 		switch s.cursor {
 		case 0:
 			return s.openKindMenu()
@@ -309,38 +332,42 @@ func (s *mappingFormScreen) openKindMenu() tea.Cmd {
 		if mp == nil {
 			return emit(popMsg{})
 		}
-		// Carry the previous target across kind changes so the user
-		// doesn't lose typing.
-		prev := mp.Path
-		if mp.Glob != "" {
-			prev = mp.Glob
-		} else if mp.CwdGlob != "" {
-			prev = mp.CwdGlob
-		}
-		mp.Path, mp.Glob, mp.CwdGlob = "", "", ""
 		switch choice {
-		case "path":
-			mp.Path = prev
-		case "glob":
-			mp.Glob = prev
-		case "cwd":
-			mp.CwdGlob = prev
-		default:
-			// Back / unknown: restore previous shape.
-			switch {
-			case prev != "":
-				mp.Path = prev // sensible fallback; user can re-pick
+		case "path", "glob", "cwd":
+			// Carry the previous target across kind changes so the
+			// user doesn't lose typing.
+			prev := mp.Path
+			if mp.Glob != "" {
+				prev = mp.Glob
+			} else if mp.CwdGlob != "" {
+				prev = mp.CwdGlob
 			}
+			mp.Path, mp.Glob, mp.CwdGlob = "", "", ""
+			switch choice {
+			case "path":
+				mp.Path = prev
+			case "glob":
+				mp.Glob = prev
+			case "cwd":
+				mp.CwdGlob = prev
+			}
+			// Track the choice in screen state for the (common)
+			// brand-new-mapping case where prev was empty: the
+			// concrete field stays empty, but effectiveKind() reads
+			// the user's intent off pendingKind so the form display
+			// and dispatch follow the picked kind right away.
+			s.pendingKind = choice
+			// Command is only meaningful with cwd; clear when leaving.
+			if choice != "cwd" {
+				mp.Command = ""
+			}
+			if s.cursor > s.maxCursor() {
+				s.cursor = s.maxCursor()
+			}
+			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
 		}
-		// Command is only meaningful with cwd; clear when leaving cwd.
-		if choice != "cwd" {
-			mp.Command = ""
-		}
-		// Clamp cursor so we don't end up beyond the new max row.
-		if s.cursor > s.maxCursor() {
-			s.cursor = s.maxCursor()
-		}
-		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
+		// "Back" / unknown: leave both mp and pendingKind alone.
+		return emit(popMsg{})
 	}
 	return emit(pushMsg{s: newPopupMenuScreen(s.root,
 		"Mapping kind", cb, "path", "glob", "cwd", "Back")})
@@ -351,11 +378,12 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	if mp == nil {
 		return nil
 	}
+	kind := s.effectiveKind()
 	var title, prompt, ph, init string
-	switch {
-	case mp.Glob != "":
+	switch kind {
+	case "glob":
 		title, prompt, ph, init = "edit glob", "Doublestar glob — matches multiple files.", "/home/me/scripts/**/*.sh", mp.Glob
-	case mp.CwdGlob != "":
+	case "cwd":
 		title, prompt, ph, init = "edit cwd glob",
 			"Match by current working directory. The glob also covers any subdirectory of a match (~/work/acme matches inside ~/work/acme/sub).",
 			"~/work/acme/**", mp.CwdGlob
@@ -368,10 +396,15 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 		if m == nil {
 			return emit(popMsg{})
 		}
-		switch {
-		case m.Glob != "":
+		// effectiveKind is the source of truth — write the value into
+		// the matching concrete field and clear the others, so a
+		// brand-new mapping where pendingKind drove the kind picker
+		// lands in the right field on save.
+		m.Path, m.Glob, m.CwdGlob = "", "", ""
+		switch kind {
+		case "glob":
 			m.Glob = v
-		case m.CwdGlob != "":
+		case "cwd":
 			m.CwdGlob = v
 		default:
 			m.Path = v
@@ -422,15 +455,12 @@ func (s *mappingFormScreen) View() string {
 		return errorStyle.Render("(mapping vanished)")
 	}
 
-	kind := mp.Kind()
-	if kind == "" {
-		kind = "path"
-	}
+	kind := s.effectiveKind()
 	var target string
-	switch {
-	case mp.Glob != "":
+	switch kind {
+	case "glob":
 		target = mp.Glob
-	case mp.CwdGlob != "":
+	case "cwd":
 		target = mp.CwdGlob
 	default:
 		target = mp.Path
@@ -445,7 +475,7 @@ func (s *mappingFormScreen) View() string {
 		{"kind", kind},
 		{"target", target},
 	}
-	if mp.CwdGlob != "" {
+	if kind == "cwd" {
 		cmd := mp.Command
 		if cmd == "" {
 			cmd = dimText("(any command)")
