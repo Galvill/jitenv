@@ -374,21 +374,17 @@ func (s *mappingFormScreen) View() string {
 }
 
 // localVarCount counts how many env vars this mapping currently
-// produces from the local-secret store. Bag-level (expand-all) entries
-// count as the bag's key count; individual keys count as 1 each.
-// Non-local vars are not counted because they are managed elsewhere.
+// produces. Local bag-level (expand-all) entries count as the bag's
+// key count; everything else counts as 1.
 func localVarCount(r *rootModel, mp *config.Mapping) int {
 	n := 0
 	for _, v := range mp.Vars {
 		sc, ok := r.cfg.Sources[v.Source]
-		if !ok || sc.Type != "local" {
+		if ok && sc.Type == "local" && v.Key == "" {
+			n += len(r.cfg.Secrets[v.Ref])
 			continue
 		}
-		if v.Key == "" {
-			n += len(r.cfg.Secrets[v.Ref])
-		} else {
-			n++
-		}
+		n++
 	}
 	return n
 }
