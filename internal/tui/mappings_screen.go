@@ -395,7 +395,9 @@ func (s *mappingFormScreen) startRemoteVarWizard(sourceName string) tea.Cmd {
 			emit(statusMsg(fmt.Sprintf("added %s ← %s", ref.Name, ref.Source))),
 		)
 	}
-	return startVarWizard(s.root, config.VarRef{Source: sourceName}, onComplete)
+	// Skip the source-picker step — we already know which source the
+	// user clicked. Dispatch straight to the per-type flow.
+	return emit(pushMsg{s: dispatchByType(s.root, config.VarRef{Source: sourceName}, onComplete)})
 }
 
 // remoteSourceNames returns the sorted list of configured non-local

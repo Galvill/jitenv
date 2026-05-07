@@ -114,9 +114,15 @@ func dispatchByType(r *rootModel, ref config.VarRef, onComplete func(config.VarR
 		return newPickBagStep(r, ref, onComplete)
 	case "github":
 		return newPickGithubScopeStep(r, ref, onComplete)
-	default:
-		return newGenericRefStep(r, ref, sc.Type, onComplete)
 	}
+	// Lister-capable sources (AWS Secrets Manager today) get a
+	// pick-from-list flow. Anything else falls back to free-form input.
+	if src, err := buildSourceFromCfg(r, ref.Source); err == nil {
+		if _, ok := src.(source.Lister); ok {
+			return newListedSecretPickerStep(r, ref, onComplete)
+		}
+	}
+	return newGenericRefStep(r, ref, sc.Type, onComplete)
 }
 
 // ---------- local: pick bag → pick mode → (pick key) → name ----------
