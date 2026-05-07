@@ -124,8 +124,14 @@ echo '--- step 4 (agent down) ---'
 	if strings.Contains(step2, "agent is not loaded") {
 		t.Errorf("step 2: did not expect the warning while agent is up; got:\n%s", step2)
 	}
-	if !strings.Contains(step4, "agent is not loaded") {
-		t.Errorf("step 4: expected the agent-down warning; got:\n%s", step4)
+	// Step 4 (agent locked): the hook short-circuits on socket
+	// absence so prompt-side-effect commands (PROMPT_COMMAND, bash
+	// aliases that expand to absolute paths, `~/bin/...` etc.) no
+	// longer paint the red 10s countdown on every keystroke. The
+	// trade-off is that mapped scripts run silently without their
+	// env vars; users confirm via `jitenv status`.
+	if strings.Contains(step4, "agent is not loaded") {
+		t.Errorf("step 4: expected the locked-agent warning to be suppressed; got:\n%s", step4)
 	}
 	if !strings.Contains(step4, "FOO=MISSING") {
 		t.Errorf("step 4: expected the script to still run (with FOO=MISSING); got:\n%s", step4)

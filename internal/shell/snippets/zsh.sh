@@ -56,6 +56,16 @@ __jitenv_log() {
 
 __jitenv_accept_line() {
     emulate -L zsh
+    # Agent-absence short-circuit. `jitenv lock` removes the agent
+    # socket on shutdown, so a single stat takes us out of the widget
+    # entirely when there's no agent to talk to. Avoids dialing for
+    # every command and the agent-unreachable warning that would
+    # otherwise paint when running mapped files post-lock.
+    if [[ ! -S "$__JITENV_RUNTIME_DIR/agent.sock" ]]; then
+        zle .accept-line
+        return
+    fi
+
     local first_raw first rest resolved
     first_raw="${BUFFER%% *}"
     rest="${BUFFER#$first_raw}"

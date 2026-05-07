@@ -112,11 +112,15 @@ echo "IS_MAPPED_RC=$(jitenv is-mapped %q >/dev/null 2>&1; echo $?)"
 	}
 }
 
-// TestBashHookAgentDownWarnsThenRuns verifies that when the agent is
-// not running, the bash hook prints the red warning, waits for the
-// (env-shortened) delay, and then runs the command anyway. The script
-// produces "RAN" so we can confirm execution went through.
-func TestBashHookAgentDownWarnsThenRuns(t *testing.T) {
+// TestBashHookAgentDownStaysSilent verifies the post-#27 behaviour:
+// when the agent isn't running (no socket file in the runtime dir),
+// the bash hook short-circuits the entire trap. The previous design
+// painted a red 10s "agent is not loaded" countdown for path-prefixed
+// commands, which leaked onto every PROMPT_COMMAND firing once the
+// user had a cwd_glob mapping configured. Mapped scripts now run
+// silently without their env vars when the agent is locked; users
+// confirm via `jitenv status`.
+func TestBashHookAgentDownStaysSilent(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -128,8 +132,7 @@ func TestBashHookAgentDownWarnsThenRuns(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Point XDG_RUNTIME_DIR at an empty dir so no agent socket exists
-	// — that's what triggers the agent-unreachable path in is-mapped.
+	// Point XDG_RUNTIME_DIR at an empty dir so no agent socket exists.
 	runtimeDir := filepath.Join(dir, "runtime")
 	_ = os.MkdirAll(runtimeDir, 0700)
 
@@ -142,7 +145,7 @@ eval "$(%s/jitenv hook bash)"
 	))
 	cmd.Env = append(os.Environ(),
 		"XDG_RUNTIME_DIR="+runtimeDir,
-		"JITENV_HOOK_DELAY=1", // shrink the 10s wait for the test
+		"JITENV_HOOK_DELAY=1",
 	)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -151,13 +154,13 @@ eval "$(%s/jitenv hook bash)"
 		t.Fatalf("bash run: %v\noutput=%s", err, out)
 	}
 	got := string(out)
-	if !strings.Contains(got, "agent is not loaded") {
-		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
+	if strings.Contains(got, "agent is not loaded") {
+		t.Errorf("expected the hook to stay silent when agent is down; got:\n%s", got)
 	}
 	if !strings.Contains(got, "RAN") {
-		t.Errorf("expected the script to still run after the delay; got:\n%s", got)
+		t.Errorf("expected the script to still run; got:\n%s", got)
 	}
-	if elapsed < 800*time.Millisecond {
-		t.Errorf("expected the hook to wait ~1s; only %s elapsed", elapsed)
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("expected the hook to short-circuit fast; took %s", elapsed)
 	}
 }

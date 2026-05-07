@@ -44,19 +44,37 @@ at a known path that's covered by a mapping.
 
 ## The exit-code contract
 
-The hook calls `jitenv is-mapped <path>` and switches on its exit
-code. **All three branches matter** — collapsing 2 into 1 would be a
-bug:
+The hook calls `jitenv is-mapped <path>` and switches on its exit code:
 
 | Code | Meaning | Hook behaviour |
 |---|---|---|
 | **0** | mapped | Re-run the command via `jitenv run` so the env vars are injected. |
 | **1** | not mapped | Run the command normally — no jitenv involvement. |
-| **2** | agent unreachable | Print a red 10-second warning. Ctrl+C aborts; otherwise the original command runs (with no env-var injection). This is the "agent is locked" UX path. |
+| **2** | agent unreachable | (See "agent-absence short-circuit" below.) |
 
 You can see the dispatch in `internal/shell/snippets/bash.sh`. Set
 `JITENV_HOOK_DEBUG=1` in your shell to see which branch the trap
 took for each command.
+
+### Agent-absence short-circuit
+
+Before any of the dispatch above, the hook stat-checks the agent's
+unix socket. If the socket file isn't there (because `jitenv lock`
+removed it on shutdown), the trap **returns immediately**. No socket
+dial, no `is-mapped` process spawn, no warning.
+
+This matters because the bash DEBUG trap fires on every simple command
+bash is about to execute — including the dozens that PROMPT_COMMAND,
+prompt-side `$()`s, aliases that expand to absolute paths, and
+`~/bin/...` substitutions inject between user keystrokes. Without the
+short-circuit, each of those would dial the agent (and on a path
+mismatch, paint the red countdown), turning a locked agent into
+many-warnings-per-prompt spam.
+
+The trade-off: when the agent is locked, mapped scripts run silently
+without their env vars — there's no in-band notification that you
+forgot to unlock. Confirm with `jitenv status` if a mapped script's
+behaviour looks off.
 
 ## Bash internals: `extdebug` + DEBUG trap
 
@@ -81,20 +99,23 @@ zsh's `BUFFER`/`zle` machinery. Same exit-code contract.
 2. If yes but you're in a login shell (e.g. SSH), check the
    `login chain:` line. If it says "does NOT source ~/.bashrc",
    re-run `jitenv hook install` to add the guarded source line.
-3. `jitenv unlock` — is the agent up? An unmapped command with a
-   locked agent is fine; a mapped command with a locked agent prints
-   the red warning. Either way, an unconfigured-but-installed hook
-   never breaks unrelated commands.
+3. `jitenv unlock` — is the agent up? With a locked agent the hook
+   short-circuits silently for every command (see "agent-absence
+   short-circuit" above). Mapped scripts run without their env
+   vars; `jitenv status` will tell you the agent's state.
 
 ### "I get a long pause on every command"
 
 Set `JITENV_HOOK_DEBUG=1` and run a command. You should see exactly
 one `is-mapped rc=` line per command, with rc=1 (not mapped) for
-unrelated commands. If the rc is 2 (agent unreachable), every
-command is paying the 10-second timeout — `jitenv unlock` to fix.
+unrelated commands. If you're seeing more than one log line per
+command, your `PROMPT_COMMAND` or PS1 contains commands that the
+DEBUG trap fires on — each one pays a sub-millisecond round-trip on
+an unlocked agent, which can add up if there are many.
 
-The default 10s wait is configurable: `JITENV_HOOK_DELAY=2` in your
-shell shortens it to 2 seconds.
+The agent-down warning that older versions printed is gone; if a
+locked agent is the cause, the hook stays silent (see the
+short-circuit section above).
 
 ### "Why does the hook ignore `deploy.sh` when I'm in `./scripts/`?"
 

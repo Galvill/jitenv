@@ -4,16 +4,17 @@ The fixes for the things that go wrong most often. If your symptom
 isn't here, check `jitenv hook status` and `jitenv status` first;
 those answer 80% of "why isn't it working".
 
-## "Agent unreachable" — red countdown on every command
+## "My mapped script ran but its env vars are empty"
 
-Your shell hook is installed, but the agent isn't running.
-`jitenv unlock`, type your passphrase, done. If unlock itself fails
-with "agent did not start within 3s", read the agent log — by
-default it's at `${XDG_RUNTIME_DIR}/jitenv/agent.log`, and at
+Almost certainly the agent isn't unlocked. The shell hook
+short-circuits silently when the agent socket isn't there, so
+mapped scripts will execute without their env vars when the agent is
+locked. Run `jitenv status` to confirm, then `jitenv unlock`.
+
+If unlock itself fails with "agent did not start within 3s", read
+the agent log — by default it's at
+`${XDG_RUNTIME_DIR}/jitenv/agent.log`, and at
 `/tmp/jitenv-<uid>/agent.log` if `XDG_RUNTIME_DIR` is unset.
-
-To temporarily silence the warning while you debug, `JITENV_HOOK_DELAY=0`
-in the shell.
 
 ## Hook installed, but mapped commands aren't intercepted
 

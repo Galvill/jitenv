@@ -69,6 +69,19 @@ __jitenv_debug_trap() {
     # user just hit Tab. (issue #30)
     [[ -n "${COMP_LINE-}" || -n "${COMP_POINT-}" ]] && return 0
 
+    # Agent-absence short-circuit. The DEBUG trap fires on every simple
+    # command bash is about to execute — including the dozens that
+    # PROMPT_COMMAND, prompt-side `$()`s, aliases, and `~/bin/...`
+    # expansions inject between user keypresses. With the agent
+    # deliberately locked, calling `jitenv is-mapped` on each of
+    # those would either spam the red countdown (path-prefixed
+    # commands) or pay a useless socket-dial-fail per command.
+    # `jitenv lock` removes the agent socket on shutdown, so a single
+    # stat takes us out of the trap entirely when there's no agent
+    # to talk to. Mapped scripts run in this state will silently miss
+    # their env vars; users can confirm with `jitenv status`.
+    [[ -S "$__JITENV_RUNTIME_DIR/agent.sock" ]] || return 0
+
     local cmd="$BASH_COMMAND"
     local first_raw; first_raw="${cmd%% *}"
     [[ -z "$first_raw" ]] && return 0
