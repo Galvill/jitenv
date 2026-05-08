@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/Galvill/jitenv/compare/v0.3.0...v0.4.0) (2026-05-08)
+
+
+### Features
+
+* **chpwd:** JITENV_HOOK_DEBUG diagnostics ([4cf5614](https://github.com/Galvill/jitenv/commit/4cf5614cd17c51eb1d822c462cda1e279d472316))
+* cwd_glob mappings via PATH-prepend wrappers ([78d4c39](https://github.com/Galvill/jitenv/commit/78d4c3952492239055aea65d74cca82741c4ff7f))
+* cwd_glob mappings via PATH-prepend wrappers ([cdd4691](https://github.com/Galvill/jitenv/commit/cdd46913af4f03ddf2880ebb058c2d9b31d795e3))
+* **hook:** "Press Enter to skip" during agent-down countdown ([2a59cf1](https://github.com/Galvill/jitenv/commit/2a59cf10949b20f12d01de59bfc593bec040fd8f))
+* **hook:** re-reconcile symlinks when config.toml changes mid-session ([4b8fa0d](https://github.com/Galvill/jitenv/commit/4b8fa0d309ed086afe03362e5f18eb32e8485ab1))
+* **shim:** warn + countdown when agent is locked ([655866a](https://github.com/Galvill/jitenv/commit/655866a27b9dedc2f83245a4fdd74af2ee4c6c69))
+
+
+### Bug Fixes
+
+* **chpwd:** read config directly, don't depend on a running agent ([240ad68](https://github.com/Galvill/jitenv/commit/240ad682b872c2006f5194d64cec89939a90e750))
+* **hook:** drop 2&gt;/dev/null on chpwd calls so diagnostics surface ([c15d8f1](https://github.com/Galvill/jitenv/commit/c15d8f1358e032e8f9c73e8353357c53b64e4321))
+* **hook:** only warn for actually-mapped scripts when agent is locked ([97dd7ef](https://github.com/Galvill/jitenv/commit/97dd7ef211d891e7b73e824a965fabba296ed096))
+
+
+### Documentation
+
+* Docs:  ([cdd4691](https://github.com/Galvill/jitenv/commit/cdd46913af4f03ddf2880ebb058c2d9b31d795e3))
+
 ## [0.3.0](https://github.com/Galvill/jitenv/compare/v0.2.0...v0.3.0) (2026-05-07)
 
 
