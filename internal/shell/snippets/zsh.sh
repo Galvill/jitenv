@@ -46,7 +46,7 @@ __jitenv_warn_no_agent() {
 
     printf '%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n' \
         "$red" "$target" "$reset" >&2
-    printf '%sWill run the command anyway in 10s. Press Ctrl+C now to abort.%s\n' \
+    printf '%sWill run the command anyway in 10s. Press Enter to skip, Ctrl+C to abort.%s\n' \
         "$red" "$reset" >&2
 
     local total=${JITENV_HOOK_DELAY:-10}
@@ -54,7 +54,12 @@ __jitenv_warn_no_agent() {
     for ((i=total; i>0; i--)); do
         (( aborted )) && break
         printf '\r%s  %2ds remaining %s' "$red" "$i" "$reset" >&2
-        sleep 1
+        # zsh's read: -t timeout (seconds), -k 1 (one char), -s silent.
+        # Returns 0 if a key was read, non-zero on timeout — same shape
+        # as the bash version.
+        if read -t 1 -k 1 -s 2>/dev/null; then
+            break
+        fi
         (( aborted )) && break
     done
 

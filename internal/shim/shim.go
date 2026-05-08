@@ -169,6 +169,7 @@ func fetchEnv(cmd string) (map[string]string, error) {
 // warnAgentDown paints the same red message + countdown the bash
 // hook uses for path-mapped scripts. Returns true if the user hit
 // Ctrl+C during the countdown (caller should abort the exec).
+// Pressing Enter skips the wait and proceeds immediately.
 //
 // Honors JITENV_HOOK_DELAY (default 10s) for the wait length, so it
 // matches the hook's existing knob.
@@ -187,7 +188,7 @@ func warnAgentDown(cmdName string) bool {
 		"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
 		red, cmdName, reset)
 	fmt.Fprintf(os.Stderr,
-		"%sWill run the command anyway in %ds. Press Ctrl+C now to abort.%s\n",
+		"%sWill run the command anyway in %ds. Press Enter to skip, Ctrl+C to abort.%s\n",
 		red, total, reset)
 
 	if total == 0 {
@@ -198,6 +199,29 @@ func warnAgentDown(cmdName string) bool {
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
 
+	// Drain stdin in a goroutine; signal on the first newline. Run
+	// without raw-mode shenanigans — terminals are cooked by default,
+	// so pressing Enter delivers a single '\n' immediately. We don't
+	// kill the goroutine at the end: syscall.Exec replaces the
+	// process image and reaps it.
+	enterCh := make(chan struct{}, 1)
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				return
+			}
+			if buf[0] == '\n' || buf[0] == '\r' {
+				select {
+				case enterCh <- struct{}{}:
+				default:
+				}
+				return
+			}
+		}
+	}()
+
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
@@ -207,6 +231,9 @@ func warnAgentDown(cmdName string) bool {
 		case <-sigCh:
 			fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
 			return true
+		case <-enterCh:
+			fmt.Fprintln(os.Stderr)
+			return false
 		case <-tick.C:
 		}
 	}
