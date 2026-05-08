@@ -22,13 +22,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gv/jitenv/internal/agent"
 )
+
+// errAgentDown is returned by fetchEnv when the agent socket is
+// missing or unresponsive, distinct from a successful fetch that
+// happens to return zero env vars. The shim uses this to decide
+// whether to paint the agent-down warning.
+var errAgentDown = errors.New("agent unreachable")
 
 // Main is the shim entrypoint. invokedAs is filepath.Base(os.Args[0]),
 // args is os.Args[1:] (everything after argv[0]).
@@ -56,13 +64,26 @@ func run(invokedAs string, args []string) error {
 	}
 
 	env := os.Environ()
-	if extra, err := fetchEnv(invokedAs); err == nil {
+	extra, fetchErr := fetchEnv(invokedAs)
+	switch {
+	case errors.Is(fetchErr, errAgentDown):
+		// Mapped command, agent is locked. Mirror the bash hook's
+		// path-mapped UX: red warning + countdown, Ctrl+C to abort.
+		// After the countdown, exec the real command anyway with
+		// the parent env (no injection).
+		if aborted := warnAgentDown(invokedAs); aborted {
+			return errors.New("aborted")
+		}
+	case fetchErr != nil:
+		// Other error (config parse, fetch failure). Surface to
+		// stderr but don't block — the user explicitly invoked the
+		// command.
+		fmt.Fprintf(os.Stderr, "jitenv shim: %s: %v\n", invokedAs, fetchErr)
+	default:
 		for k, v := range extra {
 			env = append(env, k+"="+v)
 		}
 	}
-	// Agent-down errors are swallowed: we'd rather run the user's
-	// command without env vars than refuse to run it.
 
 	argv := append([]string{invokedAs}, args...)
 	if execErr := syscall.Exec(realPath, argv, env); execErr != nil {
@@ -120,15 +141,16 @@ func lookPathExcluding(name, excludeDir string) (string, error) {
 }
 
 // fetchEnv asks the running agent for env vars keyed by ($PWD, cmd).
-// Returns an empty map (nil error) when the agent isn't running so
-// the caller can keep going.
+// Returns errAgentDown when the agent socket is missing or the call
+// fails — distinct from a successful fetch that returns zero env vars
+// for an unmapped (pwd, cmd) pair.
 func fetchEnv(cmd string) (map[string]string, error) {
 	paths, err := agent.DefaultPaths()
 	if err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(paths.Socket); err != nil {
-		return nil, nil // agent down; silent
+		return nil, errAgentDown
 	}
 	pwd, err := os.Getwd()
 	if err != nil {
@@ -137,5 +159,57 @@ func fetchEnv(cmd string) (map[string]string, error) {
 	cli := agent.NewClient(paths.Socket)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return cli.FetchEnvCwd(ctx, pwd, cmd)
+	out, err := cli.FetchEnvCwd(ctx, pwd, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errAgentDown, err)
+	}
+	return out, nil
+}
+
+// warnAgentDown paints the same red message + countdown the bash
+// hook uses for path-mapped scripts. Returns true if the user hit
+// Ctrl+C during the countdown (caller should abort the exec).
+//
+// Honors JITENV_HOOK_DELAY (default 10s) for the wait length, so it
+// matches the hook's existing knob.
+func warnAgentDown(cmdName string) bool {
+	const red = "\033[1;31m"
+	const reset = "\033[0m"
+
+	total := 10
+	if v := os.Getenv("JITENV_HOOK_DELAY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			total = n
+		}
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
+		red, cmdName, reset)
+	fmt.Fprintf(os.Stderr,
+		"%sWill run the command anyway in %ds. Press Ctrl+C now to abort.%s\n",
+		red, total, reset)
+
+	if total == 0 {
+		return false
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+
+	for i := total; i > 0; i-- {
+		fmt.Fprintf(os.Stderr, "\r%s  %2ds remaining %s", red, i, reset)
+		select {
+		case <-sigCh:
+			fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
+			return true
+		case <-tick.C:
+		}
+	}
+	fmt.Fprintln(os.Stderr)
+	return false
 }

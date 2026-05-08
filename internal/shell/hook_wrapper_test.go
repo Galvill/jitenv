@@ -104,11 +104,12 @@ func TestBashWrapperEndToEnd(t *testing.T) {
 	// simulate that. The function is what the hook installs.
 	cmd := exec.Command("bash", "-c", fmt.Sprintf(
 		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
 eval "$(%s/jitenv hook bash)"
 cd %q
 __jitenv_chpwd
 fakecmd
-`, binDir, fakeBin, binDir, projectDir,
+`, binDir, fakeBin, cfgPath, binDir, projectDir,
 	))
 	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
 	out, err := cmd.CombinedOutput()
@@ -121,6 +122,92 @@ fakecmd
 	}
 	if strings.Contains(got, "FOO=MISSING") {
 		t.Errorf("env var did not land; got:\n%s", got)
+	}
+}
+
+// TestBashWrapperAgentDownWarns is the locked-agent UX for cwd_glob:
+// chpwd creates the wrapper symlink (it reads config, no agent
+// needed), but when the wrapped command runs the shim sees an
+// agent-down, prints the red countdown, waits the JITENV_HOOK_DELAY,
+// and execs the real command anyway with the parent env. This test
+// shrinks the delay to 1 second so we don't sit around.
+func TestBashWrapperAgentDownWarns(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdPath := filepath.Join(fakeBin, "fakecmd")
+	if err := os.WriteFile(cmdPath, []byte("#!/bin/sh\necho RAN\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-warn")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, _ := config.Load(cfgPath)
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{"my-secret": "from-cwd"}},
+	}
+	cfg.Mappings = []config.Mapping{{
+		CwdGlob:  projectDir,
+		Commands: []string{"fakecmd"},
+		Vars:     []config.VarRef{{Name: "FOO", Source: "n", Ref: "my-secret"}},
+	}}
+	tmp, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		t.Fatal(err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty runtime dir → no agent socket → shim hits the warn path.
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+
+	binDir := filepath.Dir(bin)
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
+eval "$(%s/jitenv hook bash)"
+cd %q
+__jitenv_chpwd
+fakecmd
+`, binDir, fakeBin, cfgPath, binDir, projectDir,
+	))
+	cmd.Env = append(os.Environ(),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_HOOK_DELAY=1", // shrink the 10s wait
+	)
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("bash run: %v\noutput=%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "agent is not loaded") {
+		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
+	}
+	if !strings.Contains(got, "RAN") {
+		t.Errorf("expected fakecmd to still run after the countdown; got:\n%s", got)
+	}
+	if elapsed < 800*time.Millisecond {
+		t.Errorf("expected the shim to wait ~1s; only %s elapsed", elapsed)
 	}
 }
 
@@ -204,10 +291,12 @@ func TestBashWrapperOutsideMappedDir(t *testing.T) {
 	binDir := filepath.Dir(bin)
 	cmd := exec.Command("bash", "-c", fmt.Sprintf(
 		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
 eval "$(%s/jitenv hook bash)"
 cd %q
+__jitenv_chpwd
 fakecmd
-`, binDir, fakeBin, binDir, otherDir,
+`, binDir, fakeBin, cfgPath, binDir, otherDir,
 	))
 	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
 	out, err := cmd.CombinedOutput()
