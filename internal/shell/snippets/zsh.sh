@@ -20,17 +20,39 @@ case ":$PATH:" in
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
 esac
 
-__jitenv_chpwd() {
-    # No 2>/dev/null on purpose: the chpwd subcommand is silent in
-    # normal operation; gating debug output with `2>/dev/null` here
-    # would hide JITENV_HOOK_DEBUG diagnostics + any
-    # "jitenv: command not found" if the binary falls off $PATH.
-    jitenv __chpwd "$$" "${OLDPWD:-}" "$PWD"
+__jitenv_cfg_path() {
+    if [[ -n "${JITENV_CONFIG:-}" ]]; then
+        print -r -- "$JITENV_CONFIG"
+    else
+        print -r -- "${XDG_CONFIG_HOME:-$HOME/.config}/jitenv/config.toml"
+    fi
 }
-typeset -ga chpwd_functions
-chpwd_functions+=(__jitenv_chpwd)
+__jitenv_cfg_mtime() {
+    local cfg="$1"
+    [[ -e "$cfg" ]] || { print -r -- 0; return; }
+    stat -c %Y "$cfg" 2>/dev/null || stat -f %m "$cfg" 2>/dev/null || print -r -- 0
+}
+# precmd-style hook: fires every time the prompt is about to redraw,
+# including after a cd (subsumes chpwd_functions). The PWD-diff +
+# mtime-diff inside makes the no-op case a tiny pair of comparisons.
+# The mtime branch handles "user edits config while sitting in the
+# mapped dir": symlinks get re-reconciled on the next prompt without
+# requiring a cd.
+__jitenv_chpwd() {
+    local cfg mtime
+    cfg="$(__jitenv_cfg_path)"
+    mtime="$(__jitenv_cfg_mtime "$cfg")"
+    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" || "$mtime" != "${__JITENV_LAST_CFG_MTIME-}" ]]; then
+        # No 2>/dev/null on purpose; see bash.sh for the rationale.
+        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+        __JITENV_LAST_PWD="$PWD"
+        __JITENV_LAST_CFG_MTIME="$mtime"
+    fi
+}
+typeset -ga precmd_functions
+precmd_functions+=(__jitenv_chpwd)
 # Populate once at hook-load.
-jitenv __chpwd "$$" "" "$PWD"
+__jitenv_chpwd
 
 # Warn loudly when the agent isn't reachable, count down 10 seconds,
 # and let Ctrl+C abort. Returns non-zero on abort so the caller's `&&`

@@ -27,21 +27,43 @@ esac
 # in PROMPT_COMMAND. The diff makes the per-prompt cost a single
 # string compare; the full helper only fires on actual directory
 # changes.
-__JITENV_LAST_PWD="$PWD"
+# Resolve the config-file path the same way the Go side does.
+__jitenv_cfg_path() {
+    if [[ -n "${JITENV_CONFIG:-}" ]]; then
+        printf '%s' "$JITENV_CONFIG"
+    else
+        printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/jitenv/config.toml"
+    fi
+}
+# stat -c is GNU; -f is BSD/macOS. Echo 0 on any failure so the
+# comparison treats "missing" identically across runs.
+__jitenv_cfg_mtime() {
+    local cfg="$1"
+    [[ -e "$cfg" ]] || { printf '0'; return; }
+    stat -c %Y "$cfg" 2>/dev/null || stat -f %m "$cfg" 2>/dev/null || printf '0'
+}
 __jitenv_chpwd() {
-    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" ]]; then
+    local cfg mtime
+    cfg="$(__jitenv_cfg_path)"
+    mtime="$(__jitenv_cfg_mtime "$cfg")"
+    # Fire when EITHER the directory changed OR the config file's
+    # mtime changed since the last fire. The mtime branch handles
+    # "user edits config while sitting in the mapped dir": symlinks
+    # get re-reconciled on the next prompt without requiring a cd.
+    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" || "$mtime" != "${__JITENV_LAST_CFG_MTIME-}" ]]; then
         # No 2>/dev/null on purpose: the chpwd subcommand is silent
         # in normal operation (it only writes to stderr when
         # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
-        # hide both the debug diagnostics and a "jitenv: command not
-        # found" if the binary ever falls off $PATH mid-session.
+        # hide debug diagnostics + a "jitenv: command not found"
+        # if the binary ever falls off $PATH mid-session.
         jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
         __JITENV_LAST_PWD="$PWD"
+        __JITENV_LAST_CFG_MTIME="$mtime"
     fi
 }
 # Run once at hook-load time so the wrapper dir is populated before
 # the first command in this shell.
-jitenv __chpwd "$$" "" "$PWD"
+__jitenv_chpwd
 PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 
 shopt -s extdebug
