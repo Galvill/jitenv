@@ -65,19 +65,68 @@ The "expand" shape is the one most people miss reading the schema.
 It's exactly what the TUI's "tick the bag" mode produces — useful when
 a bag's keys already match the env var names you want.
 
-## Path vs. glob
+## Mapping kinds: path, glob, cwd_glob
 
-A mapping's target is either a `path` (string, absolute or
-`~`-relative) or a `glob` (matched with [doublestar](https://github.com/bmatcuk/doublestar/v4)).
+A mapping picks **one** target shape:
 
-- Path matches are exact and faster.
-- Glob patterns support `**` (recursive), `*`, `?`, `[…]` and curly
-  alternation. Common useful patterns: `~/work/**/*.sh`,
-  `**/scripts/deploy*`.
-- Lookup order is **declaration order**: exact paths first, then each
-  matching glob. When two entries provide the same env var name, the
-  later one wins. This is intentional — a glob can supply defaults
-  while a more specific path overrides individual vars.
+- `path` — exact filesystem path. Fast lookup.
+- `glob` — [doublestar](https://github.com/bmatcuk/doublestar/v4)
+  pattern matched against an executed file's resolved path. Supports
+  `**`, `*`, `?`, `[…]` and curly alternation. Common useful patterns:
+  `~/work/**/*.sh`, `**/scripts/deploy*`.
+- `cwd_glob` — pattern matched against `$PWD` (and any ancestor). For
+  cwd mappings the shell hook generates a per-shell symlink farm on
+  `chpwd`, one symlink per command in the required `commands = [...]`
+  list. The user runs `npm` (etc.); the shell resolves the wrapper
+  symlink first; the wrapper (`jitenv __shim`) fetches env vars from
+  the agent and `syscall.Exec`s the real binary.
+
+Lookup order for path/glob is **declaration order**: exact paths
+first, then each matching glob. When two entries provide the same
+env-var name, the later one wins. cwd_glob mappings live on a
+separate index keyed by command name.
+
+```toml
+# Anything I run inside ~/work/acme gets the API token, but only
+# for the listed commands. The empty / wildcard form is rejected.
+[[mappings]]
+cwd_glob = "~/work/acme"
+commands = ["npm", "yarn"]
+[[mappings.vars]]
+name   = "ACME_API_TOKEN"
+source = "local"
+ref    = "acme"
+key    = "API_TOKEN"
+```
+
+### How cwd_glob works under the hood
+
+The shell hook prepends a per-shell wrapper directory
+(`$XDG_RUNTIME_DIR/jitenv/shells/<pid>/bin`) to `$PATH` once at hook
+load. The directory starts empty.
+
+On every `chpwd` (zsh native; bash via a one-liner PWD-diff inside
+`PROMPT_COMMAND`), the hook calls `jitenv __chpwd <pid> <oldpwd>
+<newpwd>`. That subcommand asks the agent for the union of `commands`
+across cwd_glob mappings whose pattern matches the new pwd, and
+reconciles the wrapper directory: adds missing symlinks, removes
+extras. Outside any mapped directory, the directory is empty and
+the shell falls through to the real `$PATH` entries — zero overhead
+on commands you didn't opt into wrapping.
+
+When the user runs e.g. `npm`, the shell resolves the wrapper
+symlink first; the symlink points at the jitenv binary itself.
+`os.Args[0]` tells main.go this is a shim invocation (not the
+canonical `jitenv` name), and dispatch goes to `jitenv __shim`.
+The shim resolves the real `npm` via `$PATH` minus its own
+directory (so it doesn't loop back into itself), asks the agent
+for env vars keyed by (cwd, command), and `syscall.Exec`s the real
+command with the merged env.
+
+Stale wrapper directories left behind by crashed shells are
+GC'd by the agent on the next `Listen`: any `<pid>/` whose pid is no
+longer alive is removed. `XDG_RUNTIME_DIR` itself wipes at logout on
+systemd-logind systems, so this GC is mostly belt-and-suspenders.
 
 ## Agent
 

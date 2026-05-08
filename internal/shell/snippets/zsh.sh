@@ -6,6 +6,28 @@
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0; fi
 __JITENV_LOADED=1
 
+# Per-shell wrapper-symlink dir for cwd_glob mappings (mirrors
+# bash.sh).
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    __JITENV_RUNTIME_DIR="$XDG_RUNTIME_DIR/jitenv"
+else
+    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}/jitenv-$UID"
+fi
+export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
+mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+case ":$PATH:" in
+    *":$__JITENV_WRAP_DIR:"*) : ;;
+    *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
+esac
+
+__jitenv_chpwd() {
+    jitenv __chpwd "$$" "${OLDPWD:-}" "$PWD" 2>/dev/null
+}
+typeset -ga chpwd_functions
+chpwd_functions+=(__jitenv_chpwd)
+# Populate once at hook-load.
+jitenv __chpwd "$$" "" "$PWD" 2>/dev/null
+
 # Warn loudly when the agent isn't reachable, count down 10 seconds,
 # and let Ctrl+C abort. Returns non-zero on abort so the caller's `&&`
 # short-circuits the actual command.

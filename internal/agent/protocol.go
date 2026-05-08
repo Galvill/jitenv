@@ -11,24 +11,29 @@ import (
 type Op string
 
 const (
-	OpStatus   Op = "status"
-	OpIsMapped Op = "is_mapped"
-	OpFetchEnv Op = "fetch_env"
-	OpLock     Op = "lock"
-	OpReload   Op = "reload"
+	OpStatus      Op = "status"
+	OpIsMapped    Op = "is_mapped"
+	OpFetchEnv    Op = "fetch_env"
+	OpLock        Op = "lock"
+	OpReload      Op = "reload"
+	OpFetchEnvCwd Op = "fetch_env_cwd" // shim → agent: env vars for (cwd, command)
+	OpCwdCommands Op = "cwd_commands"  // chpwd helper → agent: list of commands wrapped at this cwd
 )
 
 type Request struct {
-	Op   Op     `json:"op"`
-	Path string `json:"path,omitempty"`
+	Op      Op     `json:"op"`
+	Path    string `json:"path,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	Command string `json:"command,omitempty"`
 }
 
 type Response struct {
-	OK     bool              `json:"ok"`
-	Error  string            `json:"error,omitempty"`
-	Mapped bool              `json:"mapped,omitempty"`
-	Env    map[string]string `json:"env,omitempty"`
-	Status *Status           `json:"status,omitempty"`
+	OK       bool              `json:"ok"`
+	Error    string            `json:"error,omitempty"`
+	Mapped   bool              `json:"mapped,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Status   *Status           `json:"status,omitempty"`
+	Commands []string          `json:"commands,omitempty"`
 }
 
 type Status struct {

@@ -7,6 +7,38 @@
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 __JITENV_LOADED=1
 
+# Per-shell wrapper-symlink dir. The chpwd helper populates it on
+# directory changes that hit a cwd_glob mapping; an empty dir is a
+# silent fall-through. We pre-create it and prepend to $PATH once,
+# right here, so PATH stays stable for the rest of the shell's life.
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    __JITENV_RUNTIME_DIR="$XDG_RUNTIME_DIR/jitenv"
+else
+    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}/jitenv-$UID"
+fi
+export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
+mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+case ":$PATH:" in
+    *":$__JITENV_WRAP_DIR:"*) : ;;
+    *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
+esac
+
+# chpwd hook: bash has no native chpwd, so we run a tiny PWD-diff
+# in PROMPT_COMMAND. The diff makes the per-prompt cost a single
+# string compare; the full helper only fires on actual directory
+# changes.
+__JITENV_LAST_PWD="$PWD"
+__jitenv_chpwd() {
+    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" ]]; then
+        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD" 2>/dev/null
+        __JITENV_LAST_PWD="$PWD"
+    fi
+}
+# Run once at hook-load time so the wrapper dir is populated before
+# the first command in this shell.
+jitenv __chpwd "$$" "" "$PWD" 2>/dev/null
+PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+
 shopt -s extdebug
 
 # Print the "agent not loaded" warning in red and count down 10 seconds

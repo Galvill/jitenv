@@ -68,7 +68,20 @@ func (r *resolver) FetchEnv(ctx context.Context, absPath string) (map[string]str
 	if err != nil {
 		abs = absPath
 	}
-	vars := r.index.Lookup(abs)
+	return r.fetchVars(ctx, r.index.Lookup(abs))
+}
+
+func (r *resolver) FetchEnvCwd(ctx context.Context, pwd, command string) (map[string]string, error) {
+	return r.fetchVars(ctx, r.index.LookupCwd(pwd, command))
+}
+
+func (r *resolver) CwdCommands(pwd string) []string {
+	return r.index.CwdCommands(pwd)
+}
+
+// fetchVars runs the per-VarRef Fetch loop. Shared between path-keyed
+// FetchEnv and cwd-keyed FetchEnvCwd.
+func (r *resolver) fetchVars(ctx context.Context, vars []config.VarRef) (map[string]string, error) {
 	out := map[string]string{}
 	for _, v := range vars {
 		s, ok := r.sources[v.Source]
@@ -84,7 +97,6 @@ func (r *resolver) FetchEnv(ctx context.Context, absPath string) (map[string]str
 			return nil, fmt.Errorf("fetch %s: %w", labelOrAll(v.Name), err)
 		}
 		if v.Name == "" {
-			// Expand-all: every key in `raw` becomes its own env var.
 			for k, val := range raw {
 				out[k] = val
 			}
