@@ -46,14 +46,34 @@ func Run(args []string) error {
 	}
 	wrapDir := paths.ShellWrapDir(pid)
 
+	debugLog("pid=%d oldpwd=%q newpwd=%q wrapDir=%q", pid, args[1], newPwd, wrapDir)
+
 	wanted, err := desiredCommands(paths.Socket, newPwd)
 	if err != nil {
+		debugLog("desiredCommands error: %v (agent down? config not reloaded?)", err)
 		// Agent unreachable or other error: leave the wrapper dir
 		// alone and stay quiet. Returning nil keeps the shell hook
 		// happy.
 		return nil
 	}
-	return reconcile(wrapDir, wanted)
+	debugLog("agent reports wanted=%v", wanted)
+	if err := reconcile(wrapDir, wanted); err != nil {
+		debugLog("reconcile error: %v", err)
+		return err
+	}
+	debugLog("reconcile ok")
+	return nil
+}
+
+// debugLog writes one line to stderr when JITENV_HOOK_DEBUG is set.
+// The shell hooks already gate their own debug output the same way,
+// so users get a single switch to see the whole chpwd → shim → agent
+// path.
+func debugLog(format string, args ...any) {
+	if os.Getenv("JITENV_HOOK_DEBUG") == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "jitenv-chpwd: "+format+"\n", args...)
 }
 
 func desiredCommands(socket, pwd string) ([]string, error) {
