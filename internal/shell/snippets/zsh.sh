@@ -21,12 +21,16 @@ case ":$PATH:" in
 esac
 
 __jitenv_chpwd() {
-    jitenv __chpwd "$$" "${OLDPWD:-}" "$PWD" 2>/dev/null
+    # No 2>/dev/null on purpose: the chpwd subcommand is silent in
+    # normal operation; gating debug output with `2>/dev/null` here
+    # would hide JITENV_HOOK_DEBUG diagnostics + any
+    # "jitenv: command not found" if the binary falls off $PATH.
+    jitenv __chpwd "$$" "${OLDPWD:-}" "$PWD"
 }
 typeset -ga chpwd_functions
 chpwd_functions+=(__jitenv_chpwd)
 # Populate once at hook-load.
-jitenv __chpwd "$$" "" "$PWD" 2>/dev/null
+jitenv __chpwd "$$" "" "$PWD"
 
 # Warn loudly when the agent isn't reachable, count down 10 seconds,
 # and let Ctrl+C abort. Returns non-zero on abort so the caller's `&&`

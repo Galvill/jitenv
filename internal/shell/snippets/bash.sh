@@ -30,13 +30,18 @@ esac
 __JITENV_LAST_PWD="$PWD"
 __jitenv_chpwd() {
     if [[ "$PWD" != "${__JITENV_LAST_PWD-}" ]]; then
-        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD" 2>/dev/null
+        # No 2>/dev/null on purpose: the chpwd subcommand is silent
+        # in normal operation (it only writes to stderr when
+        # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
+        # hide both the debug diagnostics and a "jitenv: command not
+        # found" if the binary ever falls off $PATH mid-session.
+        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
         __JITENV_LAST_PWD="$PWD"
     fi
 }
 # Run once at hook-load time so the wrapper dir is populated before
 # the first command in this shell.
-jitenv __chpwd "$$" "" "$PWD" 2>/dev/null
+jitenv __chpwd "$$" "" "$PWD"
 PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 
 shopt -s extdebug
