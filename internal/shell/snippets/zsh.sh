@@ -99,18 +99,16 @@ __jitenv_accept_line() {
             __jitenv_log "is-mapped rc=$rc"
             case "$rc" in
                 0)
+                    # Mapped. `jitenv run` paints its own warning +
+                    # countdown when the agent is locked, so we just
+                    # rewrite BUFFER and let it handle everything.
                     __jitenv_log "branch=case0 (mapped → jitenv run)"
                     BUFFER="jitenv run \"$resolved\"$rest"
                     ;;
-                2)
-                    __jitenv_log "branch=case2 (agent unreachable → warn)"
-                    # Agent unreachable — wrap the user's command so the
-                    # warning + 10s grace runs first. && short-circuits
-                    # the real command if the user aborts via Ctrl+C.
-                    BUFFER="__jitenv_warn_no_agent \"$resolved\" && { $BUFFER ; }"
-                    ;;
                 *)
-                    __jitenv_log "branch=case* (rc=$rc — unmapped, let it run)"
+                    # rc=1 (not mapped) or rc=2 (config unreadable) →
+                    # run the user's command unchanged.
+                    __jitenv_log "branch=case* (rc=$rc — let it run)"
                     ;;
             esac
         fi

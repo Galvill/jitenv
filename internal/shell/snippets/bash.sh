@@ -136,6 +136,9 @@ __jitenv_debug_trap() {
     __jitenv_log "is-mapped rc=$rc"
     case "$rc" in
         0)
+            # Mapped — `jitenv run` handles env injection and the
+            # locked-agent UX (warn + countdown + run-with-parent-env)
+            # internally, so we just delegate.
             __jitenv_log "branch=case0 (mapped → jitenv run)"
             local rest="${cmd#"$first_raw"}"
             __JITENV_REENTRY=1
@@ -144,13 +147,11 @@ __jitenv_debug_trap() {
             return 1
             ;;
         2)
-            __jitenv_log "branch=case2 (agent unreachable → warn)"
-            # Agent unreachable. We can't tell whether the file is
-            # mapped, but the user clearly intends to use jitenv (the
-            # hook is installed) so warn loudly and offer an abort.
-            if ! __jitenv_warn_no_agent "$resolved"; then
-                return 1
-            fi
+            # Config unreadable. Different from "agent locked" — the
+            # latter no longer reaches this branch because is-mapped
+            # reads config directly. Warn once and let the command
+            # run; the user's jitenv install is broken in some way.
+            __jitenv_log "branch=case2 (config unreadable — letting command run)"
             return 0
             ;;
         *)

@@ -22,14 +22,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gv/jitenv/internal/agent"
+	"github.com/gv/jitenv/internal/agentwarn"
 )
 
 // errAgentDown is returned by fetchEnv when the agent socket is
@@ -67,11 +66,7 @@ func run(invokedAs string, args []string) error {
 	extra, fetchErr := fetchEnv(invokedAs)
 	switch {
 	case errors.Is(fetchErr, errAgentDown):
-		// Mapped command, agent is locked. Mirror the bash hook's
-		// path-mapped UX: red warning + countdown, Ctrl+C to abort.
-		// After the countdown, exec the real command anyway with
-		// the parent env (no injection).
-		if aborted := warnAgentDown(invokedAs); aborted {
+		if agentwarn.WarnAndWait(invokedAs) {
 			return errors.New("aborted")
 		}
 	case fetchErr != nil:
@@ -164,79 +159,4 @@ func fetchEnv(cmd string) (map[string]string, error) {
 		return nil, fmt.Errorf("%w: %v", errAgentDown, err)
 	}
 	return out, nil
-}
-
-// warnAgentDown paints the same red message + countdown the bash
-// hook uses for path-mapped scripts. Returns true if the user hit
-// Ctrl+C during the countdown (caller should abort the exec).
-// Pressing Enter skips the wait and proceeds immediately.
-//
-// Honors JITENV_HOOK_DELAY (default 10s) for the wait length, so it
-// matches the hook's existing knob.
-func warnAgentDown(cmdName string) bool {
-	const red = "\033[1;31m"
-	const reset = "\033[0m"
-
-	total := 10
-	if v := os.Getenv("JITENV_HOOK_DELAY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			total = n
-		}
-	}
-
-	fmt.Fprintf(os.Stderr,
-		"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
-		red, cmdName, reset)
-	fmt.Fprintf(os.Stderr,
-		"%sWill run the command anyway in %ds. Press Enter to skip, Ctrl+C to abort.%s\n",
-		red, total, reset)
-
-	if total == 0 {
-		return false
-	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	defer signal.Stop(sigCh)
-
-	// Drain stdin in a goroutine; signal on the first newline. Run
-	// without raw-mode shenanigans — terminals are cooked by default,
-	// so pressing Enter delivers a single '\n' immediately. We don't
-	// kill the goroutine at the end: syscall.Exec replaces the
-	// process image and reaps it.
-	enterCh := make(chan struct{}, 1)
-	go func() {
-		buf := make([]byte, 1)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if err != nil || n == 0 {
-				return
-			}
-			if buf[0] == '\n' || buf[0] == '\r' {
-				select {
-				case enterCh <- struct{}{}:
-				default:
-				}
-				return
-			}
-		}
-	}()
-
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-
-	for i := total; i > 0; i-- {
-		fmt.Fprintf(os.Stderr, "\r%s  %2ds remaining %s", red, i, reset)
-		select {
-		case <-sigCh:
-			fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
-			return true
-		case <-enterCh:
-			fmt.Fprintln(os.Stderr)
-			return false
-		case <-tick.C:
-		}
-	}
-	fmt.Fprintln(os.Stderr)
-	return false
 }
