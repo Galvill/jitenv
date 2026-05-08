@@ -118,6 +118,42 @@ Atomic save via `config.AtomicSave` (sibling tempfile + rename, mode
   fiddling and offers little against the local-root threat that
   actually matters.
 
+## cwd_glob mappings widen the blast radius
+
+Path and glob mappings only inject env vars into the *one specific
+file* you executed. A cwd_glob mapping is broader: every command in
+its required `commands = [...]` list, run inside the matched
+directory, gets the env vars. The boundary is "one descendant
+process at a time", but the set of triggering commands is anything
+you (or anything you run) types in that directory whose name
+appears in the explicit list.
+
+What's still protected:
+
+- The parent shell never has the secrets in its own environ. Each
+  triggering command gets them at exec, and they live in that
+  child's process tree only.
+- Only commands you explicitly listed get wrapped. Wildcard
+  ("any command") is rejected; the symlink farm is built strictly
+  from the `commands` list.
+- `cd`-ing out of the mapped directory in the calling shell
+  removes the wrapper symlinks on the next prompt — but doesn't
+  strip the secrets from already-running children, which inherited
+  them at spawn time.
+
+What to be aware of:
+
+- A malicious binary on `$PATH` named the same as a wrapped command
+  (e.g. you have `commands = ["npm"]` and there's a rogue `npm`
+  earlier in `$PATH` than the system one) would receive the env
+  vars too. Same exposure profile as `direnv`'s `PATH_add`.
+- The wrapper directory lives under `$XDG_RUNTIME_DIR/jitenv/shells/`
+  with mode 0700 — anyone who can write to that path could plant
+  a malicious symlink. The runtime dir itself is mode 0700 and
+  user-only by systemd-tmpfiles.
+- On agent down, the shim runs the real command with the parent
+  env (no wrapping). Same UX as the locked-agent path elsewhere.
+
 ## Why this design over `.env` files
 
 A `.env` file in your project (or `direnv`-style auto-export) puts

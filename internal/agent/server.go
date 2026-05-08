@@ -36,11 +36,17 @@ type Agent struct {
 }
 
 // Resolver is the agent-internal hook to resolve mapping + fetch env vars.
-// Step 5 leaves this nil; step 10 wires it up.
 type Resolver interface {
 	Sources() []string
 	IsMapped(absPath string) bool
 	FetchEnv(ctx context.Context, absPath string) (map[string]string, error)
+
+	// FetchEnvCwd serves the wrapper shim: env vars for (pwd, command).
+	// Empty map when no cwd_glob mapping matches.
+	FetchEnvCwd(ctx context.Context, pwd, command string) (map[string]string, error)
+	// CwdCommands serves the chpwd helper: union of every cwd_glob
+	// mapping's commands list whose pattern matches pwd.
+	CwdCommands(pwd string) []string
 }
 
 // NewAgent constructs an Agent ready to Serve.
@@ -69,7 +75,11 @@ func (a *Agent) currentResolver() Resolver {
 }
 
 // Listen creates the unix socket. Caller must call Serve to accept.
+//
+// Also runs a one-time GC pass over ShellsDir, removing wrapper dirs
+// for shell pids that aren't alive anymore. Cheap, idempotent.
 func (a *Agent) Listen() error {
+	_ = GcOrphanShells(a.paths.ShellsDir)
 	if existing, _ := ReadPidFile(a.paths.PidFile); existing > 0 && PidAlive(existing) {
 		return fmt.Errorf("agent already running (pid %d)", existing)
 	}
@@ -240,6 +250,22 @@ func (a *Agent) dispatch(ctx context.Context, req Request) Response {
 			return Response{OK: false, Error: err.Error()}
 		}
 		return Response{OK: true, Env: env}
+	case OpFetchEnvCwd:
+		r := a.currentResolver()
+		if r == nil {
+			return Response{OK: true, Env: map[string]string{}}
+		}
+		env, err := r.FetchEnvCwd(ctx, req.Cwd, req.Command)
+		if err != nil {
+			return Response{OK: false, Error: err.Error()}
+		}
+		return Response{OK: true, Env: env}
+	case OpCwdCommands:
+		r := a.currentResolver()
+		if r == nil {
+			return Response{OK: true, Commands: nil}
+		}
+		return Response{OK: true, Commands: r.CwdCommands(req.Cwd)}
 	case OpReload:
 		a.mu.Lock()
 		fn := a.reload

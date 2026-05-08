@@ -95,11 +95,12 @@ func TestBashHookInterceptsMappedFile(t *testing.T) {
 	binDir := filepath.Dir(bin)
 	cmd := exec.Command("bash", "-c", fmt.Sprintf(
 		`PATH=%q:$PATH
+export JITENV_CONFIG=%q
 eval "$(%s/jitenv hook bash)"
 echo "AGENT_STATUS=$(jitenv status 2>&1 | head -1)"
 echo "IS_MAPPED_RC=$(jitenv is-mapped %q >/dev/null 2>&1; echo $?)"
 %q
-`, binDir, binDir, scriptPath, scriptPath,
+`, binDir, cfgPath, binDir, scriptPath, scriptPath,
 	))
 	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
 	out, err := cmd.CombinedOutput()
@@ -112,11 +113,14 @@ echo "IS_MAPPED_RC=$(jitenv is-mapped %q >/dev/null 2>&1; echo $?)"
 	}
 }
 
-// TestBashHookAgentDownWarnsThenRuns verifies that when the agent is
-// not running, the bash hook prints the red warning, waits for the
-// (env-shortened) delay, and then runs the command anyway. The script
-// produces "RAN" so we can confirm execution went through.
-func TestBashHookAgentDownWarnsThenRuns(t *testing.T) {
+// TestBashHookAgentDownWarnsForMappedScript covers the post-refactor
+// UX: with a mapping configured for the script and the agent locked,
+// `jitenv run` (which the hook routes to) paints the warning +
+// countdown and then runs the script anyway. is-mapped reads config
+// directly so it knows the script IS mapped even with no agent —
+// previously the hook warned on every path-prefix command,
+// independent of whether anything was actually mapped.
+func TestBashHookAgentDownWarnsForMappedScript(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -124,25 +128,46 @@ func TestBashHookAgentDownWarnsThenRuns(t *testing.T) {
 
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "show.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho RAN\n"), 0755); err != nil {
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho RAN\n"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Point XDG_RUNTIME_DIR at an empty dir so no agent socket exists
-	// — that's what triggers the agent-unreachable path in is-mapped.
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-mapped-down")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, _ := config.Load(cfgPath)
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{"my-secret": "from-noop"}},
+	}
+	cfg.Mappings = []config.Mapping{
+		{Path: scriptPath, Vars: []config.VarRef{{Name: "FOO", Source: "n", Ref: "my-secret"}}},
+	}
+	tmp, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	// Empty runtime dir → no agent socket → locked-agent path.
 	runtimeDir := filepath.Join(dir, "runtime")
-	_ = os.MkdirAll(runtimeDir, 0700)
+	_ = os.MkdirAll(runtimeDir, 0o700)
 
 	binDir := filepath.Dir(bin)
 	cmd := exec.Command("bash", "-c", fmt.Sprintf(
 		`PATH=%q:$PATH
+export JITENV_CONFIG=%q
 eval "$(%s/jitenv hook bash)"
 %q
-`, binDir, binDir, scriptPath,
+`, binDir, cfgPath, binDir, scriptPath,
 	))
 	cmd.Env = append(os.Environ(),
 		"XDG_RUNTIME_DIR="+runtimeDir,
-		"JITENV_HOOK_DELAY=1", // shrink the 10s wait for the test
+		"JITENV_HOOK_DELAY=1",
 	)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -159,6 +184,80 @@ eval "$(%s/jitenv hook bash)"
 	}
 	if elapsed < 800*time.Millisecond {
 		t.Errorf("expected the hook to wait ~1s; only %s elapsed", elapsed)
+	}
+}
+
+// TestBashHookAgentDownSilentForUnmapped is the regression for the
+// user report: typing ./gg.sh (which has no mapping) with the agent
+// locked used to print the same red countdown as ./testjitenv.sh
+// (mapped). is-mapped now reads config directly, so unmapped paths
+// return rc=1 without involving the agent — no warning, just runs.
+func TestBashHookAgentDownSilentForUnmapped(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	unmapped := filepath.Join(dir, "gg.sh")
+	if err := os.WriteFile(unmapped, []byte("#!/bin/sh\necho UNMAPPED-RAN\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-unmapped")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, _ := config.Load(cfgPath)
+	// Map a DIFFERENT path so the index has entries, but unmapped
+	// stays unmapped.
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{"x": "y"}},
+	}
+	cfg.Mappings = []config.Mapping{
+		{Path: filepath.Join(dir, "different.sh"),
+			Vars: []config.VarRef{{Name: "FOO", Source: "n", Ref: "x"}}},
+	}
+	tmp, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+
+	binDir := filepath.Dir(bin)
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		`PATH=%q:$PATH
+export JITENV_CONFIG=%q
+eval "$(%s/jitenv hook bash)"
+%q
+`, binDir, cfgPath, binDir, unmapped,
+	))
+	cmd.Env = append(os.Environ(),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_HOOK_DELAY=1",
+	)
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("bash run: %v\noutput=%s", err, out)
+	}
+	got := string(out)
+	if strings.Contains(got, "agent is not loaded") {
+		t.Errorf("expected NO warning for unmapped script; got:\n%s", got)
+	}
+	if !strings.Contains(got, "UNMAPPED-RAN") {
+		t.Errorf("expected the unmapped script to still run; got:\n%s", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("expected immediate run for unmapped script; took %s", elapsed)
 	}
 }
 

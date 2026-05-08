@@ -7,6 +7,65 @@
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 __JITENV_LOADED=1
 
+# Per-shell wrapper-symlink dir. The chpwd helper populates it on
+# directory changes that hit a cwd_glob mapping; an empty dir is a
+# silent fall-through. We pre-create it and prepend to $PATH once,
+# right here, so PATH stays stable for the rest of the shell's life.
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    __JITENV_RUNTIME_DIR="$XDG_RUNTIME_DIR/jitenv"
+else
+    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}/jitenv-$UID"
+fi
+export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
+mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+case ":$PATH:" in
+    *":$__JITENV_WRAP_DIR:"*) : ;;
+    *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
+esac
+
+# chpwd hook: bash has no native chpwd, so we run a tiny PWD-diff
+# in PROMPT_COMMAND. The diff makes the per-prompt cost a single
+# string compare; the full helper only fires on actual directory
+# changes.
+# Resolve the config-file path the same way the Go side does.
+__jitenv_cfg_path() {
+    if [[ -n "${JITENV_CONFIG:-}" ]]; then
+        printf '%s' "$JITENV_CONFIG"
+    else
+        printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/jitenv/config.toml"
+    fi
+}
+# stat -c is GNU; -f is BSD/macOS. Echo 0 on any failure so the
+# comparison treats "missing" identically across runs.
+__jitenv_cfg_mtime() {
+    local cfg="$1"
+    [[ -e "$cfg" ]] || { printf '0'; return; }
+    stat -c %Y "$cfg" 2>/dev/null || stat -f %m "$cfg" 2>/dev/null || printf '0'
+}
+__jitenv_chpwd() {
+    local cfg mtime
+    cfg="$(__jitenv_cfg_path)"
+    mtime="$(__jitenv_cfg_mtime "$cfg")"
+    # Fire when EITHER the directory changed OR the config file's
+    # mtime changed since the last fire. The mtime branch handles
+    # "user edits config while sitting in the mapped dir": symlinks
+    # get re-reconciled on the next prompt without requiring a cd.
+    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" || "$mtime" != "${__JITENV_LAST_CFG_MTIME-}" ]]; then
+        # No 2>/dev/null on purpose: the chpwd subcommand is silent
+        # in normal operation (it only writes to stderr when
+        # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
+        # hide debug diagnostics + a "jitenv: command not found"
+        # if the binary ever falls off $PATH mid-session.
+        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+        __JITENV_LAST_PWD="$PWD"
+        __JITENV_LAST_CFG_MTIME="$mtime"
+    fi
+}
+# Run once at hook-load time so the wrapper dir is populated before
+# the first command in this shell.
+__jitenv_chpwd
+PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+
 shopt -s extdebug
 
 # Print the "agent not loaded" warning in red and count down 10 seconds
@@ -22,7 +81,7 @@ __jitenv_warn_no_agent() {
 
     printf '%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n' \
         "$red" "$target" "$reset" >&2
-    printf '%sWill run the command anyway in 10s. Press Ctrl+C now to abort.%s\n' \
+    printf '%sWill run the command anyway in 10s. Press Enter to skip, Ctrl+C to abort.%s\n' \
         "$red" "$reset" >&2
 
     local total=${JITENV_HOOK_DELAY:-10}
@@ -30,7 +89,12 @@ __jitenv_warn_no_agent() {
     for ((i=total; i>0; i--)); do
         (( aborted )) && break
         printf '\r%s  %2ds remaining %s' "$red" "$i" "$reset" >&2
-        sleep 1 2>/dev/null
+        # `read -t 1 -n 1` waits up to one second for one keystroke.
+        # On Enter (or any key) it returns 0 and we skip; on timeout
+        # it returns non-zero and we keep counting down.
+        if read -t 1 -n 1 -s -r -p "" 2>/dev/null; then
+            break
+        fi
         (( aborted )) && break
     done
 
@@ -94,6 +158,9 @@ __jitenv_debug_trap() {
     __jitenv_log "is-mapped rc=$rc"
     case "$rc" in
         0)
+            # Mapped — `jitenv run` handles env injection and the
+            # locked-agent UX (warn + countdown + run-with-parent-env)
+            # internally, so we just delegate.
             __jitenv_log "branch=case0 (mapped → jitenv run)"
             local rest="${cmd#"$first_raw"}"
             __JITENV_REENTRY=1
@@ -102,13 +169,11 @@ __jitenv_debug_trap() {
             return 1
             ;;
         2)
-            __jitenv_log "branch=case2 (agent unreachable → warn)"
-            # Agent unreachable. We can't tell whether the file is
-            # mapped, but the user clearly intends to use jitenv (the
-            # hook is installed) so warn loudly and offer an abort.
-            if ! __jitenv_warn_no_agent "$resolved"; then
-                return 1
-            fi
+            # Config unreadable. Different from "agent locked" — the
+            # latter no longer reaches this branch because is-mapped
+            # reads config directly. Warn once and let the command
+            # run; the user's jitenv install is broken in some way.
+            __jitenv_log "branch=case2 (config unreadable — letting command run)"
             return 0
             ;;
         *)
