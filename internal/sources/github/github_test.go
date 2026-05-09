@@ -109,10 +109,10 @@ func TestFetchValidatesEnvScopeRequiresEnvironment(t *testing.T) {
 
 func TestSplitOwnerRepo(t *testing.T) {
 	cases := []struct {
-		in        string
-		owner     string
-		repo      string
-		ok        bool
+		in    string
+		owner string
+		repo  string
+		ok    bool
 	}{
 		{"owner/repo", "owner", "repo", true},
 		{"a/b/c", "a", "b/c", true}, // SplitN keeps the rest as repo

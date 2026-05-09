@@ -16,6 +16,13 @@ How releases are cut, how to verify them as a user, and how to recover when the 
 
 That's it. No manual tagging, no manual artifact builds, no manual signing.
 
+The `.deb` and `.rpm` packages run `packaging/postinstall.sh` after
+unpacking — it prints a reminder telling the user to run
+`jitenv hook install` as their own user (the postinst runs as root and
+cannot safely modify a user's `~/.bashrc`). `packaging/preremove.sh`
+prints the matching cleanup hint on uninstall, but stays silent on
+package upgrades.
+
 ## Versioning rules
 
 `bump-minor-pre-major: true` is set in `release-please-config.json`. While we're pre-1.0:

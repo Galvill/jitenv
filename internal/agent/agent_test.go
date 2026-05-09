@@ -34,6 +34,10 @@ func (f *fakeResolver) IsMapped(p string) bool { return f.mapped[p] }
 func (f *fakeResolver) FetchEnv(_ context.Context, p string) (map[string]string, error) {
 	return f.env[p], nil
 }
+func (f *fakeResolver) FetchEnvCwd(_ context.Context, _, _ string) (map[string]string, error) {
+	return nil, nil
+}
+func (f *fakeResolver) CwdCommands(string) []string { return nil }
 
 func TestAgentStatusAndLock(t *testing.T) {
 	a, p := newTestAgent(t, nil)

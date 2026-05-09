@@ -94,6 +94,7 @@ func TestBashHookUnlockRunLockRun(t *testing.T) {
 	binDir := filepath.Dir(bin)
 	cmd := exec.Command("bash", "-c", fmt.Sprintf(
 		`PATH=%q:$PATH
+export JITENV_CONFIG=%q
 eval "$(%s/jitenv hook bash)"
 echo '--- step 2 (agent up) ---'
 %q
@@ -102,7 +103,7 @@ jitenv lock
 sleep 0.5
 echo '--- step 4 (agent down) ---'
 %q
-`, binDir, binDir, scriptPath, scriptPath,
+`, binDir, cfgPath, binDir, scriptPath, scriptPath,
 	))
 	cmd.Env = append(os.Environ(),
 		"XDG_RUNTIME_DIR="+runtimeDir,

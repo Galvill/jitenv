@@ -101,16 +101,22 @@ func TestRunInjectsEnvAndExecs(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Sanity: is-mapped via binary.
+	// Sanity: is-mapped via binary. Note: is-mapped reads config
+	// directly (no agent dial), so JITENV_CONFIG has to point at the
+	// test fixture for the lookup to find the script.
+	subprocEnv := append(os.Environ(),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_CONFIG="+cfgPath,
+	)
 	cmd := exec.Command(bin, "is-mapped", scriptPath)
-	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	cmd.Env = subprocEnv
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("is-mapped should exit 0; got %v", err)
 	}
 
 	// Run the script via `jitenv run` and capture stdout.
 	cmd = exec.Command(bin, "run", scriptPath)
-	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	cmd.Env = subprocEnv
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("run: %v\noutput=%s", err, out)
@@ -128,7 +134,7 @@ func TestRunInjectsEnvAndExecs(t *testing.T) {
 
 	// is-mapped on a non-mapped path should exit 1.
 	cmd = exec.Command(bin, "is-mapped", "/tmp/definitely-not-mapped.sh")
-	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	cmd.Env = subprocEnv
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("is-mapped should exit non-zero for unmapped path")
 	} else if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 1 {

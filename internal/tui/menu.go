@@ -31,20 +31,6 @@ func newMenuScreen(r *rootModel) *menuScreen {
 		root:     r,
 		btnFocus: -1, // start on the list
 		items: []menuItem{
-			// Remote Sources (AWS Secrets Manager, GitHub Variables) are
-			// disabled in the UI for now. The screens, type picker,
-			// rename flow, and var-wizard branches in sources_screen.go
-			// and var_wizard.go are still wired up — re-enable by
-			// uncommenting this entry. Existing remote sources already
-			// in config.toml continue to work at runtime; they just
-			// can't be created/edited from the TUI until the menu entry
-			// returns.
-			//
-			// {
-			// 	label: "Remote Sources",
-			// 	hint:  func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
-			// 	open:  func(r *rootModel) screen { return newSourcesListScreen(r) },
-			// },
 			{
 				label: "Mappings",
 				hint:  func() string { return fmt.Sprintf("%d defined", len(r.cfg.Mappings)) },
@@ -54,6 +40,11 @@ func newMenuScreen(r *rootModel) *menuScreen {
 				label: "Local secrets",
 				hint:  func() string { return fmt.Sprintf("%d bags", len(r.cfg.Secrets)) },
 				open:  func(r *rootModel) screen { return newSecretsListScreen(r) },
+			},
+			{
+				label: "Remote Sources",
+				hint:  func() string { return fmt.Sprintf("%d configured", countRemoteSources(r)) },
+				open:  func(r *rootModel) screen { return newSourcesListScreen(r) },
 			},
 			{
 				label: "Settings",
@@ -67,8 +58,20 @@ func newMenuScreen(r *rootModel) *menuScreen {
 }
 
 func (m *menuScreen) Title() string  { return "main menu" }
-func (m *menuScreen) Status() string { return defaultListStatus }
+func (m *menuScreen) Status() string { return renderHelpStatus() }
 func (m *menuScreen) Init() tea.Cmd  { return nil }
+
+func (m *menuScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (m *menuScreen) HelpText() string {
+	return `jitenv config is the home for editing the encrypted configuration.
+Pick a section, drill in, edit. The ● indicator in the status bar
+shows whether the file has unsaved changes; Save (or Ctrl-S from any
+list page) writes them with envelope encryption and pings the running
+agent to reload.
+
+The Remote Sources page (AWS / GitHub) is hidden in this build — see
+issues #16 and #17 for the re-enable work.`
+}
 
 func (m *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {

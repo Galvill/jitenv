@@ -14,10 +14,19 @@ import (
 	"time"
 
 	"github.com/gv/jitenv/internal/agent"
+	"github.com/gv/jitenv/internal/agentwarn"
 )
 
 // Run resolves file, asks the agent for any mapped env vars, then
 // replaces the current process with file+args+merged-env.
+//
+// When the agent is unreachable (locked, never started, …), the
+// command isn't refused: the user gets the same "agent is not
+// loaded — Press Enter to skip, Ctrl+C to abort" countdown the
+// shim uses, and after the wait the script runs with the parent
+// env. This is what the bash hook used to paint inline; moving it
+// here means `jitenv run`'s behaviour is consistent whether it was
+// invoked by the hook, by hand, or by another tool.
 func Run(ctx context.Context, file string, args []string) error {
 	abs, err := filepath.Abs(file)
 	if err != nil {
@@ -31,19 +40,40 @@ func Run(ctx context.Context, file string, args []string) error {
 	if err != nil {
 		return err
 	}
-	cli := agent.NewClient(paths.Socket)
+
+	env := os.Environ()
+	if extra, err := fetchOrWarn(ctx, paths.Socket, abs); err != nil {
+		return err
+	} else {
+		for k, v := range extra {
+			env = append(env, k+"="+v)
+		}
+	}
+	return replaceProcess(abs, args, env)
+}
+
+// fetchOrWarn tries to fetch env vars from the agent. On agent-down
+// it paints the warning + countdown; the returned map is nil (caller
+// should run with the parent env). Returns an error only when the
+// user aborted via Ctrl+C.
+func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, error) {
+	if _, err := os.Stat(socket); err != nil {
+		if agentwarn.WarnAndWait(abs) {
+			return nil, errors.New("aborted")
+		}
+		return nil, nil
+	}
+	cli := agent.NewClient(socket)
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	extra, err := cli.FetchEnv(dctx, abs)
 	if err != nil {
-		return fmt.Errorf("agent unreachable; run `jitenv unlock` first: %w", err)
+		if agentwarn.WarnAndWait(abs) {
+			return nil, errors.New("aborted")
+		}
+		return nil, nil
 	}
-
-	env := os.Environ()
-	for k, v := range extra {
-		env = append(env, k+"="+v)
-	}
-	return replaceProcess(abs, args, env)
+	return extra, nil
 }
 
 // replaceProcess substitutes the current process image with the given
