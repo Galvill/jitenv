@@ -1,6 +1,7 @@
 package run_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -237,5 +238,133 @@ func TestRunLocalBag(t *testing.T) {
 	}
 	if v := os.Getenv("STRIPE_PK"); v != "" {
 		t.Fatalf("STRIPE_PK leaked into parent shell: %q", v)
+	}
+}
+
+// TestRunPreRunNotice exercises the [agent].pre_run_notice toggle. It
+// runs `jitenv run` with stderr captured (i.e. not a TTY) so the
+// expected output is the plain-text branch — proving the wiring,
+// config-load, and skip-on-zero paths in run.go without needing a real
+// terminal. (The TTY/ANSI branch is unit-tested in notice_test.go.)
+func TestRunPreRunNotice(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "show.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf 'OK\\n'\n"), 0755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-notice")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	key, err := config.DeriveKeyFromMeta(cfg, pw)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
+	on := true
+	cfg.Agent.PreRunNotice = &on
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{
+			"a": "1", "b": "2", "c": "3",
+		}},
+	}
+	cfg.Mappings = []config.Mapping{
+		{Path: scriptPath, Vars: []config.VarRef{
+			{Name: "A", Source: "n", Ref: "a"},
+			{Name: "B", Source: "n", Ref: "b"},
+			{Name: "C", Source: "n", Ref: "c"},
+		}},
+	}
+	tmp, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0700)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	paths, _ := agent.DefaultPaths()
+
+	pr, pw2, _ := os.Pipe()
+	daemon := exec.Command(bin, "__agent", "--key-fd=3", "--config="+cfgPath, "--idle=10s")
+	daemon.ExtraFiles = []*os.File{pr}
+	daemon.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	daemon.Stdout = os.Stdout
+	daemon.Stderr = os.Stderr
+	if err := daemon.Start(); err != nil {
+		t.Fatalf("daemon start: %v", err)
+	}
+	pr.Close()
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	pw2.Close()
+	defer func() { _ = daemon.Process.Kill() }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	cli := agent.NewClient(paths.Socket)
+	for time.Now().Before(deadline) {
+		if _, err := cli.Status(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	subprocEnv := append(os.Environ(),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_CONFIG="+cfgPath,
+	)
+
+	// Notice ON, stderr is a pipe (not a TTY) → plain text expected.
+	cmd := exec.Command(bin, "run", scriptPath)
+	cmd.Env = subprocEnv
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if _, err := cmd.Output(); err != nil {
+		t.Fatalf("run: %v\nstderr=%s", err, stderr.String())
+	}
+	want := "jitenv: injected 3 variables"
+	if !strings.Contains(stderr.String(), want) {
+		t.Fatalf("missing notice on stderr: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "\033[") {
+		t.Fatalf("expected plain-text branch (no ANSI) when stderr is a pipe: %q", stderr.String())
+	}
+
+	// Notice OFF → stderr must be silent on the success path.
+	off := false
+	cfg.Agent.PreRunNotice = &off
+	tmp2, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp2).Encode(cfg); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	tmp2.Close()
+	if err := os.Rename(tmp2.Name(), cfgPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	// is-mapped reads cfg fresh; the agent caches mappings but we left
+	// them unchanged, so no reload is needed for this branch.
+
+	cmd = exec.Command(bin, "run", scriptPath)
+	cmd.Env = subprocEnv
+	stderr.Reset()
+	cmd.Stderr = &stderr
+	if _, err := cmd.Output(); err != nil {
+		t.Fatalf("run (notice off): %v\nstderr=%s", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "jitenv: injected") {
+		t.Fatalf("notice should be silent when disabled; got %q", stderr.String())
 	}
 }

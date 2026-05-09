@@ -13,8 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
+	"github.com/gv/jitenv/internal/runnotice"
 )
 
 // Run resolves file, asks the agent for any mapped env vars, then
@@ -42,13 +45,20 @@ func Run(ctx context.Context, file string, args []string) error {
 	}
 
 	env := os.Environ()
+	injected := 0
 	if extra, err := fetchOrWarn(ctx, paths.Socket, abs); err != nil {
 		return err
 	} else {
 		for k, v := range extra {
 			env = append(env, k+"="+v)
 		}
+		injected = len(extra)
 	}
+
+	if injected > 0 && runnotice.Enabled() {
+		runnotice.Write(os.Stderr, injected, term.IsTerminal(int(os.Stderr.Fd())))
+	}
+
 	return replaceProcess(abs, args, env)
 }
 

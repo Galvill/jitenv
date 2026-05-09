@@ -27,8 +27,11 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
+	"github.com/gv/jitenv/internal/runnotice"
 )
 
 // errAgentDown is returned by fetchEnv when the agent socket is
@@ -63,6 +66,7 @@ func run(invokedAs string, args []string) error {
 	}
 
 	env := os.Environ()
+	injected := 0
 	extra, fetchErr := fetchEnv(invokedAs)
 	switch {
 	case errors.Is(fetchErr, errAgentDown):
@@ -78,6 +82,11 @@ func run(invokedAs string, args []string) error {
 		for k, v := range extra {
 			env = append(env, k+"="+v)
 		}
+		injected = len(extra)
+	}
+
+	if injected > 0 && runnotice.Enabled() {
+		runnotice.Write(os.Stderr, injected, term.IsTerminal(int(os.Stderr.Fd())))
 	}
 
 	argv := append([]string{invokedAs}, args...)

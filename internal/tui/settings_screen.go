@@ -10,13 +10,16 @@ import (
 	"github.com/gv/jitenv/internal/shell"
 )
 
-// settingsScreen is a small list with two rows: idle timeout and the
-// shell-hook status. Enter on a row opens its own popup (an input for
-// the timeout, a confirm for the hook).
+// settingsScreen is a small list with three rows: idle timeout, the
+// pre-run notice toggle, and the shell-hook status. Enter on a row
+// opens its own popup (an input for the timeout, a yes/no menu for
+// the notice, a confirm for the hook).
 type settingsScreen struct {
 	root   *rootModel
-	cursor int // 0 = idle timeout, 1 = shell hook
+	cursor int // 0 = idle timeout, 1 = pre-run notice, 2 = shell hook
 }
+
+const settingsRowCount = 3
 
 func newSettingsScreen(r *rootModel) screen {
 	return &settingsScreen{root: r}
@@ -36,6 +39,13 @@ func (s *settingsScreen) HelpText() string {
         calls "jitenv is-mapped" on every command, an active hooked
         shell keeps the agent alive indefinitely.
 
+pre-run notice — when enabled, "jitenv run" prints a single green line
+        to stderr ("jitenv: injected N variables") just before
+        executing a mapped script. Off by default to keep the
+        success path silent. ANSI is suppressed automatically
+        when stderr isn't a terminal (logs / CI capture stay
+        clean).
+
 shell hook   — installed: yes / no for the current shell. Selecting
         this row re-runs "jitenv hook install", which is idempotent.
         For bash, the installer also wires the login chain
@@ -51,7 +61,7 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.cursor--
 			}
 		case "down", "j":
-			if s.cursor < 1 {
+			if s.cursor < settingsRowCount-1 {
 				s.cursor++
 			}
 		case "enter":
@@ -68,9 +78,33 @@ func (s *settingsScreen) activate() tea.Cmd {
 	case 0:
 		return s.openIdleInput()
 	case 1:
+		return s.openPreRunNoticePopup()
+	case 2:
 		return s.openHookPopup()
 	}
 	return nil
+}
+
+func (s *settingsScreen) openPreRunNoticePopup() tea.Cmd {
+	current := "no"
+	if s.root.cfg.Agent.PreRunNoticeEnabled() {
+		current = "yes"
+	}
+	heading := "Pre-run notice (currently: " + current + ")"
+	cb := func(choice string) tea.Cmd {
+		switch choice {
+		case "Yes":
+			v := true
+			s.root.cfg.Agent.PreRunNotice = &v
+			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(statusMsg("pre-run notice enabled")))
+		case "No":
+			v := false
+			s.root.cfg.Agent.PreRunNotice = &v
+			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(statusMsg("pre-run notice disabled")))
+		}
+		return emit(popMsg{})
+	}
+	return emit(pushMsg{s: newPopupMenuScreen(s.root, heading, cb, "Yes", "No", "Back")})
 }
 
 func (s *settingsScreen) openIdleInput() tea.Cmd {
@@ -164,8 +198,14 @@ func (s *settingsScreen) View() string {
 		hookValue = okStyle.Render("installed") + "  " + dimText("("+st.RcPath+")")
 	}
 
+	noticeValue := dimText("no")
+	if s.root.cfg.Agent.PreRunNoticeEnabled() {
+		noticeValue = okStyle.Render("yes")
+	}
+
 	rows := []struct{ label, value string }{
 		{"agent idle timeout", idle},
+		{"pre-run notice", noticeValue},
 		{"shell hook", hookValue},
 	}
 	for i, r := range rows {

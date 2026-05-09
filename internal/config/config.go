@@ -33,6 +33,22 @@ type Meta struct {
 type AgentConfig struct {
 	IdleTimeout string `toml:"idle_timeout,omitempty"`
 	SocketPath  string `toml:"socket_path,omitempty"`
+	// PreRunNotice is *bool so a missing key in config.toml is
+	// distinguishable from an explicit "false". Missing → use the
+	// default-on behaviour exposed by PreRunNoticeEnabled. Read access
+	// should always go through that helper.
+	PreRunNotice *bool `toml:"pre_run_notice,omitempty"`
+}
+
+// PreRunNoticeEnabled reports whether the "jitenv: injected N
+// variable(s)" stderr line should be printed before mapped commands
+// exec. The notice is on by default; the flag exists so users who
+// prefer the silent UX can opt out via TUI Settings.
+func (a AgentConfig) PreRunNoticeEnabled() bool {
+	if a.PreRunNotice == nil {
+		return true
+	}
+	return *a.PreRunNotice
 }
 
 type SourceConfig struct {
