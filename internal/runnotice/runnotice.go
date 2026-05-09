@@ -18,10 +18,12 @@ const (
 	ansiReset = "\033[0m"
 )
 
-// Enabled loads the on-disk config and returns the agent's
-// pre_run_notice flag. The flag is plaintext TOML, so no master key
-// is needed; errors fall back to silent (the default), so a malformed
-// config never starts surfacing surprise output.
+// Enabled loads the on-disk config and returns whether the pre-run
+// notice should be printed. The flag is plaintext TOML, so no master
+// key is needed. The notice is on by default; only an explicit
+// `pre_run_notice = false` suppresses it. Config-load errors fall
+// back to off so a broken config never starts surfacing surprise
+// output to the user's terminal.
 func Enabled() bool {
 	cfgPath, err := config.Resolve(os.Getenv("JITENV_CONFIG"))
 	if err != nil {
@@ -31,7 +33,7 @@ func Enabled() bool {
 	if err != nil {
 		return false
 	}
-	return cfg.Agent.PreRunNotice
+	return cfg.Agent.PreRunNoticeEnabled()
 }
 
 // Write formats the notice line and writes it to w. The caller is

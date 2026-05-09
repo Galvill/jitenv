@@ -87,17 +87,19 @@ func (s *settingsScreen) activate() tea.Cmd {
 
 func (s *settingsScreen) openPreRunNoticePopup() tea.Cmd {
 	current := "no"
-	if s.root.cfg.Agent.PreRunNotice {
+	if s.root.cfg.Agent.PreRunNoticeEnabled() {
 		current = "yes"
 	}
 	heading := "Pre-run notice (currently: " + current + ")"
 	cb := func(choice string) tea.Cmd {
 		switch choice {
 		case "Yes":
-			s.root.cfg.Agent.PreRunNotice = true
+			v := true
+			s.root.cfg.Agent.PreRunNotice = &v
 			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(statusMsg("pre-run notice enabled")))
 		case "No":
-			s.root.cfg.Agent.PreRunNotice = false
+			v := false
+			s.root.cfg.Agent.PreRunNotice = &v
 			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(statusMsg("pre-run notice disabled")))
 		}
 		return emit(popMsg{})
@@ -197,7 +199,7 @@ func (s *settingsScreen) View() string {
 	}
 
 	noticeValue := dimText("no")
-	if s.root.cfg.Agent.PreRunNotice {
+	if s.root.cfg.Agent.PreRunNoticeEnabled() {
 		noticeValue = okStyle.Render("yes")
 	}
 

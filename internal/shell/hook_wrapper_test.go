@@ -158,7 +158,8 @@ func TestBashWrapperPreRunNotice(t *testing.T) {
 	}
 	cfg, _ := config.Load(cfgPath)
 	key, _ := config.DeriveKeyFromMeta(cfg, pw)
-	cfg.Agent.PreRunNotice = true
+	on := true
+	cfg.Agent.PreRunNotice = &on
 	cfg.Sources = map[string]config.SourceConfig{
 		"n": {Type: "noop", Params: map[string]any{"my-secret": "from-cwd"}},
 	}

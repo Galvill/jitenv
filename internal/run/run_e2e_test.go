@@ -269,7 +269,8 @@ func TestRunPreRunNotice(t *testing.T) {
 		t.Fatalf("derive: %v", err)
 	}
 
-	cfg.Agent.PreRunNotice = true
+	on := true
+	cfg.Agent.PreRunNotice = &on
 	cfg.Sources = map[string]config.SourceConfig{
 		"n": {Type: "noop", Params: map[string]any{
 			"a": "1", "b": "2", "c": "3",
@@ -343,7 +344,8 @@ func TestRunPreRunNotice(t *testing.T) {
 	}
 
 	// Notice OFF → stderr must be silent on the success path.
-	cfg.Agent.PreRunNotice = false
+	off := false
+	cfg.Agent.PreRunNotice = &off
 	tmp2, _ := os.CreateTemp(dir, "save-*.toml")
 	if err := toml.NewEncoder(tmp2).Encode(cfg); err != nil {
 		t.Fatalf("encode: %v", err)

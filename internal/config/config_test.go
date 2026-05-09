@@ -77,9 +77,10 @@ func TestAgentPreRunNoticeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
+	off := false
 	in := &Config{
 		Version: Version,
-		Agent:   AgentConfig{IdleTimeout: "30m", PreRunNotice: true},
+		Agent:   AgentConfig{IdleTimeout: "30m", PreRunNotice: &off},
 	}
 	if err := Save(path, in); err != nil {
 		t.Fatalf("save: %v", err)
@@ -88,15 +89,18 @@ func TestAgentPreRunNoticeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !out.Agent.PreRunNotice {
-		t.Fatalf("PreRunNotice did not round-trip true; got %#v", out.Agent)
+	if out.Agent.PreRunNotice == nil || *out.Agent.PreRunNotice {
+		t.Fatalf("explicit PreRunNotice=false did not round-trip; got %#v", out.Agent.PreRunNotice)
+	}
+	if out.Agent.PreRunNoticeEnabled() {
+		t.Fatalf("helper should report disabled when explicitly false")
 	}
 	if out.Agent.IdleTimeout != "30m" {
 		t.Fatalf("IdleTimeout lost on round-trip; got %q", out.Agent.IdleTimeout)
 	}
 
-	// Missing field on disk must default to false (zero value), not
-	// surface an error.
+	// Missing field on disk must default to ENABLED (the on-by-default
+	// behaviour the helper provides).
 	missing := filepath.Join(dir, "missing.toml")
 	body := "version = 1\n[agent]\nidle_timeout = \"15m\"\n"
 	if err := os.WriteFile(missing, []byte(body), 0600); err != nil {
@@ -106,23 +110,39 @@ func TestAgentPreRunNoticeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load missing-field: %v", err)
 	}
-	if c2.Agent.PreRunNotice {
-		t.Fatalf("expected PreRunNotice=false when field absent")
+	if c2.Agent.PreRunNotice != nil {
+		t.Fatalf("expected PreRunNotice nil when field absent; got %#v", c2.Agent.PreRunNotice)
+	}
+	if !c2.Agent.PreRunNoticeEnabled() {
+		t.Fatalf("missing field should default to enabled")
 	}
 	if err := c2.Validate(); err != nil {
-		// Validate must accept either value (default false is fine).
 		t.Fatalf("validate should accept missing pre_run_notice: %v", err)
 	}
 
-	// Sanity: a freshly-encoded false should not show up in the TOML
-	// (omitempty), keeping the on-disk format minimal.
+	// A nil pointer must not write the key at all (omitempty), so
+	// unedited configs stay minimal on disk and pick up future default
+	// changes for free.
 	enc := &Config{Version: Version, Agent: AgentConfig{IdleTimeout: "5s"}}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(enc); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	if strings.Contains(buf.String(), "pre_run_notice") {
-		t.Fatalf("expected pre_run_notice to be omitted when false:\n%s", buf.String())
+		t.Fatalf("expected pre_run_notice to be omitted when nil:\n%s", buf.String())
+	}
+
+	// Explicit true should round-trip and serialise (so flipping the
+	// global default later doesn't silently turn off this user's
+	// notices).
+	on := true
+	enc2 := &Config{Version: Version, Agent: AgentConfig{IdleTimeout: "5s", PreRunNotice: &on}}
+	var buf2 bytes.Buffer
+	if err := toml.NewEncoder(&buf2).Encode(enc2); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(buf2.String(), "pre_run_notice = true") {
+		t.Fatalf("explicit true should serialise:\n%s", buf2.String())
 	}
 }
 
