@@ -2,3 +2,8 @@
 /dist/
 *.test
 *.out
+
+# e2e harness artefacts
+/e2e/harness/bin/
+/e2e/runs/*
+!/e2e/runs/.gitkeep

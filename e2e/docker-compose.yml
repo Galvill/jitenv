@@ -1,0 +1,68 @@
+# jitenv e2e stack. Bring up with `make e2e-up`.
+#
+# Two distros (debian-glibc, alpine-musl) sit alongside a LocalStack
+# instance for the AWS Secrets Manager source. The harness runs on
+# the host and shells into a chosen service via `docker compose exec`.
+#
+# All services are unprivileged. The runtime dir for jitenv falls back
+# to /tmp/jitenv-<uid> automatically (see internal/agent/paths.go).
+
+services:
+  debian:
+    build:
+      # Build context is the repo root so the Dockerfile can `COPY .`
+      # without a subtree-mount; this keeps the e2e image self-contained
+      # and means CI reproduction needs nothing more than `docker compose build`.
+      context: ..
+      dockerfile: e2e/Dockerfile.debian
+    image: jitenv-e2e-debian
+    container_name: jitenv-e2e-debian
+    init: true
+    # Fresh tmpfs at /tmp keeps each `make e2e-up` cycle deterministic:
+    # the agent socket / pidfile / log all land here.
+    tmpfs:
+      - /tmp:exec,uid=1000,gid=1000
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
+      LOCALSTACK_HOSTNAME: localstack
+
+  alpine:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.alpine
+    image: jitenv-e2e-alpine
+    container_name: jitenv-e2e-alpine
+    init: true
+    tmpfs:
+      - /tmp:exec,uid=1000,gid=1000
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
+      LOCALSTACK_HOSTNAME: localstack
+
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: jitenv-e2e-localstack
+    environment:
+      SERVICES: secretsmanager
+      DEBUG: "0"
+      LS_LOG: warn
+      AWS_DEFAULT_REGION: us-east-1
+      # Skip pro features and dashboard so cold-start is faster.
+      EAGER_SERVICE_LOADING: "1"
+    healthcheck:
+      # /_localstack/health returns 200 when listed services are running.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"secretsmanager\": \"available\"\\|\"secretsmanager\": \"running\"' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    volumes:
+      # Init scripts run on first boot. /etc/localstack/init/ready.d
+      # fires after services are listening.
+      - ./seed/localstack-init:/etc/localstack/init/ready.d:ro
