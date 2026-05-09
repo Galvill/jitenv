@@ -133,8 +133,10 @@ systemd-logind systems, so this GC is mostly belt-and-suspenders.
 A long-lived per-user process spawned by `jitenv unlock`:
 
 - Holds the master key only in memory.
-- Listens on `$XDG_RUNTIME_DIR/jitenv/agent.sock`, mode 0600.
-- Verifies the connecting peer's UID via `SO_PEERCRED`.
+- Listens on `$XDG_RUNTIME_DIR/jitenv/agent.sock` (Linux) or
+  `$TMPDIR/jitenv-<uid>/agent.sock` (macOS), mode 0600.
+- Verifies the connecting peer's UID via `SO_PEERCRED` (Linux) /
+  `LOCAL_PEERCRED` (macOS).
 - Speaks JSON over a length-prefixed framing — see
   `internal/agent/protocol.go`. Ops: `status`, `is_mapped`,
   `fetch_env`, `lock`, `reload`.
