@@ -31,8 +31,9 @@ type Meta struct {
 }
 
 type AgentConfig struct {
-	IdleTimeout string `toml:"idle_timeout,omitempty"`
-	SocketPath  string `toml:"socket_path,omitempty"`
+	IdleTimeout  string `toml:"idle_timeout,omitempty"`
+	SocketPath   string `toml:"socket_path,omitempty"`
+	PreRunNotice bool   `toml:"pre_run_notice,omitempty"`
 }
 
 type SourceConfig struct {

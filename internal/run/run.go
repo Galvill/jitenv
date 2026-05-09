@@ -8,13 +8,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
+	"github.com/gv/jitenv/internal/config"
+)
+
+// ANSI green / reset for the optional pre-run notice. Plain text is
+// emitted instead when stderr isn't a TTY.
+const (
+	ansiGreen = "\033[32m"
+	ansiReset = "\033[0m"
 )
 
 // Run resolves file, asks the agent for any mapped env vars, then
@@ -42,14 +53,54 @@ func Run(ctx context.Context, file string, args []string) error {
 	}
 
 	env := os.Environ()
+	injected := 0
 	if extra, err := fetchOrWarn(ctx, paths.Socket, abs); err != nil {
 		return err
 	} else {
 		for k, v := range extra {
 			env = append(env, k+"="+v)
 		}
+		injected = len(extra)
 	}
+
+	if injected > 0 && preRunNoticeEnabled() {
+		writeInjectionNotice(os.Stderr, injected, term.IsTerminal(int(os.Stderr.Fd())))
+	}
+
 	return replaceProcess(abs, args, env)
+}
+
+// preRunNoticeEnabled loads the on-disk config and reports the
+// pre_run_notice agent flag. Mirrors `is-mapped`'s direct read: the
+// flag is plaintext TOML, no master key needed. Errors fall back to
+// silent (the existing default), so a malformed config never starts
+// surfacing surprise output.
+func preRunNoticeEnabled() bool {
+	cfgPath, err := config.Resolve(os.Getenv("JITENV_CONFIG"))
+	if err != nil {
+		return false
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return false
+	}
+	return cfg.Agent.PreRunNotice
+}
+
+// writeInjectionNotice formats the "jitenv: injected N variable(s)"
+// line and writes it to w. Split out so tests can assert the bytes
+// for both TTY and non-TTY branches without poking real terminals.
+func writeInjectionNotice(w io.Writer, n int, tty bool) {
+	noun := "variables"
+	if n == 1 {
+		noun = "variable"
+	}
+	msg := fmt.Sprintf("jitenv: injected %d %s", n, noun)
+	if tty {
+		fmt.Fprintf(w, "%s%s%s\n", ansiGreen, msg, ansiReset)
+		return
+	}
+	fmt.Fprintln(w, msg)
 }
 
 // fetchOrWarn tries to fetch env vars from the agent. On agent-down
