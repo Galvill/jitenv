@@ -9,9 +9,9 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 LDFLAGS := -s -w \
-	-X github.com/gv/jitenv/internal/cli.Version=$(VERSION) \
-	-X github.com/gv/jitenv/internal/cli.Commit=$(COMMIT) \
-	-X github.com/gv/jitenv/internal/cli.Date=$(DATE)
+	-X github.com/gv/jitenv/internal/version.Version=$(VERSION) \
+	-X github.com/gv/jitenv/internal/version.Commit=$(COMMIT) \
+	-X github.com/gv/jitenv/internal/version.Date=$(DATE)
 
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/jitenv

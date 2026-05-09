@@ -1,42 +1,55 @@
 package cli
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
 
-func TestFormatVersion(t *testing.T) {
-	cases := []struct {
-		name              string
-		ver, commit, date string
-		want              string
-	}{
-		{
-			name:   "all fields populated",
-			ver:    "0.1.0",
-			commit: "abc1234",
-			date:   "2026-05-06T12:34:56Z",
-			want:   "jitenv 0.1.0 (commit abc1234, built 2026-05-06T12:34:56Z)",
-		},
-		{
-			name:   "dev build with empty commit and date",
-			ver:    "dev",
-			commit: "",
-			date:   "",
-			want:   "jitenv dev",
-		},
-		{
-			name:   "dev build with commit but no date",
-			ver:    "dev",
-			commit: "abc1234",
-			date:   "",
-			want:   "jitenv dev (commit abc1234)",
-		},
+	"github.com/gv/jitenv/internal/version"
+)
+
+// TestRoot_VersionFlag exercises the cobra --version path end-to-end:
+// the flag should print exactly `jitenv <version>\n` and return without
+// error. Pinning the format here means a regression in
+// SetVersionTemplate / version.Short() trips the test rather than
+// silently shipping.
+func TestRoot_VersionFlag(t *testing.T) {
+	prev := version.Version
+	t.Cleanup(func() { version.Version = prev })
+	version.Version = "9.9.9"
+
+	root := newRoot()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--version"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute --version: %v", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := formatVersion(tc.ver, tc.commit, tc.date)
-			if got != tc.want {
-				t.Errorf("formatVersion(%q, %q, %q) = %q, want %q",
-					tc.ver, tc.commit, tc.date, got, tc.want)
-			}
-		})
+	if got, want := strings.TrimRight(out.String(), "\n"), "jitenv 9.9.9"; got != want {
+		t.Errorf("--version output = %q, want %q", got, want)
+	}
+}
+
+// TestRoot_HelpIncludesVersion guards the help template change: every
+// `jitenv --help` invocation must surface the version somewhere so
+// users can confirm the build without leaving --help.
+func TestRoot_HelpIncludesVersion(t *testing.T) {
+	prev := version.Version
+	t.Cleanup(func() { version.Version = prev })
+	version.Version = "9.9.9"
+
+	root := newRoot()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--help"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute --help: %v", err)
+	}
+	if !strings.Contains(out.String(), "jitenv 9.9.9") {
+		t.Errorf("--help output should embed version, got:\n%s", out.String())
 	}
 }
