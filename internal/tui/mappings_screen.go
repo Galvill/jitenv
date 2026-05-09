@@ -397,7 +397,7 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	}
 	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
 		Title: title, Prompt: prompt, Placeholder: ph, Initial: init,
-		SaveLabel: "OK", CancelLabel: "Cancel",
+		SaveLabel: "Apply", CancelLabel: "Back",
 	}, commit)})
 }
 
@@ -431,7 +431,7 @@ func (s *mappingFormScreen) openCommandsInput() tea.Cmd {
 		Placeholder: "npm, yarn",
 		Initial:     strings.Join(mp.Commands, ", "),
 		AllowBlank:  true,
-		SaveLabel:   "OK", CancelLabel: "Cancel",
+		SaveLabel:   "Apply", CancelLabel: "Back",
 	}, commit)})
 }
 

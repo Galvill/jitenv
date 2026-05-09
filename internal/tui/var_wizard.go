@@ -55,7 +55,7 @@ func newPickSourceStep(r *rootModel, ref config.VarRef, onComplete func(config.V
 	}
 	return &pickSourceStep{
 		root: r, names: names, cursor: cursor, btnFocus: -1,
-		buttons:    []button{newButton("Next"), newButton("Cancel")},
+		buttons:    []button{newButton("Next"), newButton("Back")},
 		ref:        ref,
 		onComplete: onComplete,
 	}

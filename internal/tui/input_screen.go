@@ -7,10 +7,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// inputScreen asks the user to type a single value, with a [ Save ]
-// and [ Cancel ] button row beneath. The buttons are first-class
-// focusable widgets — Tab cycles between the input and the buttons,
-// and Enter on a focused button activates it.
+// inputScreen asks the user to type a single value, with a commit
+// button (default label "Apply") and a [ Back ] button row beneath.
+// The buttons are first-class focusable widgets — Tab cycles between
+// the input and the buttons, and Enter on a focused button activates
+// it.
 type inputScreen struct {
 	root      *rootModel
 	title     string
@@ -53,11 +54,11 @@ func newInputScreen(r *rootModel, opts inputOpts, onCommit func(string) tea.Cmd)
 
 	saveLabel := opts.SaveLabel
 	if saveLabel == "" {
-		saveLabel = "OK"
+		saveLabel = "Apply"
 	}
 	cancelLabel := opts.CancelLabel
 	if cancelLabel == "" {
-		cancelLabel = "Cancel"
+		cancelLabel = "Back"
 	}
 	btns := []button{newButton(saveLabel), newButton(cancelLabel)}
 	if opts.Masked {
@@ -149,7 +150,7 @@ func (s *inputScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.input.EchoMode = textinput.EchoPassword
 				s.buttons[s.btnFocus] = newButton("Reveal")
 				return s, nil
-			case "Cancel":
+			case "Back", "Cancel":
 				return s, emit(popMsg{})
 			default:
 				return s, s.commit()

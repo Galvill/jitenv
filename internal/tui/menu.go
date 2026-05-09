@@ -66,8 +66,15 @@ func (m *menuScreen) HelpText() string {
 	return `jitenv config is the home for editing the encrypted configuration.
 Pick a section, drill in, edit. The ● indicator in the status bar
 shows whether the file has unsaved changes; Save (or Ctrl-S from any
-list page) writes them with envelope encryption and pings the running
+screen) writes them with envelope encryption and pings the running
 agent to reload.
+
+Navigation labels used throughout the TUI:
+  - Save     persist the in-memory cfg to disk (Ctrl-S anywhere).
+  - Apply    commit form values into the in-memory cfg and return.
+  - Back     return to the previous screen, keeping in-memory edits.
+  - Discard  return to the previous screen, dropping in-memory edits.
+  - Quit     leave the application (only on this screen).
 
 The Remote Sources page (AWS / GitHub) is hidden in this build — see
 issues #16 and #17 for the re-enable work.`
@@ -154,7 +161,7 @@ func (m *menuScreen) quitFlow() tea.Cmd {
 	}
 	return emit(pushMsg{s: newConfirmScreen(m.root,
 		"Unsaved changes — what do you want to do?",
-		cb, "Save & quit", "Discard", "Cancel")})
+		cb, "Save & quit", "Discard", "Back")})
 }
 
 func (m *menuScreen) View() string {

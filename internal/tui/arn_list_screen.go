@@ -104,7 +104,7 @@ func (s *arnListScreen) openAddInput() tea.Cmd {
 		Title:       "add ARN",
 		Prompt:      "Paste a full AWS Secrets Manager ARN.",
 		Placeholder: "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/db-AbCdEf",
-		SaveLabel:   "Add", CancelLabel: "Cancel",
+		SaveLabel:   "Add", CancelLabel: "Back",
 	}, commit)})
 }
 
@@ -137,7 +137,7 @@ func (s *arnListScreen) openEntryMenu() tea.Cmd {
 			return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
 				Title: "edit ARN", Prompt: "Update the ARN.",
 				Initial:   current,
-				SaveLabel: "OK", CancelLabel: "Cancel",
+				SaveLabel: "Apply", CancelLabel: "Back",
 			}, editCommit)})
 		case "Delete":
 			confirmCb := func(c string) tea.Cmd {

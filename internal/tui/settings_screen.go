@@ -90,7 +90,7 @@ func (s *settingsScreen) openIdleInput() tea.Cmd {
 		Placeholder: "30m",
 		Initial:     s.root.cfg.Agent.IdleTimeout,
 		AllowBlank:  true,
-		SaveLabel:   "OK",
+		SaveLabel:   "Apply",
 	}, commit)})
 }
 

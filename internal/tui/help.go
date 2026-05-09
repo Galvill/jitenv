@@ -26,8 +26,9 @@ func commonNavKeys() []helpEntry {
 	return []helpEntry{
 		{"↑/↓ or k/j", "move"},
 		{"Enter", "activate"},
-		{"Esc", "back / cancel"},
+		{"Esc", "back"},
 		{"Tab / Shift-Tab", "next / previous control"},
+		{"Ctrl-S", "save to disk (any screen)"},
 		{"Ctrl-C", "quit (prompts on unsaved changes)"},
 	}
 }
@@ -39,6 +40,7 @@ func renderHelpStatus() string {
 		[2]string{"↑/↓", "move"},
 		[2]string{"Enter", "activate"},
 		[2]string{"Esc", "back"},
+		[2]string{"Ctrl+S", "save"},
 		[2]string{"?", "help"},
 	)
 }

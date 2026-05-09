@@ -267,6 +267,7 @@ func (s *secretDetailScreen) Status() string {
 		[2]string{"Enter", "open"},
 		[2]string{"r", "reveal"},
 		[2]string{"Esc", "back"},
+		[2]string{"Ctrl+S", "save"},
 		[2]string{"?", "help"},
 	)
 }
@@ -418,7 +419,7 @@ func newKeyValueEditor(r *rootModel, bag, existingKey string) screen {
 		root: r, bag: bag, existingKey: existingKey,
 		keyIn: ki, valIn: vi,
 		btnFocus: -1,
-		buttons:  []button{newButton("Save"), newButton("Reveal"), newButton("Cancel")},
+		buttons:  []button{newButton("Apply"), newButton("Reveal"), newButton("Back")},
 	}
 	if existingKey != "" {
 		s.field = 1
@@ -487,7 +488,7 @@ func (s *kvEditScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			}
 			label := s.buttons[s.btnFocus].label
 			switch label {
-			case "Save":
+			case "Apply":
 				return s, s.commit()
 			case "Reveal":
 				if s.valIn.EchoMode == textinput.EchoPassword {
@@ -502,7 +503,7 @@ func (s *kvEditScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.valIn.EchoMode = textinput.EchoPassword
 				s.buttons[s.btnFocus] = newButton("Reveal")
 				return s, nil
-			case "Cancel":
+			case "Back":
 				return s, emit(popMsg{})
 			}
 		}

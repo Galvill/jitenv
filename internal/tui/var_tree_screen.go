@@ -90,7 +90,8 @@ func (s *varTreeScreen) Status() string {
 	return renderHelpKeys(
 		[2]string{"↑/↓", "move"},
 		[2]string{"Space/Enter", "toggle"},
-		[2]string{"Esc", "done"},
+		[2]string{"Esc", "back"},
+		[2]string{"Ctrl+S", "save"},
 		[2]string{"?", "help"},
 	)
 }

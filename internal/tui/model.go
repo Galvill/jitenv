@@ -58,6 +58,12 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyCtrlC {
 			return r, tea.Quit
 		}
+		// Global Ctrl+S persists the in-memory cfg to disk from any
+		// screen. Per-screen Update funcs never see this key, so they
+		// don't need to special-case it.
+		if msg.Type == tea.KeyCtrlS {
+			return r, saveCmd(r)
+		}
 		if msg.String() == "?" && len(r.stack) > 0 {
 			if h, ok := r.top().(helpfulScreen); ok {
 				return r, helpOverlayCmd(r, h)
