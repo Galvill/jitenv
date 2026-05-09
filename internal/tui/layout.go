@@ -63,11 +63,11 @@ var footerSegments = []string{"jitenv", "© 2026 Gal Villaret", "MIT"}
 
 const footerSeparator = " | "
 
-// renderFooter draws the global one-line footer as a centered, pipe-
-// separated string: `jitenv | © 2026 Gal Villaret | MIT | <version>`.
-// On terminals too narrow to fit the version segment, it is dropped
-// rather than wrapping — the version is always reachable via `jitenv
-// -v`.
+// renderFooter draws the global one-line footer as a left-aligned,
+// pipe-separated string: `jitenv | © 2026 Gal Villaret | MIT |
+// <version>`. On terminals too narrow to fit the version segment, it
+// is dropped rather than wrapping — the version is always reachable
+// via `jitenv -v`.
 func renderFooter(w int) string {
 	if w < 4 {
 		w = 4
@@ -76,11 +76,11 @@ func renderFooter(w int) string {
 	if v := versionFooterText(); v != "" {
 		full := strings.Join(append(append([]string{}, segments...), v), footerSeparator)
 		if lipgloss.Width(full) <= w {
-			return copyrightStyle.Width(w).Align(lipgloss.Center).Render(full)
+			return copyrightStyle.Width(w).Align(lipgloss.Left).Render(full)
 		}
 	}
 	base := strings.Join(segments, footerSeparator)
-	return copyrightStyle.Width(w).Align(lipgloss.Center).Render(base)
+	return copyrightStyle.Width(w).Align(lipgloss.Left).Render(base)
 }
 
 // modalOverlay returns a small centered bordered popup of the given
