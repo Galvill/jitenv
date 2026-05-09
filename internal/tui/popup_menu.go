@@ -30,6 +30,7 @@ func (p *popupMenuScreen) Status() string {
 		[2]string{"↑/↓", "move"},
 		[2]string{"Enter", "select"},
 		[2]string{"Esc", "close"},
+		[2]string{"Ctrl+S", "save"},
 	)
 }
 func (p *popupMenuScreen) Init() tea.Cmd { return nil }

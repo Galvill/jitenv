@@ -54,6 +54,7 @@ func (s *sourcesListScreen) Status() string {
 		[2]string{"↑/↓", "move"},
 		[2]string{"Enter", "open"},
 		[2]string{"Esc", "back"},
+		[2]string{"Ctrl+S", "save"},
 	)
 }
 func (s *sourcesListScreen) Init() tea.Cmd { return nil }
@@ -196,7 +197,7 @@ func newSourceTypePickerScreen(r *rootModel) screen {
 		root:     r,
 		types:    remoteSourceTypes(),
 		btnFocus: -1,
-		buttons:  []button{newButton("Next"), newButton("Cancel")},
+		buttons:  []button{newButton("Next"), newButton("Back")},
 	}
 }
 
@@ -382,13 +383,15 @@ func newSourceParamsScreenForNew(r *rootModel, typeName, name string) screen {
 // paramButtonsForType returns the button row for a source params screen.
 // Source types that maintain a curated ID list (currently AWS Secrets
 // Manager and its `arns` list) get an extra "ARNs" button between
-// Test and Cancel.
+// Test and Back. The leading "Apply" button commits the form to the
+// in-memory config; "Save" (Ctrl+S) is the disk-persistence action and
+// is global, not per-screen.
 func paramButtonsForType(typeName string) []button {
 	switch typeName {
 	case "aws":
-		return []button{newButton("Save"), newButton("Test"), newButton("ARNs"), newButton("Cancel")}
+		return []button{newButton("Apply"), newButton("Test"), newButton("ARNs"), newButton("Back")}
 	default:
-		return []button{newButton("Save"), newButton("Test"), newButton("Cancel")}
+		return []button{newButton("Apply"), newButton("Test"), newButton("Back")}
 	}
 }
 
@@ -448,13 +451,13 @@ func (s *sourceParamsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, nil
 			}
 			switch s.buttons[s.btnFocus].label {
-			case "Save":
+			case "Apply":
 				return s, s.save()
 			case "Test":
 				return s, s.testConnection()
 			case "ARNs":
 				return s, s.openARNs()
-			case "Cancel":
+			case "Back":
 				return s, emit(popMsg{})
 			}
 		case "left":

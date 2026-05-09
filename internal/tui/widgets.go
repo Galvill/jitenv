@@ -68,10 +68,12 @@ var (
 		[2]string{"Tab", "buttons"},
 		[2]string{"Enter", "activate"},
 		[2]string{"Esc", "back"},
+		[2]string{"Ctrl+S", "save"},
 	)
 	defaultFormStatus = renderHelpKeys(
 		[2]string{"Tab", "next field"},
 		[2]string{"Enter", "activate"},
-		[2]string{"Esc", "cancel"},
+		[2]string{"Esc", "back"},
+		[2]string{"Ctrl+S", "save"},
 	)
 )
