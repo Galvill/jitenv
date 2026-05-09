@@ -1,0 +1,85 @@
+name: unlock-and-run-local
+description: |
+  Seed an encrypted config with a local-bag source, unlock the agent,
+  and verify `jitenv run` injects the bag's keys (FOO, BAR) into the
+  child process while leaving the parent shell's env clean.
+
+service: debian
+user: jitenv
+
+steps:
+  # Per-scenario reset. Without this, a prior run leaves an agent
+  # running and unlock fails with "already running". Each scenario
+  # is responsible for its own cleanup; the harness does not.
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed -out "$JITENV_CONFIG" -variant local -script /home/jitenv/scripts/show.sh
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: validate-config
+    exec: jitenv config validate
+  - name: assert-validate-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  - name: agent-status
+    exec: jitenv status
+  - name: assert-status-ok
+    assert_exit_code: 0
+
+  - name: is-mapped-target
+    exec: jitenv is-mapped /home/jitenv/scripts/show.sh
+  - name: assert-mapped
+    assert_exit_code: 0
+
+  # Run the script through `jitenv run` and confirm the local bag's
+  # values land in the child process. Parent shell ($FOO etc.) was
+  # never set, so this is the only place these values exist.
+  - name: run-via-jitenv
+    exec: jitenv run /home/jitenv/scripts/show.sh
+  - name: assert-run-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-run-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+
+  # Bare execution (no jitenv run) should NOT see the bag values —
+  # the local source only injects via the agent path.
+  - name: run-bare
+    exec: /home/jitenv/scripts/show.sh
+  - name: assert-bare-foo-empty
+    assert_stdout_contains: "FOO="
+  - name: assert-bare-no-leak
+    target: run-bare
+    assert_stdout_not_contains: "value-from-local-foo"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0
