@@ -50,11 +50,12 @@ same `defer zeroBytes(...)` pattern.
 
 ## Socket access
 
-The agent listens on `$XDG_RUNTIME_DIR/jitenv/agent.sock`, mode
-**0600**, owned by the user. The agent additionally verifies the
-connecting peer's UID via `SO_PEERCRED` and rejects mismatches.
-Both belt and suspenders: kernel-enforced filesystem permission and
-explicit peer-credential check.
+The agent listens on `$XDG_RUNTIME_DIR/jitenv/agent.sock` (Linux) or
+`$TMPDIR/jitenv-<uid>/agent.sock` (macOS), mode **0600**, owned by
+the user. The agent additionally verifies the connecting peer's UID
+via `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (macOS) and rejects
+mismatches. Both belt and suspenders: kernel-enforced filesystem
+permission and explicit peer-credential check.
 
 If `$XDG_RUNTIME_DIR` is not set (some minimal/init-less setups),
 the fallback is `/tmp/jitenv-<uid>/`, also mode 0700.
@@ -109,7 +110,7 @@ Atomic save via `config.AtomicSave` (sibling tempfile + rename, mode
   commands you run aren't exposed.
 - **Off-host attackers with code execution as your user.** An
   attacker with shell access talks to the agent through the same
-  socket you do. `SO_PEERCRED` verifies they're "you" but doesn't
+  socket you do. The peer-credential check verifies they're "you" but doesn't
   distinguish *which* of your processes; any binary you run, run
   unwittingly, or have malware in your `$PATH` can ask the agent for
   any mapping.

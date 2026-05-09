@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // Agent is the per-user secret-fetching daemon.
@@ -159,28 +157,10 @@ func (a *Agent) idleLoop(ctx context.Context) {
 	}
 }
 
-// checkPeerUid enforces that the connecting client runs as the same uid.
-func checkPeerUid(c *net.UnixConn) error {
-	raw, err := c.SyscallConn()
-	if err != nil {
-		return err
-	}
-	var ucred *unix.Ucred
-	var sysErr error
-	err = raw.Control(func(fd uintptr) {
-		ucred, sysErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-	})
-	if err != nil {
-		return err
-	}
-	if sysErr != nil {
-		return sysErr
-	}
-	if int(ucred.Uid) != os.Getuid() {
-		return fmt.Errorf("peer uid %d != %d", ucred.Uid, os.Getuid())
-	}
-	return nil
-}
+// checkPeerUid lives in peer_linux.go / peer_darwin.go so that each
+// platform uses the right peer-credential syscall (SO_PEERCRED on Linux,
+// LOCAL_PEERCRED on Darwin). The agent only builds for those two
+// platforms — see CLAUDE.md "Big-picture architecture" §agent.
 
 func (a *Agent) handle(ctx context.Context, c *net.UnixConn) {
 	defer c.Close()
