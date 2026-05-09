@@ -54,7 +54,8 @@ func renderApp(w, h int, body, status string) string {
 
 var copyrightStyle = lipgloss.NewStyle().
 	Foreground(colorMuted).
-	Faint(true)
+	Faint(true).
+	Padding(0, 1)
 
 // footerSegments are the fixed segments of the global footer. The
 // version segment, when non-empty, is appended at render time so the
@@ -65,17 +66,21 @@ const footerSeparator = " | "
 
 // renderFooter draws the global one-line footer as a left-aligned,
 // pipe-separated string: `jitenv | © 2026 Gal Villaret | MIT |
-// <version>`. On terminals too narrow to fit the version segment, it
-// is dropped rather than wrapping — the version is always reachable
-// via `jitenv -v`.
+// <version>`. The leading column matches the status bar's 1-space
+// horizontal padding so the two lines align visually. On terminals
+// too narrow to fit the version segment, it is dropped rather than
+// wrapping — the version is always reachable via `jitenv -v`.
 func renderFooter(w int) string {
 	if w < 4 {
 		w = 4
 	}
+	// copyrightStyle's horizontal padding is inside Width(w), so the
+	// usable text area shrinks by 2 columns.
+	avail := w - 2
 	segments := footerSegments
 	if v := versionFooterText(); v != "" {
 		full := strings.Join(append(append([]string{}, segments...), v), footerSeparator)
-		if lipgloss.Width(full) <= w {
+		if lipgloss.Width(full) <= avail {
 			return copyrightStyle.Width(w).Align(lipgloss.Left).Render(full)
 		}
 	}
