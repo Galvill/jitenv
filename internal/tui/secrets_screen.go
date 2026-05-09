@@ -43,15 +43,21 @@ func (s *secretsListScreen) refresh() {
 	}
 }
 
-func (s *secretsListScreen) Title() string { return "local secrets" }
-func (s *secretsListScreen) Status() string {
-	return renderHelpKeys(
-		[2]string{"↑/↓", "move"},
-		[2]string{"Enter", "open"},
-		[2]string{"Esc", "back"},
-	)
+func (s *secretsListScreen) Title() string  { return "local secrets" }
+func (s *secretsListScreen) Status() string { return renderHelpStatus() }
+func (s *secretsListScreen) Init() tea.Cmd  { return nil }
+
+func (s *secretsListScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (s *secretsListScreen) HelpText() string {
+	return `A "bag" is a named group of KEY = value pairs (e.g. "stripe",
+"db", "ci") stored under [secrets.<bagname>] in config.toml. Every
+value is encrypted at rest with the master key as an enc:v1: envelope
+— "jitenv config show" decrypts them only after a successful unlock.
+
+Select < Create New Bag > to add one. Renaming a bag automatically
+rewrites every mapping that referenced it, so existing mappings stay
+valid.`
 }
-func (s *secretsListScreen) Init() tea.Cmd { return nil }
 
 func (s *secretsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if _, ok := msg.(secretChangedMsg); ok {
@@ -133,6 +139,12 @@ func (s *secretsListScreen) View() string {
 		b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
 	} else {
 		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+	}
+
+	if len(s.bags) == 0 {
+		b.WriteString("\n" + dimText("No bags yet — pick the row above to add one. A bag is a named") + "\n")
+		b.WriteString(dimText("group of KEY = value pairs encrypted at rest with the master key.") + "\n")
+		b.WriteString(dimText("Press ? for the full help.") + "\n")
 	}
 
 	for i, n := range s.bags {
@@ -255,9 +267,25 @@ func (s *secretDetailScreen) Status() string {
 		[2]string{"Enter", "open"},
 		[2]string{"r", "reveal"},
 		[2]string{"Esc", "back"},
+		[2]string{"?", "help"},
 	)
 }
 func (s *secretDetailScreen) Init() tea.Cmd { return nil }
+
+func (s *secretDetailScreen) HelpKeys() []helpEntry {
+	return append(commonNavKeys(),
+		helpEntry{"r", "reveal/hide all values"},
+	)
+}
+func (s *secretDetailScreen) HelpText() string {
+	return `Each row is one KEY = value pair inside this bag. Values are stored
+as enc:v1: envelopes on disk and decrypted only inside the agent.
+The TUI shows them masked by default; press "r" to reveal/hide.
+
+Renaming a key automatically rewrites every mapping that referenced
+it. Deleting a key invalidates any mapping that named it explicitly
+— those mappings will be flagged on next save.`
+}
 
 func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if _, ok := msg.(secretChangedMsg); ok {
