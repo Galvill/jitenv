@@ -125,6 +125,110 @@ fakecmd
 	}
 }
 
+// TestBashWrapperPreRunNotice mirrors TestBashWrapperEndToEnd but
+// flips the agent's pre_run_notice flag on. The shim must emit the
+// "jitenv: injected N variable(s)" line on stderr just like the
+// path-mapped `jitenv run` flow does. Regression test for the bug
+// where the notice only fired through `internal/run`, not through
+// the cwd_glob shim.
+func TestBashWrapperPreRunNotice(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdPath := filepath.Join(fakeBin, "fakecmd")
+	if err := os.WriteFile(cmdPath, []byte("#!/bin/sh\nprintf 'FOO=%s\\n' \"${FOO:-MISSING}\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-notice")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, _ := config.Load(cfgPath)
+	key, _ := config.DeriveKeyFromMeta(cfg, pw)
+	cfg.Agent.PreRunNotice = true
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{"my-secret": "from-cwd"}},
+	}
+	cfg.Mappings = []config.Mapping{{
+		CwdGlob:  projectDir,
+		Commands: []string{"fakecmd"},
+		Vars:     []config.VarRef{{Name: "FOO", Source: "n", Ref: "my-secret"}},
+	}}
+	tmp, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	paths, _ := agent.DefaultPaths()
+
+	pr, pw2, _ := os.Pipe()
+	daemon := exec.Command(bin, "__agent", "--key-fd=3", "--config="+cfgPath, "--idle=10s")
+	daemon.ExtraFiles = []*os.File{pr}
+	daemon.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	if err := daemon.Start(); err != nil {
+		t.Fatalf("daemon: %v", err)
+	}
+	pr.Close()
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	pw2.Close()
+	defer func() { _ = daemon.Process.Kill() }()
+
+	cli := agent.NewClient(paths.Socket)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := cli.Status(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	binDir := filepath.Dir(bin)
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
+eval "$(%s/jitenv hook bash)"
+cd %q
+__jitenv_chpwd
+fakecmd
+`, binDir, fakeBin, cfgPath, binDir, projectDir,
+	))
+	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("bash run: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "FOO=from-cwd") {
+		t.Errorf("expected FOO=from-cwd in stdout; got:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "jitenv: injected 1 variable") {
+		t.Errorf("expected pre-run notice on stderr; got:\nstdout=%s\nstderr=%s", stdout.String(), stderr.String())
+	}
+}
+
 // TestBashWrapperAgentDownWarns is the locked-agent UX for cwd_glob:
 // chpwd creates the wrapper symlink (it reads config, no agent
 // needed), but when the wrapped command runs the shim sees an
