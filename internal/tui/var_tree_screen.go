@@ -379,9 +379,9 @@ func (s *varTreeScreen) toggle(r treeRow) bool {
 
 // commit rewrites the mapping's VarRefs from the tree state.
 //
-// VarRefs whose Source isn't represented in this tree (e.g. a github
-// source we don't currently render here) are preserved unchanged so
-// editing local + AWS doesn't accidentally drop github vars.
+// VarRefs whose Source isn't represented in this tree (e.g. an
+// out-of-tree source we don't currently render here) are preserved
+// unchanged so editing local + AWS doesn't accidentally drop them.
 func (s *varTreeScreen) commit() {
 	mp := s.mp()
 	if mp == nil {

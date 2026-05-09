@@ -9,9 +9,8 @@ Four nouns:
 
 - **Source** — a backend that yields secret material. The first-party
   source is `local` (encrypted bags inside `config.toml`); `aws` (AWS
-  Secrets Manager) and `github` (Actions secrets/variables) are
-  compiled in. New sources plug into `pkg/source` — see
-  [source-plugins.md](source-plugins.md).
+  Secrets Manager) is also compiled in. New sources plug into
+  `pkg/source` — see [source-plugins.md](source-plugins.md).
 - **Bag** — for the `local` source only, a named group of `KEY = value`
   pairs. Bags are how you organize related secrets ("stripe", "db",
   "ci"). They live under `[secrets.<bagname>]` in `config.toml` and

@@ -87,8 +87,7 @@ source whose params need to feel polished in the UI.
    wraps them in `enc:v1:` envelopes on disk.
 
 5. **Write tests.** The existing `local` source has the simplest
-   shape; `aws` and `github` show how to mock the SDK / API for unit
-   tests.
+   shape; `aws` shows how to mock the SDK for unit tests.
 
 ## Sensitive fields and encryption
 

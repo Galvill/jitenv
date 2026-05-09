@@ -67,13 +67,13 @@ func TestRewriteLocalBagRefs_OnlyLocalSources(t *testing.T) {
 	c := &config.Config{
 		Sources: map[string]config.SourceConfig{
 			"vault":  {Type: "local"},
-			"github": {Type: "github"},
+			"aws-eu": {Type: "aws"},
 		},
 		Mappings: []config.Mapping{{
 			Path: "/x.sh",
 			Vars: []config.VarRef{
 				{Name: "A", Source: "vault", Ref: "stripe", Key: "k"},
-				{Name: "B", Source: "github", Ref: "stripe"},
+				{Name: "B", Source: "aws-eu", Ref: "stripe"},
 			},
 		}},
 	}
@@ -82,7 +82,7 @@ func TestRewriteLocalBagRefs_OnlyLocalSources(t *testing.T) {
 		t.Fatalf("local ref: %q", got)
 	}
 	if got := c.Mappings[0].Vars[1].Ref; got != "stripe" {
-		t.Fatalf("github ref must not be touched: %q", got)
+		t.Fatalf("aws ref must not be touched: %q", got)
 	}
 }
 
