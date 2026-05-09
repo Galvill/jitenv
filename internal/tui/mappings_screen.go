@@ -304,7 +304,7 @@ func (s *mappingFormScreen) activate() tea.Cmd {
 		case 1:
 			return s.openTargetInput()
 		case 2:
-			return s.openCommandsInput()
+			return s.openCommandsList()
 		case 3:
 			return s.openVarTree()
 		}
@@ -401,38 +401,14 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	}, commit)})
 }
 
-// openCommandsInput edits the cwd-only commands list. The list is
-// stored as a comma-separated string in the input field; we trim and
-// split on commit. Empty list is invalid (config.Validate rejects),
-// but we let the user pass through here so they can fix it later
-// without losing other edits.
-func (s *mappingFormScreen) openCommandsInput() tea.Cmd {
-	mp := s.mp()
-	if mp == nil {
+// openCommandsList drills into the per-mapping commands editor. Each
+// entry is added/edited/deleted on its own row; the underlying
+// []string storage is unchanged.
+func (s *mappingFormScreen) openCommandsList() tea.Cmd {
+	if s.mp() == nil {
 		return nil
 	}
-	commit := func(val string) tea.Cmd {
-		m := s.mp()
-		if m == nil {
-			return emit(popMsg{})
-		}
-		m.Commands = m.Commands[:0]
-		for _, c := range strings.Split(val, ",") {
-			c = strings.TrimSpace(c)
-			if c != "" {
-				m.Commands = append(m.Commands, c)
-			}
-		}
-		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
-	}
-	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
-		Title:       "scope to commands",
-		Prompt:      "Comma-separated bare command names to wrap inside this cwd (e.g. npm, yarn).",
-		Placeholder: "npm, yarn",
-		Initial:     strings.Join(mp.Commands, ", "),
-		AllowBlank:  true,
-		SaveLabel:   "Apply", CancelLabel: "Back",
-	}, commit)})
+	return emit(pushMsg{s: newCommandsListScreen(s.root, s.idx)})
 }
 
 func (s *mappingFormScreen) openVarTree() tea.Cmd {
@@ -467,11 +443,14 @@ func (s *mappingFormScreen) View() string {
 		{"target", target},
 	}
 	if kind == "cwd" {
-		cmds := strings.Join(mp.Commands, ", ")
-		if cmds == "" {
-			cmds = dimText("(none — required)")
+		var value string
+		if len(mp.Commands) == 0 {
+			value = dimText("(none — required)")
+		} else {
+			preview := truncate(strings.Join(mp.Commands, ", "), 48)
+			value = fmt.Sprintf("%s  %s", preview, dimText(fmt.Sprintf("(%d)", len(mp.Commands))))
 		}
-		rows = append(rows, struct{ label, value string }{"commands", cmds})
+		rows = append(rows, struct{ label, value string }{"commands", value})
 	}
 	rows = append(rows, struct{ label, value string }{
 		"variables", fmt.Sprintf("%d selected", localVarCount(s.root, mp)),
