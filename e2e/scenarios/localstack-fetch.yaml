@@ -1,0 +1,57 @@
+name: localstack-fetch
+description: |
+  Same shape as unlock-and-run-local but the env var is fetched from
+  AWS Secrets Manager via LocalStack. Exercises the aws source's
+  endpoint_override + static-credentials path; localstack-init seeds
+  the secret with FOO/BAR JSON, and the mapping picks key=FOO.
+
+service: debian
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed \
+        -out "$JITENV_CONFIG" \
+        -variant localstack \
+        -script /home/jitenv/scripts/show.sh \
+        -sm-endpoint http://localstack:4566
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  - name: run-via-jitenv
+    exec: jitenv run /home/jitenv/scripts/show.sh
+    timeout: 30s
+  - name: assert-aws-foo
+    assert_stdout_contains: "FOO=value-from-aws-foo"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0
