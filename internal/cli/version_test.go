@@ -49,7 +49,11 @@ func TestRoot_HelpIncludesVersion(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute --help: %v", err)
 	}
-	if !strings.Contains(out.String(), "jitenv 9.9.9") {
-		t.Errorf("--help output should embed version, got:\n%s", out.String())
+	got := out.String()
+	if !strings.Contains(got, "jitenv 9.9.9") {
+		t.Errorf("--help output should embed version, got:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Errorf("--help output should end with a blank line after the version, got tail %q", got[max(0, len(got)-8):])
 	}
 }

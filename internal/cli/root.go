@@ -13,7 +13,9 @@ var configPath string
 const helpTemplate = `{{with (or .Long .Short)}}{{. | trimTrailingWhitespaces}}
 
 {{end}}{{if or .Runnable .HasSubCommands}}{{.UsageString}}{{end}}
-{{.Version}}`
+{{.Version}}
+
+`
 
 func newRoot() *cobra.Command {
 	root := &cobra.Command{

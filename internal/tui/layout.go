@@ -52,46 +52,35 @@ func renderApp(w, h int, body, status string) string {
 	return panel + "\n" + statusLine + "\n" + footerLine
 }
 
-const copyrightText = "© 2026 Gal Villaret · jitenv — MIT"
-
 var copyrightStyle = lipgloss.NewStyle().
 	Foreground(colorMuted).
 	Faint(true)
 
-// renderFooter draws the global one-line footer: the centered copyright
-// notice plus the build version on the right. Both segments share the
-// same dim/faint style so the version reads as a hint, not a status
-// claim. When the terminal is too narrow to fit both segments without
-// overlap, we drop the version rather than the copyright — the version
-// is always available via `jitenv -v`.
+// footerSegments are the fixed segments of the global footer. The
+// version segment, when non-empty, is appended at render time so the
+// footer can drop it on narrow terminals without disturbing the rest.
+var footerSegments = []string{"jitenv", "© 2026 Gal Villaret", "MIT"}
+
+const footerSeparator = " | "
+
+// renderFooter draws the global one-line footer as a centered, pipe-
+// separated string: `jitenv | © 2026 Gal Villaret | MIT | <version>`.
+// On terminals too narrow to fit the version segment, it is dropped
+// rather than wrapping — the version is always reachable via `jitenv
+// -v`.
 func renderFooter(w int) string {
 	if w < 4 {
 		w = 4
 	}
-	versionText := versionFooterText()
-	versionWidth := lipgloss.Width(versionText)
-	copyrightWidth := lipgloss.Width(copyrightText)
-
-	if versionText == "" || versionWidth+copyrightWidth+2 > w {
-		return copyrightStyle.Width(w).Align(lipgloss.Center).Render(copyrightText)
-	}
-
-	leftPad := (w - copyrightWidth) / 2
-	if leftPad < 0 {
-		leftPad = 0
-	}
-	rightPad := w - leftPad - copyrightWidth - versionWidth
-	if rightPad < 1 {
-		rightPad = 1
-		leftPad = w - copyrightWidth - versionWidth - rightPad
-		if leftPad < 0 {
-			leftPad = 0
+	segments := footerSegments
+	if v := versionFooterText(); v != "" {
+		full := strings.Join(append(append([]string{}, segments...), v), footerSeparator)
+		if lipgloss.Width(full) <= w {
+			return copyrightStyle.Width(w).Align(lipgloss.Center).Render(full)
 		}
 	}
-	return copyrightStyle.Render(strings.Repeat(" ", leftPad)) +
-		copyrightStyle.Render(copyrightText) +
-		copyrightStyle.Render(strings.Repeat(" ", rightPad)) +
-		copyrightStyle.Render(versionText)
+	base := strings.Join(segments, footerSeparator)
+	return copyrightStyle.Width(w).Align(lipgloss.Center).Render(base)
 }
 
 // modalOverlay returns a small centered bordered popup of the given

@@ -7,33 +7,31 @@ import (
 	"github.com/gv/jitenv/internal/version"
 )
 
-// TestRenderFooter_IncludesVersionRightAligned guards the global footer
-// contract: the copyright text stays visible centred-ish, and the
-// version sits to its right when the terminal is wide enough. Reviewer
-// ergonomics — when a screenshot lands in a bug report, the version
-// should be readable without needing to dump the binary.
-func TestRenderFooter_IncludesVersionRightAligned(t *testing.T) {
+// TestRenderFooter_PipeSeparatedSegments guards the global footer
+// shape: a single centered line of pipe-separated segments —
+// `jitenv | © 2026 Gal Villaret | MIT | <version>`. "jitenv" appears
+// only once (in the leading segment), not duplicated as a prefix on
+// the version.
+func TestRenderFooter_PipeSeparatedSegments(t *testing.T) {
 	prev := version.Version
 	t.Cleanup(func() { version.Version = prev })
 	version.Version = "9.9.9"
 
 	out := renderFooter(120)
-	if !strings.Contains(out, "jitenv 9.9.9") {
-		t.Fatalf("footer missing version: %q", out)
+	for _, want := range []string{"jitenv", "© 2026 Gal Villaret", "MIT", "9.9.9", " | "} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("footer missing %q: %q", want, out)
+		}
 	}
-	if !strings.Contains(out, "jitenv — MIT") {
-		t.Fatalf("footer missing copyright: %q", out)
-	}
-	copyrightIdx := strings.Index(out, "jitenv — MIT")
-	versionIdx := strings.LastIndex(out, "jitenv 9.9.9")
-	if versionIdx <= copyrightIdx {
-		t.Fatalf("version should sit to the right of copyright: %q", out)
+	if strings.Count(out, "jitenv") != 1 {
+		t.Fatalf("expected 'jitenv' exactly once, got %d in %q", strings.Count(out, "jitenv"), out)
 	}
 }
 
-// TestRenderFooter_DropsVersionWhenNarrow falls back to the centred
-// copyright on tight widths so the footer never wraps or clobbers the
-// status line above it. The version is always reachable via -v.
+// TestRenderFooter_DropsVersionWhenNarrow falls back to the
+// jitenv | copyright | MIT line on tight widths so the footer never
+// wraps or clobbers the status line above it. The version is always
+// reachable via -v.
 func TestRenderFooter_DropsVersionWhenNarrow(t *testing.T) {
 	prev := version.Version
 	t.Cleanup(func() { version.Version = prev })
