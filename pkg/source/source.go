@@ -52,3 +52,34 @@ type ParamField struct {
 type Schemed interface {
 	Schema() []ParamField
 }
+
+// Bag is a (refID, displayName, keys) triple a Source exposes to the
+// TUI's variable-tree picker so its secrets can be picked the same way
+// local bags are. AWS Secrets Manager populates this from the
+// user-curated ARN list (jitenv calls Fetch with the ARN once to
+// enumerate JSON keys; scalar secrets land with an empty Keys slice
+// and the var-tree renders them as bag-only / no per-key toggle).
+type Bag struct {
+	// RefID is the value the resolver puts in SecretRef.ID at fetch
+	// time. For AWS Secrets Manager that's the full ARN.
+	RefID string
+	// DisplayName is the short human-readable label shown in the
+	// var-tree (e.g. the secret name parsed out of an ARN).
+	DisplayName string
+	// Keys, if non-empty, are the JSON-object top-level keys the
+	// user can pick individually. Empty means scalar / unknown shape;
+	// the picker then shows only the whole-bag toggle.
+	Keys []string
+}
+
+// Bagger is implemented by Sources that can present their refs as
+// bags in the var-tree picker. Optional.
+//
+// List(ctx) returns the union of all bags currently configured for the
+// source. Implementations should not call out further than necessary —
+// AWS, for instance, runs one GetSecretValue per ARN to discover the
+// JSON keys. Errors per-bag are surfaced via the (Bag, error) pair so
+// one bad ARN doesn't hide the rest.
+type Bagger interface {
+	Bags(ctx context.Context) ([]Bag, error)
+}

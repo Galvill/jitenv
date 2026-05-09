@@ -74,6 +74,26 @@ func (c *Client) FetchEnv(ctx context.Context, path string) (map[string]string, 
 	return r.Env, nil
 }
 
+// FetchEnvCwd is the cwd_glob counterpart to FetchEnv. Used by the
+// wrapper-symlink shim.
+func (c *Client) FetchEnvCwd(ctx context.Context, pwd, command string) (map[string]string, error) {
+	r, err := c.call(ctx, Request{Op: OpFetchEnvCwd, Cwd: pwd, Command: command})
+	if err != nil {
+		return nil, err
+	}
+	return r.Env, nil
+}
+
+// CwdCommands asks the agent which command names should be wrapped at
+// pwd. Returns nil when no cwd_glob mapping matches.
+func (c *Client) CwdCommands(ctx context.Context, pwd string) ([]string, error) {
+	r, err := c.call(ctx, Request{Op: OpCwdCommands, Cwd: pwd})
+	if err != nil {
+		return nil, err
+	}
+	return r.Commands, nil
+}
+
 // Reload asks the agent to re-read the config file from disk and rebuild
 // its resolver. Used by the TUI after a successful save.
 func (c *Client) Reload(ctx context.Context) error {

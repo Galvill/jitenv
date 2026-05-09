@@ -41,7 +41,7 @@ func TestVarTree_TickBagIncludesAll(t *testing.T) {
 	// Find the "stripe" bag header and tick it.
 	stripeIdx := -1
 	for i, b := range scr.bags {
-		if b.name == "stripe" {
+		if b.displayName == "stripe" {
 			stripeIdx = i
 			break
 		}
@@ -83,7 +83,7 @@ func TestVarTree_TickIndividualKeys(t *testing.T) {
 
 	dbIdx := -1
 	for i, b := range scr.bags {
-		if b.name == "db" {
+		if b.displayName == "db" {
 			dbIdx = i
 			break
 		}
@@ -115,7 +115,7 @@ func TestVarTree_KeyToggleNoOpWhenBagAll(t *testing.T) {
 
 	dbIdx := -1
 	for i, b := range scr.bags {
-		if b.name == "db" {
+		if b.displayName == "db" {
 			dbIdx = i
 			break
 		}
@@ -135,7 +135,7 @@ func TestVarTree_TickBagClearsIndividualKeys(t *testing.T) {
 
 	dbIdx := -1
 	for i, b := range scr.bags {
-		if b.name == "db" {
+		if b.displayName == "db" {
 			dbIdx = i
 		}
 	}
@@ -161,10 +161,10 @@ func TestVarTree_LoadFromMapping_Roundtrip(t *testing.T) {
 	scr := newVarTreeScreen(r, 0).(*varTreeScreen)
 
 	for _, b := range scr.bags {
-		if b.name == "stripe" && !b.bagSel {
+		if b.displayName == "stripe" && !b.bagSel {
 			t.Errorf("stripe bagSel should be true")
 		}
-		if b.name == "db" {
+		if b.displayName == "db" {
 			for _, k := range b.keys {
 				if k.name == "DB_USER" && !k.sel {
 					t.Errorf("db.DB_USER sel should be true")

@@ -24,15 +24,24 @@ func newMappingsListScreen(r *rootModel) screen {
 	return &mappingsListScreen{root: r}
 }
 
-func (m *mappingsListScreen) Title() string { return "mappings" }
-func (m *mappingsListScreen) Status() string {
-	return renderHelpKeys(
-		[2]string{"↑/↓", "move"},
-		[2]string{"Enter", "open"},
-		[2]string{"Esc", "back"},
-	)
+func (m *mappingsListScreen) Title() string  { return "mappings" }
+func (m *mappingsListScreen) Status() string { return renderHelpStatus() }
+func (m *mappingsListScreen) Init() tea.Cmd  { return nil }
+
+func (m *mappingsListScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (m *mappingsListScreen) HelpText() string {
+	return `A mapping ties a file (or glob) to a set of env vars. When the shell
+hook sees a mapped command run, it re-execs it through "jitenv run"
+with those vars in scope.
+
+Mappings match in declaration order — exact paths first, then any
+matching globs. When two entries provide the same env var name the
+later one wins, so you can layer "default for ~/work/**/*.sh" with
+"override for ~/work/prod/deploy.sh".
+
+Select < Create New Mapping > to add one, or hit Enter on an existing
+row for Edit / Delete.`
 }
-func (m *mappingsListScreen) Init() tea.Cmd { return nil }
 
 func (m *mappingsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if _, ok := msg.(mappingChangedMsg); ok {
@@ -121,6 +130,12 @@ func (m *mappingsListScreen) View() string {
 		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
 	}
 
+	if len(m.root.cfg.Mappings) == 0 {
+		b.WriteString("\n" + dimText("No mappings yet — pick the row above to add one. A mapping ties") + "\n")
+		b.WriteString(dimText("a file or glob to a set of env vars that the shell hook injects") + "\n")
+		b.WriteString(dimText("when you run that file. Press ? for the full help.") + "\n")
+	}
+
 	for i, mp := range m.root.cfg.Mappings {
 		row := fmt.Sprintf("%-44s  %s",
 			truncate(mappingLabel(mp), 44),
@@ -135,11 +150,16 @@ func (m *mappingsListScreen) View() string {
 }
 
 func mappingLabel(mp config.Mapping) string {
-	if mp.Glob != "" {
+	switch {
+	case mp.Glob != "":
 		return mp.Glob
-	}
-	if mp.Path != "" {
+	case mp.Path != "":
 		return mp.Path
+	case mp.CwdGlob != "":
+		if len(mp.Commands) > 0 {
+			return "cwd:" + mp.CwdGlob + "  " + strings.Join(mp.Commands, ",")
+		}
+		return "cwd:" + mp.CwdGlob
 	}
 	return "(empty)"
 }
@@ -166,11 +186,32 @@ type mappingFormScreen struct {
 	root     *rootModel
 	idx      int
 	creating bool
-	cursor   int // 0 = kind, 1 = target, 2 = variables
+	cursor   int // 0 = kind, 1 = target, 2 = commands (cwd-only) / variables
+	// pendingKind tracks the picker selection while the mapping has no
+	// target field set yet. config.Mapping has no kind field of its
+	// own — it's inferred from which of Path/Glob/CwdGlob is non-empty
+	// — so without this the picker wouldn't appear to "stick" on a
+	// brand-new mapping until the user typed a target.
+	pendingKind string
 }
 
 func newMappingFormScreen(r *rootModel, idx int, creating bool) screen {
 	return &mappingFormScreen{root: r, idx: idx, creating: creating}
+}
+
+// effectiveKind returns the kind the form should display: the
+// mapping's stored kind if a target is set, otherwise the picker's
+// pending choice, defaulting to "path".
+func (s *mappingFormScreen) effectiveKind() string {
+	if mp := s.mp(); mp != nil {
+		if k := mp.Kind(); k != "" {
+			return k
+		}
+	}
+	if s.pendingKind != "" {
+		return s.pendingKind
+	}
+	return "path"
 }
 
 func (s *mappingFormScreen) Title() string {
@@ -179,14 +220,31 @@ func (s *mappingFormScreen) Title() string {
 	}
 	return "edit mapping"
 }
-func (s *mappingFormScreen) Status() string {
-	return renderHelpKeys(
-		[2]string{"↑/↓", "move"},
-		[2]string{"Enter", "open"},
-		[2]string{"Esc", "back"},
-	)
+func (s *mappingFormScreen) Status() string { return renderHelpStatus() }
+func (s *mappingFormScreen) Init() tea.Cmd  { return nil }
+
+func (s *mappingFormScreen) HelpKeys() []helpEntry { return commonNavKeys() }
+func (s *mappingFormScreen) HelpText() string {
+	return `kind:       "path" matches one exact filesystem path.
+            "glob" matches any file under a doublestar pattern, e.g.
+            "~/work/**/*.sh" or "**/scripts/deploy*". Globs are
+            matched after exact paths in declaration order.
+
+target:     The path or glob to match. Tilde-relative ("~/...") is
+            expanded; relative paths are resolved against the current
+            directory at edit time.
+
+variables:  Opens a bag → key tree. Tick a bag to expand the entire
+            bag (every key becomes its own env var named after the
+            key). Tick individual keys for explicit named env vars.
+            While the bag-level box is on, individual key boxes
+            render dimmed — toggling them is a no-op until you
+            uncheck the bag.
+
+Save the config (Ctrl-S from the menu, or via the menu's Save button)
+to commit. Saving auto-pings the running agent to reload, so the new
+mapping takes effect without a relock.`
 }
-func (s *mappingFormScreen) Init() tea.Cmd { return nil }
 
 func (s *mappingFormScreen) mp() *config.Mapping {
 	if s.idx < 0 || s.idx >= len(s.root.cfg.Mappings) {
@@ -197,7 +255,16 @@ func (s *mappingFormScreen) mp() *config.Mapping {
 
 func (s *mappingFormScreen) isEmpty() bool {
 	mp := s.mp()
-	return mp != nil && mp.Path == "" && mp.Glob == "" && len(mp.Vars) == 0
+	return mp != nil && mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" && len(mp.Vars) == 0
+}
+
+// maxCursor returns the highest valid cursor row. Cwd mappings get an
+// extra "commands" row above "variables".
+func (s *mappingFormScreen) maxCursor() int {
+	if s.effectiveKind() == "cwd" {
+		return 3
+	}
+	return 2
 }
 
 func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
@@ -208,7 +275,7 @@ func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.cursor--
 			}
 		case "down", "j":
-			if s.cursor < 2 {
+			if s.cursor < s.maxCursor() {
 				s.cursor++
 			}
 		case "enter":
@@ -230,6 +297,19 @@ func (s *mappingFormScreen) activate() tea.Cmd {
 	if s.mp() == nil {
 		return nil
 	}
+	if s.effectiveKind() == "cwd" {
+		switch s.cursor {
+		case 0:
+			return s.openKindMenu()
+		case 1:
+			return s.openTargetInput()
+		case 2:
+			return s.openCommandsInput()
+		case 3:
+			return s.openVarTree()
+		}
+		return nil
+	}
 	switch s.cursor {
 	case 0:
 		return s.openKindMenu()
@@ -248,21 +328,37 @@ func (s *mappingFormScreen) openKindMenu() tea.Cmd {
 			return emit(popMsg{})
 		}
 		switch choice {
-		case "path":
+		case "path", "glob", "cwd":
+			// Carry the previous target across kind changes.
+			prev := mp.Path
 			if mp.Glob != "" {
-				mp.Path = mp.Glob
-				mp.Glob = ""
+				prev = mp.Glob
+			} else if mp.CwdGlob != "" {
+				prev = mp.CwdGlob
 			}
-		case "glob":
-			if mp.Path != "" {
-				mp.Glob = mp.Path
-				mp.Path = ""
+			mp.Path, mp.Glob, mp.CwdGlob = "", "", ""
+			switch choice {
+			case "path":
+				mp.Path = prev
+			case "glob":
+				mp.Glob = prev
+			case "cwd":
+				mp.CwdGlob = prev
 			}
+			s.pendingKind = choice
+			if choice != "cwd" {
+				mp.Commands = nil
+			}
+			if s.cursor > s.maxCursor() {
+				s.cursor = s.maxCursor()
+			}
+			return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
 		}
-		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
+		// "Back" / unknown: leave both mp and pendingKind alone.
+		return emit(popMsg{})
 	}
 	return emit(pushMsg{s: newPopupMenuScreen(s.root,
-		"Mapping kind", cb, "path", "glob", "Back")})
+		"Mapping kind", cb, "path", "glob", "cwd", "Back")})
 }
 
 func (s *mappingFormScreen) openTargetInput() tea.Cmd {
@@ -270,15 +366,17 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	if mp == nil {
 		return nil
 	}
-	title := "edit path"
-	prompt := "Absolute path to the file."
-	ph := "/home/me/scripts/deploy.sh"
-	init := mp.Path
-	if mp.Glob != "" {
-		title = "edit glob"
-		prompt = "Doublestar glob — matches multiple files."
-		ph = "/home/me/scripts/**/*.sh"
-		init = mp.Glob
+	kind := s.effectiveKind()
+	var title, prompt, ph, init string
+	switch kind {
+	case "glob":
+		title, prompt, ph, init = "edit glob", "Doublestar glob — matches multiple files.", "/home/me/scripts/**/*.sh", mp.Glob
+	case "cwd":
+		title, prompt, ph, init = "edit cwd glob",
+			"Match by current working directory. The pattern also covers any subdirectory of a match.",
+			"~/work/acme", mp.CwdGlob
+	default:
+		title, prompt, ph, init = "edit path", "Absolute path to the file.", "/home/me/scripts/deploy.sh", mp.Path
 	}
 	commit := func(val string) tea.Cmd {
 		v := strings.TrimSpace(val)
@@ -286,9 +384,13 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 		if m == nil {
 			return emit(popMsg{})
 		}
-		if m.Glob != "" {
+		m.Path, m.Glob, m.CwdGlob = "", "", ""
+		switch kind {
+		case "glob":
 			m.Glob = v
-		} else {
+		case "cwd":
+			m.CwdGlob = v
+		default:
 			m.Path = v
 		}
 		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
@@ -296,6 +398,40 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
 		Title: title, Prompt: prompt, Placeholder: ph, Initial: init,
 		SaveLabel: "OK", CancelLabel: "Cancel",
+	}, commit)})
+}
+
+// openCommandsInput edits the cwd-only commands list. The list is
+// stored as a comma-separated string in the input field; we trim and
+// split on commit. Empty list is invalid (config.Validate rejects),
+// but we let the user pass through here so they can fix it later
+// without losing other edits.
+func (s *mappingFormScreen) openCommandsInput() tea.Cmd {
+	mp := s.mp()
+	if mp == nil {
+		return nil
+	}
+	commit := func(val string) tea.Cmd {
+		m := s.mp()
+		if m == nil {
+			return emit(popMsg{})
+		}
+		m.Commands = m.Commands[:0]
+		for _, c := range strings.Split(val, ",") {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				m.Commands = append(m.Commands, c)
+			}
+		}
+		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
+	}
+	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
+		Title:       "scope to commands",
+		Prompt:      "Comma-separated bare command names to wrap inside this cwd (e.g. npm, yarn).",
+		Placeholder: "npm, yarn",
+		Initial:     strings.Join(mp.Commands, ", "),
+		AllowBlank:  true,
+		SaveLabel:   "OK", CancelLabel: "Cancel",
 	}, commit)})
 }
 
@@ -310,13 +446,15 @@ func (s *mappingFormScreen) View() string {
 		return errorStyle.Render("(mapping vanished)")
 	}
 
-	kind := "path"
-	if mp.Glob != "" {
-		kind = "glob"
-	}
-	target := mp.Path
-	if mp.Glob != "" {
+	kind := s.effectiveKind()
+	var target string
+	switch kind {
+	case "glob":
 		target = mp.Glob
+	case "cwd":
+		target = mp.CwdGlob
+	default:
+		target = mp.Path
 	}
 	if target == "" {
 		target = dimText("(not set)")
@@ -327,8 +465,17 @@ func (s *mappingFormScreen) View() string {
 	}{
 		{"kind", kind},
 		{"target", target},
-		{"variables", fmt.Sprintf("%d selected", localVarCount(s.root, mp))},
 	}
+	if kind == "cwd" {
+		cmds := strings.Join(mp.Commands, ", ")
+		if cmds == "" {
+			cmds = dimText("(none — required)")
+		}
+		rows = append(rows, struct{ label, value string }{"commands", cmds})
+	}
+	rows = append(rows, struct{ label, value string }{
+		"variables", fmt.Sprintf("%d selected", localVarCount(s.root, mp)),
+	})
 
 	for i, r := range rows {
 		line := fmt.Sprintf("%-12s %s", r.label+":", r.value)
@@ -342,21 +489,17 @@ func (s *mappingFormScreen) View() string {
 }
 
 // localVarCount counts how many env vars this mapping currently
-// produces from the local-secret store. Bag-level (expand-all) entries
-// count as the bag's key count; individual keys count as 1 each.
-// Non-local vars are not counted because they are managed elsewhere.
+// produces. Local bag-level (expand-all) entries count as the bag's
+// key count; everything else counts as 1.
 func localVarCount(r *rootModel, mp *config.Mapping) int {
 	n := 0
 	for _, v := range mp.Vars {
 		sc, ok := r.cfg.Sources[v.Source]
-		if !ok || sc.Type != "local" {
+		if ok && sc.Type == "local" && v.Key == "" {
+			n += len(r.cfg.Secrets[v.Ref])
 			continue
 		}
-		if v.Key == "" {
-			n += len(r.cfg.Secrets[v.Ref])
-		} else {
-			n++
-		}
+		n++
 	}
 	return n
 }
