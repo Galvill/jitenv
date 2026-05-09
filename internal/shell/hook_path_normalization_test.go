@@ -51,19 +51,38 @@ func TestHookSnippetStripsTrailingSlash(t *testing.T) {
 			bin := buildBinary(t)
 			binDir := strings.TrimSuffix(bin, "/jitenv")
 
-			script := `eval "$(` + binDir + `/jitenv hook ` + tc.hookCmd + `)"; printf '%s\n' "$__JITENV_WRAP_DIR"`
+			// The hook calls `jitenv __chpwd` once at load time via a
+			// bare name lookup, so binDir must be on $PATH in addition
+			// to the test's restricted defaults — otherwise we get a
+			// `command not found` line ahead of the wrap-dir output.
+			// HOME is set to the temp dir so the chpwd helper's config
+			// lookup ($XDG_CONFIG_HOME default) doesn't touch the
+			// developer's real config.
+			script := `eval "$(jitenv hook ` + tc.hookCmd + `)"; printf '%s\n' "$__JITENV_WRAP_DIR"`
 			cmd := exec.Command(tc.shell, "-c", script)
-			cmd.Env = append([]string{"PATH=/usr/bin:/bin", "HOME=/tmp", "XDG_RUNTIME_DIR=" + tc.runtime}, "TMPDIR=/tmp")
+			cmd.Env = []string{
+				"PATH=" + binDir + ":/usr/bin:/bin",
+				"HOME=" + t.TempDir(),
+				"XDG_RUNTIME_DIR=" + tc.runtime,
+				"TMPDIR=/tmp",
+			}
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s: %v\noutput=%s", tc.shell, err, out)
 			}
+			// Take the last line — diagnostic output from the hook's
+			// load-time chpwd may print before the wrap-dir line we
+			// care about.
 			got := strings.TrimSpace(string(out))
-			if !strings.HasPrefix(got, tc.wantPath) {
-				t.Fatalf("expected wrap dir to start with %q (no leading double-slash); got %q", tc.wantPath, got)
+			lastLine := got
+			if i := strings.LastIndex(got, "\n"); i >= 0 {
+				lastLine = got[i+1:]
 			}
-			if strings.Contains(got, "//") {
-				t.Fatalf("wrap dir contains double slash: %q", got)
+			if !strings.HasPrefix(lastLine, tc.wantPath) {
+				t.Fatalf("expected wrap dir to start with %q (no leading double-slash); got %q\nfull output: %q", tc.wantPath, lastLine, got)
+			}
+			if strings.Contains(lastLine, "//") {
+				t.Fatalf("wrap dir contains double slash: %q", lastLine)
 			}
 		})
 	}
