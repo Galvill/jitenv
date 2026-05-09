@@ -12,9 +12,14 @@ __JITENV_LOADED=1
 # silent fall-through. We pre-create it and prepend to $PATH once,
 # right here, so PATH stays stable for the rest of the shell's life.
 if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-    __JITENV_RUNTIME_DIR="$XDG_RUNTIME_DIR/jitenv"
+    # Strip a trailing slash so the concat doesn't yield "//jitenv"
+    # for users whose XDG_RUNTIME_DIR happens to end in /. The Go
+    # side normalises with filepath.Join; the shell needs to do it
+    # by hand or the wrapper dir lands in $PATH with double slashes.
+    __JITENV_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/jitenv"
 else
-    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}/jitenv-$UID"
+    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}"
+    __JITENV_RUNTIME_DIR="${__JITENV_RUNTIME_DIR%/}/jitenv-$UID"
 fi
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null

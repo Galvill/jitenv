@@ -9,9 +9,10 @@ __JITENV_LOADED=1
 # Per-shell wrapper-symlink dir for cwd_glob mappings (mirrors
 # bash.sh).
 if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-    __JITENV_RUNTIME_DIR="$XDG_RUNTIME_DIR/jitenv"
+    __JITENV_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/jitenv"
 else
-    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}/jitenv-$UID"
+    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}"
+    __JITENV_RUNTIME_DIR="${__JITENV_RUNTIME_DIR%/}/jitenv-$UID"
 fi
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
