@@ -104,9 +104,11 @@ jitenv hook status         Show whether the hook is wired up
 
 ## Limitations
 
-- Linux-only today (uses `SO_PEERCRED`, `XDG_RUNTIME_DIR`, double-fork
-  via `Setsid`). macOS port tracked in
-  [#13](https://github.com/Galvill/jitenv/issues/13).
+- Linux + macOS only. Linux uses `SO_PEERCRED` + `XDG_RUNTIME_DIR`;
+  macOS uses `LOCAL_PEERCRED` + `$TMPDIR`. The agent's `Setsid`
+  double-fork is portable to both. Windows is not supported.
+- macOS release binaries are not Apple-notarized; first run requires
+  `xattr -d com.apple.quarantine ./jitenv` or right-click → Open.
 - The shell hook only intercepts commands whose first token is an
   absolute or `./`-relative path — not bare PATH lookups.
 - Single agent per user; multiple terminals share one unlocked instance.

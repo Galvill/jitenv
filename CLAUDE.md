@@ -17,7 +17,7 @@ go test ./internal/agent
 go test ./internal/run -run TestRunInjectsEnvAndExecs -v
 ```
 
-Go 1.22+ (go.mod declares 1.25.6). Linux-only (uses `SO_PEERCRED`, `XDG_RUNTIME_DIR`, `Setsid` double-fork).
+Go 1.22+ (go.mod declares 1.25.6). Linux and macOS. Peer-cred check is platform-split (`SO_PEERCRED` on Linux in `peer_linux.go`, `LOCAL_PEERCRED` on Darwin in `peer_darwin.go`); runtime dir is `$XDG_RUNTIME_DIR/jitenv/` on Linux and `os.TempDir()/jitenv-<uid>/` (typically `/var/folders/.../T/jitenv-<uid>`) on macOS. The `Setsid` double-fork is portable.
 
 The e2e tests under `internal/run` and `internal/shell` shell out to `go build` to produce a real binary against a temp config; they're slow but exercise the unlock → daemonize → hook → run loop end-to-end.
 
@@ -26,7 +26,7 @@ The e2e tests under `internal/run` and `internal/shell` shell out to `go build` 
 jitenv is a 3-process design that keeps secrets out of the parent shell:
 
 1. **CLI / TUI** (`cmd/jitenv` → `internal/cli`, `internal/tui`) — reads/writes the encrypted TOML config. The TUI decrypts in-process, edits, and re-encrypts on save.
-2. **Agent** (`internal/agent`) — long-lived per-user daemon, spawned by `jitenv unlock` via `SpawnDaemon` (re-execs `jitenv __agent` with the master key handed over fd 3). Listens on a Unix socket under `$XDG_RUNTIME_DIR/jitenv/`, mode 0600, peer UID checked via `SO_PEERCRED`. JSON ops: `status`, `is_mapped`, `fetch_env`, `lock`, `reload` (length-prefixed; see `internal/agent/protocol.go`).
+2. **Agent** (`internal/agent`) — long-lived per-user daemon, spawned by `jitenv unlock` via `SpawnDaemon` (re-execs `jitenv __agent` with the master key handed over fd 3). Listens on a Unix socket under `$XDG_RUNTIME_DIR/jitenv/` (Linux) or `$TMPDIR/jitenv-<uid>/` (macOS), mode 0600, peer UID checked via `SO_PEERCRED` on Linux and `LOCAL_PEERCRED` on Darwin (see `peer_linux.go` / `peer_darwin.go`). JSON ops: `status`, `is_mapped`, `fetch_env`, `lock`, `reload` (length-prefixed; see `internal/agent/protocol.go`).
 3. **Shell hook + `jitenv run`** (`internal/shell/snippets/{bash,zsh}.sh`, `internal/run`) — bash uses `extdebug` + `DEBUG` trap; zsh uses `preexec`. The hook intercepts only commands whose first token resolves to an absolute or `./`/`../` path, calls `jitenv is-mapped`, and on a hit re-runs the command via `jitenv run` which `syscall.Exec`s the file with the merged env (so secrets only ever live in that child's process tree).
 
 ### Hook `is-mapped` exit codes (load-bearing)
