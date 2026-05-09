@@ -105,6 +105,9 @@ func (c *Config) Validate() error {
 		if s.Type == "" {
 			return fmt.Errorf("source %q: missing type", name)
 		}
+		if s.Type == "github" {
+			return fmt.Errorf("source %q: unknown source type %q (the github backend was removed; remove this entry from your config)", name, s.Type)
+		}
 	}
 	for i, m := range c.Mappings {
 		set := 0

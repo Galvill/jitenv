@@ -27,7 +27,7 @@ func TestDecryptInPlace(t *testing.T) {
 	encToken, _ := crypto.EncryptField(key, "real-token")
 	encDB, _ := crypto.EncryptField(key, "postgres://x")
 	c.Sources = map[string]SourceConfig{
-		"gh": {Type: "github", Params: map[string]any{"token": encToken, "api_url": "https://api.github.com"}},
+		"vault": {Type: "aws", Params: map[string]any{"access_key_id": encToken, "region": "us-east-1"}},
 	}
 	c.Secrets = map[string]map[string]string{
 		"app": {"DB_URL": encDB, "PLAIN": "still-plain"},
@@ -36,11 +36,11 @@ func TestDecryptInPlace(t *testing.T) {
 	if err := DecryptInPlace(c, key); err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
-	if got := c.Sources["gh"].Params["token"]; got != "real-token" {
-		t.Fatalf("source token: %v", got)
+	if got := c.Sources["vault"].Params["access_key_id"]; got != "real-token" {
+		t.Fatalf("source access_key_id: %v", got)
 	}
-	if got := c.Sources["gh"].Params["api_url"]; got != "https://api.github.com" {
-		t.Fatalf("plaintext api_url mutated: %v", got)
+	if got := c.Sources["vault"].Params["region"]; got != "us-east-1" {
+		t.Fatalf("plaintext region mutated: %v", got)
 	}
 	if got := c.Secrets["app"]["DB_URL"]; got != "postgres://x" {
 		t.Fatalf("secret DB_URL: %q", got)

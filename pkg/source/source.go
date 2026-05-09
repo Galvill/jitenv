@@ -8,8 +8,8 @@ import "context"
 
 // SecretRef is one request from the agent to a Source.
 type SecretRef struct {
-	// ID is the source-specific identifier, e.g. "prod/db" for AWS Secrets
-	// Manager or "owner/repo" for GitHub Variables.
+	// ID is the source-specific identifier, e.g. "prod/db" for AWS
+	// Secrets Manager.
 	ID string
 	// Key, if non-empty, picks one field out of a structured payload.
 	Key string
@@ -20,7 +20,7 @@ type SecretRef struct {
 // Source fetches secret material on demand. Implementations MUST be
 // safe for concurrent use.
 type Source interface {
-	// Name returns the registered source type name (e.g. "aws", "github").
+	// Name returns the registered source type name (e.g. "aws").
 	Name() string
 	// Validate verifies reachability/auth without fetching real secrets.
 	Validate(ctx context.Context) error

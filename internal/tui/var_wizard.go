@@ -17,8 +17,8 @@ import (
 
 // startVarWizard launches a chain of small screens that lets the user
 // specify exactly one config.VarRef without typing any identifier that
-// already exists in the config (sources, bags, bag keys, github
-// scopes are all picker-driven).
+// already exists in the config (sources, bags, bag keys are all
+// picker-driven).
 //
 // onComplete is invoked with the finished ref. It is responsible for:
 //   - mutating the parent mapping (append or replace the var)
@@ -112,8 +112,6 @@ func dispatchByType(r *rootModel, ref config.VarRef, onComplete func(config.VarR
 	switch sc.Type {
 	case "local":
 		return newPickBagStep(r, ref, onComplete)
-	case "github":
-		return newPickGithubScopeStep(r, ref, onComplete)
 	default:
 		return newGenericRefStep(r, ref, sc.Type, onComplete)
 	}
@@ -339,136 +337,6 @@ func (s *pickBagKeyStep) View() string { //nolint:unused // hidden Remote Source
 	return b.String()
 }
 
-// ---------- github: pick scope → input identifiers → input variable name ----------
-
-type pickGithubScopeStep struct { //nolint:unused // hidden Remote Sources UI
-	root       *rootModel
-	cursor     int
-	btnFocus   int
-	buttons    []button
-	choices    []string
-	codes      []string
-	ref        config.VarRef
-	onComplete func(config.VarRef) tea.Cmd
-}
-
-func newPickGithubScopeStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
-	choices := []string{
-		"Repo Variables       (ref = owner/repo)",
-		"Org Variables        (ref = org)",
-		"Environment Variables (ref = owner/repo + environment)",
-	}
-	codes := []string{"repo", "org", "env"}
-	cursor := 0
-	if ref.Extra != nil {
-		switch ref.Extra["scope"] {
-		case "org":
-			cursor = 1
-		case "env":
-			cursor = 2
-		}
-	}
-	return &pickGithubScopeStep{
-		root: r, cursor: cursor, btnFocus: -1,
-		buttons:    []button{newButton("Next"), newButton("Back")},
-		choices:    choices,
-		codes:      codes,
-		ref:        ref,
-		onComplete: onComplete,
-	}
-}
-
-func (s *pickGithubScopeStep) Title() string  { return "var: github scope" } //nolint:unused // hidden Remote Sources UI
-func (s *pickGithubScopeStep) Status() string { return defaultListStatus }   //nolint:unused // hidden Remote Sources UI
-func (s *pickGithubScopeStep) Init() tea.Cmd  { return nil }                 //nolint:unused // hidden Remote Sources UI
-
-func (s *pickGithubScopeStep) Update(msg tea.Msg) (screen, tea.Cmd) { //nolint:unused // hidden Remote Sources UI
-	if cmd, handled := wizardListNav(&s.cursor, len(s.choices), &s.btnFocus, len(s.buttons), msg); handled {
-		return s, cmd
-	}
-	if k, ok := msg.(tea.KeyMsg); ok {
-		switch k.String() {
-		case "enter":
-			if s.btnFocus < 0 || s.buttons[s.btnFocus].label == "Next" {
-				if s.ref.Extra == nil {
-					s.ref.Extra = map[string]string{}
-				}
-				s.ref.Extra["scope"] = s.codes[s.cursor]
-				return s, emit(pushMsg{s: newGithubIdentifierStep(s.root, s.ref, s.codes[s.cursor], s.onComplete)})
-			}
-			return s, emit(popMsg{})
-		case "esc":
-			return s, emit(popMsg{})
-		}
-	}
-	return s, nil
-}
-
-func (s *pickGithubScopeStep) View() string { //nolint:unused // hidden Remote Sources UI
-	var b strings.Builder
-	b.WriteString(labelStyle.Render("GitHub scope") + "\n\n")
-	for i, c := range s.choices {
-		focused := s.btnFocus < 0 && i == s.cursor
-		marker := "  "
-		if focused {
-			marker = labelStyle.Render(" ▶")
-			b.WriteString(marker + " " + listItemFocusedStyle.Render(c) + "\n")
-		} else {
-			b.WriteString(marker + " " + listItemStyle.Render(c) + "\n")
-		}
-	}
-	b.WriteString("\n" + renderButtonRow(s.buttons, s.btnFocus) + "\n")
-	return b.String()
-}
-
-func newGithubIdentifierStep(r *rootModel, ref config.VarRef, scope string, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
-	switch scope {
-	case "org":
-		return newInputScreen(r, inputOpts{
-			Title: "github org", Prompt: "GitHub org name",
-			Placeholder: "my-org", Initial: ref.Ref,
-			SaveLabel: "Next", CancelLabel: "Back",
-		}, func(val string) tea.Cmd {
-			ref.Ref = strings.TrimSpace(val)
-			return emit(pushMsg{s: newGithubVarNameStep(r, ref, onComplete)})
-		})
-	case "env":
-		return newInputScreen(r, inputOpts{
-			Title: "owner/repo", Prompt: "GitHub owner/repo (e.g. acme/widgets)",
-			Initial: ref.Ref, SaveLabel: "Next", CancelLabel: "Back",
-		}, func(val string) tea.Cmd {
-			ref.Ref = strings.TrimSpace(val)
-			return emit(pushMsg{s: newInputScreen(r, inputOpts{
-				Title: "environment name", Prompt: "GitHub environment",
-				Initial:   ref.Extra["environment"],
-				SaveLabel: "Next", CancelLabel: "Back",
-			}, func(envVal string) tea.Cmd {
-				ref.Extra["environment"] = strings.TrimSpace(envVal)
-				return emit(pushMsg{s: newGithubVarNameStep(r, ref, onComplete)})
-			})})
-		})
-	default: // "repo"
-		return newInputScreen(r, inputOpts{
-			Title: "owner/repo", Prompt: "GitHub owner/repo (e.g. acme/widgets)",
-			Initial: ref.Ref, SaveLabel: "Next", CancelLabel: "Back",
-		}, func(val string) tea.Cmd {
-			ref.Ref = strings.TrimSpace(val)
-			return emit(pushMsg{s: newGithubVarNameStep(r, ref, onComplete)})
-		})
-	}
-}
-
-func newGithubVarNameStep(r *rootModel, ref config.VarRef, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
-	return newInputScreen(r, inputOpts{
-		Title: "variable name", Prompt: "Name of the GitHub Variable to read",
-		Placeholder: "DEPLOY_FLAG", Initial: ref.Key,
-		SaveLabel: "Next", CancelLabel: "Back",
-	}, func(val string) tea.Cmd {
-		ref.Key = strings.TrimSpace(val)
-		return emit(pushMsg{s: newEnvNameStep(r, ref, ref.Key, onComplete)})
-	})
-}
-
 // ---------- generic / aws ----------
 
 func newGenericRefStep(r *rootModel, ref config.VarRef, typeName string, onComplete func(config.VarRef) tea.Cmd) screen { //nolint:unused // hidden Remote Sources UI
@@ -579,12 +447,6 @@ func summariseVar(r *rootModel, v config.VarRef) string { //nolint:unused // hid
 		return fmt.Sprintf("ALL keys from local/%s", v.Ref)
 	case ok && src.Type == "local":
 		return fmt.Sprintf("%s ← local/%s.%s", v.Name, v.Ref, v.Key)
-	case ok && src.Type == "github":
-		scope := v.Extra["scope"]
-		if scope == "" {
-			scope = "repo"
-		}
-		return fmt.Sprintf("%s ← github(%s)/%s.%s", v.Name, scope, v.Ref, v.Key)
 	default:
 		extra := v.Ref
 		if v.Key != "" {

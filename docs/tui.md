@@ -87,9 +87,8 @@ After every save the TUI best-effort pings the running agent
 
 ## Remote sources page
 
-AWS Secrets Manager and GitHub Variables are compiled in but the
-"Remote Sources" page is currently hidden in the TUI. Existing
-`[sources.*]` entries in `config.toml` keep working at runtime; they
-just can't be managed interactively. Tracking issues:
-[#16](https://github.com/Galvill/jitenv/issues/16),
-[#17](https://github.com/Galvill/jitenv/issues/17).
+AWS Secrets Manager is compiled in but the "Remote Sources" page is
+currently hidden in the TUI. Existing `[sources.*]` entries in
+`config.toml` keep working at runtime; they just can't be managed
+interactively. Tracking issue:
+[#16](https://github.com/Galvill/jitenv/issues/16).

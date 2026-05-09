@@ -124,7 +124,7 @@ func TestParamButtonsForType_UsesCanonicalLabels(t *testing.T) {
 		t.Errorf("aws buttons must use 'Back' not 'Cancel': %v", labelsOf(awsBtns))
 	}
 
-	dflt := paramButtonsForType("github")
+	dflt := paramButtonsForType("local")
 	if got := labelsOf(dflt); !contains(got, "Apply") || !contains(got, "Back") {
 		t.Errorf("default buttons missing Apply/Back: %v", got)
 	}

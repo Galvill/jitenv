@@ -21,8 +21,8 @@ exposure to the one process that actually needs the value:
 - A per-user agent holds the master key in memory only.
 - Per-file mappings (path or glob); a shell hook intercepts mapped
   commands and re-execs them through `jitenv run`.
-- Pluggable sources: `local` (encrypted bags in `config.toml`),
-  AWS Secrets Manager, GitHub Actions secrets/variables.
+- Pluggable sources: `local` (encrypted bags in `config.toml`) and
+  AWS Secrets Manager.
 
 ## Documentation
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,5 +66,27 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	c.Mappings = []Mapping{{Path: "/x", Vars: []VarRef{{Name: "A", Source: "missing"}}}}
 	if err := c.Validate(); err == nil {
 		t.Fatalf("expected error for undefined source")
+	}
+}
+
+// TestValidateRejectsRemovedGithubSource asserts that configs holding a
+// stale [sources.<name>] of type "github" fail validation with a
+// message hinting at the removal (issue #46).
+func TestValidateRejectsRemovedGithubSource(t *testing.T) {
+	c := &Config{
+		Version: Version,
+		Sources: map[string]SourceConfig{
+			"gh": {Type: "github"},
+		},
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected Validate to reject github source type")
+	}
+	msg := err.Error()
+	for _, want := range []string{`"gh"`, `"github"`, "removed"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message %q missing %q", msg, want)
+		}
 	}
 }

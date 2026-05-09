@@ -32,14 +32,14 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 
 	// Pretend the TUI populated the config in memory.
 	c.Sources = map[string]config.SourceConfig{
-		"gh": {Type: "github", Params: map[string]any{
-			"token":   "ghp_supersecret",
-			"api_url": "https://api.github.com",
+		"prod_aws": {Type: "aws", Params: map[string]any{
+			"secret_access_key": "AWSsupersecret",
+			"region":            "us-east-1",
 		}},
 		"vault": {Type: "local"},
 	}
 	c.Mappings = []config.Mapping{
-		{Path: "/x", Vars: []config.VarRef{{Name: "FOO", Source: "gh", Ref: "owner/repo", Key: "FOO"}}},
+		{Path: "/x", Vars: []config.VarRef{{Name: "FOO", Source: "prod_aws", Ref: "prod/db", Key: "FOO"}}},
 	}
 	c.Secrets = map[string]map[string]string{
 		"stripe": {"PK": "pk_live_x", "SK": "sk_live_y"},
@@ -54,8 +54,8 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 	}
 
 	// Live in-memory copy must remain plaintext.
-	if c.Sources["gh"].Params["token"] != "ghp_supersecret" {
-		t.Fatalf("live gh.token mutated: %v", c.Sources["gh"].Params["token"])
+	if c.Sources["prod_aws"].Params["secret_access_key"] != "AWSsupersecret" {
+		t.Fatalf("live prod_aws.secret_access_key mutated: %v", c.Sources["prod_aws"].Params["secret_access_key"])
 	}
 	if c.Secrets["stripe"]["SK"] != "sk_live_y" {
 		t.Fatalf("live secret mutated: %v", c.Secrets["stripe"]["SK"])
@@ -66,13 +66,13 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	tok := reloaded.Sources["gh"].Params["token"].(string)
-	if !crypto.IsEnvelope(tok) {
-		t.Fatalf("token not encrypted on disk: %q", tok)
+	sak := reloaded.Sources["prod_aws"].Params["secret_access_key"].(string)
+	if !crypto.IsEnvelope(sak) {
+		t.Fatalf("secret_access_key not encrypted on disk: %q", sak)
 	}
-	api := reloaded.Sources["gh"].Params["api_url"].(string)
-	if crypto.IsEnvelope(api) {
-		t.Fatalf("non-sensitive api_url got encrypted: %q", api)
+	region := reloaded.Sources["prod_aws"].Params["region"].(string)
+	if crypto.IsEnvelope(region) {
+		t.Fatalf("non-sensitive region got encrypted: %q", region)
 	}
 	for _, v := range reloaded.Secrets["stripe"] {
 		if !crypto.IsEnvelope(v) {
@@ -84,8 +84,8 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 	if err := config.DecryptInPlace(reloaded, key); err != nil {
 		t.Fatalf("decrypt reload: %v", err)
 	}
-	if reloaded.Sources["gh"].Params["token"] != "ghp_supersecret" {
-		t.Fatalf("token round-trip broken: %v", reloaded.Sources["gh"].Params["token"])
+	if reloaded.Sources["prod_aws"].Params["secret_access_key"] != "AWSsupersecret" {
+		t.Fatalf("secret_access_key round-trip broken: %v", reloaded.Sources["prod_aws"].Params["secret_access_key"])
 	}
 	if reloaded.Secrets["stripe"]["PK"] != "pk_live_x" {
 		t.Fatalf("PK round-trip: %v", reloaded.Secrets["stripe"]["PK"])
