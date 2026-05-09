@@ -74,4 +74,4 @@ Bubble Tea with a screen-stack `rootModel`. Each screen implements `Init / Updat
 - **Cobra layout.** Commands are constructed by `new<Name>Cmd()` functions and aggregated in `internal/cli/subcommands.go`. To add a top-level command, append it there. The hidden `__agent` command is the daemon entrypoint — it is not a user-facing command.
 - **Config path resolution.** `JITENV_CONFIG` > `$XDG_CONFIG_HOME/jitenv/config.toml` > `~/.config/jitenv/config.toml`. Always go through `config.Resolve` rather than reconstructing.
 - **Agent paths.** `$XDG_RUNTIME_DIR/jitenv/{agent.sock,agent.pid,agent.log}`, falling back to `/tmp/jitenv-<uid>/`. Use `agent.DefaultPaths()`.
-- **No third source UI.** AWS Secrets Manager and GitHub Variables sources are compiled in and work at runtime, but the TUI's "Remote Sources" page is currently hidden. Existing `[sources.*]` entries in `config.toml` keep working.
+- **No remote source UI.** AWS Secrets Manager is compiled in and works at runtime, but the TUI's "Remote Sources" page is currently hidden. Existing `[sources.*]` entries in `config.toml` keep working.

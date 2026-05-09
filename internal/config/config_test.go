@@ -125,3 +125,25 @@ func TestAgentPreRunNoticeRoundTrip(t *testing.T) {
 		t.Fatalf("expected pre_run_notice to be omitted when false:\n%s", buf.String())
 	}
 }
+
+// TestValidateRejectsRemovedGithubSource asserts that configs holding a
+// stale [sources.<name>] of type "github" fail validation with a
+// message hinting at the removal (issue #46).
+func TestValidateRejectsRemovedGithubSource(t *testing.T) {
+	c := &Config{
+		Version: Version,
+		Sources: map[string]SourceConfig{
+			"gh": {Type: "github"},
+		},
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected Validate to reject github source type")
+	}
+	msg := err.Error()
+	for _, want := range []string{`"gh"`, `"github"`, "removed"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message %q missing %q", msg, want)
+		}
+	}
+}
