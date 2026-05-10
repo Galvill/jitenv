@@ -5,9 +5,10 @@ How releases are cut, how to verify them as a user, and how to recover when the 
 ## TL;DR — happy path
 
 1. Land changes on `main` using [Conventional Commits](https://www.conventionalcommits.org). At minimum, one `feat:`, `fix:`, `perf:`, `revert:`, or `docs:` commit must be present since the last release — `chore:`/`ci:`/`build:`/`refactor:`/`style:`/`test:` are CHANGELOG-hidden and won't trigger a release on their own.
-2. Within ~2 minutes, `release-please` opens (or updates) a `chore(main): release X.Y.Z` PR.
-3. Review the PR's `CHANGELOG.md` diff and merge it.
-4. The merge creates tag `vX.Y.Z` and fires `.github/workflows/release.yml`.
+2. **Merge PRs with squash-merge** (see [Merge policy](#merge-policy)). A plain merge commit causes release-please to attribute the same conventional-commit subject to both the merge commit and the feature commit, producing duplicate CHANGELOG entries.
+3. Within ~2 minutes, `release-please` opens (or updates) a `chore(main): release X.Y.Z` PR.
+4. Review the PR's `CHANGELOG.md` diff and merge it (also via squash, for the same reason).
+5. The merge creates tag `vX.Y.Z` and fires `.github/workflows/release.yml`.
 5. ~3–5 minutes later, the GitHub Release at `https://github.com/Galvill/jitenv/releases/tag/vX.Y.Z` carries:
    - `jitenv_X.Y.Z_linux_amd64.tar.gz` / `_arm64.tar.gz`
    - `jitenv_X.Y.Z_linux_amd64.deb` / `_arm64.deb`
@@ -22,6 +23,34 @@ unpacking — it prints a reminder telling the user to run
 cannot safely modify a user's `~/.bashrc`). `packaging/preremove.sh`
 prints the matching cleanup hint on uninstall, but stays silent on
 package upgrades.
+
+## Merge policy
+
+**Squash-merge only.** A plain merge commit's body inherits the
+incoming branch's commits, so release-please scans both the merge
+commit AND the underlying feature commit and attributes the same
+`feat:` / `fix:` subject to both — the v0.5.0 CHANGELOG had every
+PR show up twice for this reason ([#62](https://github.com/Galvill/jitenv/issues/62)).
+Squash flattens each PR to a single commit on `main` whose subject
+is the conv-commit, so each PR shows up exactly once.
+
+To enforce this, the repo settings must allow only squash-merge:
+
+```sh
+gh repo edit \
+  --enable-squash-merge \
+  --enable-merge-commit=false \
+  --enable-rebase-merge=false \
+  --delete-branch-on-merge
+```
+
+Run as a repo admin once. Until that's applied, contributors are
+free to pick any merge mode in the GitHub UI and CHANGELOG
+duplication will keep recurring.
+
+The squash commit's title should be the PR title (the GitHub default).
+The squash commit's body can be left as the PR description or
+trimmed to a single line — both work for release-please.
 
 ## Versioning rules
 
