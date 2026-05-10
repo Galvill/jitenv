@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="jitenv: just-in-time environment variable loader. Encrypted secrets injected into a single process tree, never the parent shell.">
+<title>jitenv &middot; just-in-time environment variables</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="container">
+    <h1 class="brand">jitenv</h1>
+    <p class="tagline">Just-in-time environment variables for the paranoid.</p>
+  </div>
+</header>
+
+<main class="container">
+
+  <section id="overview">
+    <h2>Overview</h2>
+    <p>
+      <strong>jitenv</strong> holds your secrets in an encrypted on-disk
+      config and injects them only into the process tree of the file you
+      actually want to run &mdash; never into the parent shell. A
+      per-user agent keeps the master key in memory; a shell hook
+      intercepts mapped commands and re-execs them through
+      <code>jitenv run</code>.
+    </p>
+
+    <pre><code>jitenv unlock
+./scripts/deploy.sh        # mapped &mdash; env vars appear inside the script
+echo "$DATABASE_URL"       # empty in your shell &mdash; it never saw the value</code></pre>
+
+    <h3>Features</h3>
+    <ul class="features">
+      <li>Per-file env injection via shell hooks (bash + zsh).</li>
+      <li>Encrypted at rest with XChaCha20-Poly1305 + Argon2id.</li>
+      <li>Long-lived per-user agent; secrets stay out of the parent shell.</li>
+      <li>Pluggable source backends: <code>local</code> (encrypted bags) and AWS Secrets Manager.</li>
+      <li>Exact-path and glob mappings, with whole-bag expansion.</li>
+      <li>TUI for managing config without hand-editing TOML.</li>
+      <li>Linux and macOS support.</li>
+    </ul>
+  </section>
+
+  <section id="downloads">
+    <h2>Download</h2>
+
+    <h3>Pre-built binaries</h3>
+    <p>
+      Available on the
+      <a href="https://github.com/Galvill/jitenv/releases/latest">GitHub Releases page</a>
+      for:
+    </p>
+    <ul>
+      <li><code>linux/amd64</code> &mdash; <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
+      <li><code>linux/arm64</code> &mdash; <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
+    </ul>
+    <p>
+      macOS (darwin/amd64 and darwin/arm64) is supported in code; binary
+      releases are not yet published, so install via <code>go install</code>
+      or build from source (below). After installing, activate the shell
+      hook once:
+    </p>
+    <pre><code>jitenv hook install
+exec $SHELL</code></pre>
+
+    <h3>Install with <code>go install</code></h3>
+    <pre><code>go install github.com/gv/jitenv/cmd/jitenv@latest</code></pre>
+
+    <h3>Build from source</h3>
+    <pre><code>git clone https://github.com/Galvill/jitenv
+cd jitenv
+make install</code></pre>
+    <p>
+      Requires Go 1.22 or later. <code>make install</code> places the
+      binary in <code>$PREFIX/bin</code> (default
+      <code>~/.local/bin</code>).
+    </p>
+  </section>
+
+  <section id="contact">
+    <h2>Contact</h2>
+    <ul class="contact">
+      <li>Repository: <a href="https://github.com/Galvill/jitenv">github.com/Galvill/jitenv</a></li>
+      <li>Issues &amp; bug reports: <a href="https://github.com/Galvill/jitenv/issues">github.com/Galvill/jitenv/issues</a></li>
+      <li>Maintainer: <a href="https://github.com/Galvill">@Galvill</a></li>
+    </ul>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <p>
+      <a href="https://github.com/Galvill/jitenv/blob/main/LICENSE">MIT licensed</a>.
+      Source for this site lives in
+      <a href="https://github.com/Galvill/jitenv/tree/main/docs"><code>/docs</code></a>.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

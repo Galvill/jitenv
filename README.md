@@ -24,6 +24,13 @@ exposure to the one process that actually needs the value:
 - Pluggable sources: `local` (encrypted bags in `config.toml`) and
   AWS Secrets Manager.
 
+## Website
+
+[jitenv.com](https://jitenv.com) — project landing page with overview,
+download links, and contact info. Served via GitHub Pages from the
+[`/docs`](docs/) folder on `main`; edits land through normal pull
+requests.
+
 ## Documentation
 
 - [Quickstart](docs/quickstart.md) — install → unlock → mapping → run.
