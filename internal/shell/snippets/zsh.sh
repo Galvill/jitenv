@@ -15,6 +15,9 @@ else
     __JITENV_RUNTIME_DIR="${__JITENV_RUNTIME_DIR%/}/jitenv-$UID"
 fi
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
+# See bash.sh — gates env injection in the shim so vars don't leak
+# into children of unmapped commands (issue #52).
+export __JITENV_SHELL_PID=$$
 mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
 case ":$PATH:" in
     *":$__JITENV_WRAP_DIR:"*) : ;;

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -67,22 +68,24 @@ func run(invokedAs string, args []string) error {
 
 	env := os.Environ()
 	injected := 0
-	extra, fetchErr := fetchEnv(invokedAs)
-	switch {
-	case errors.Is(fetchErr, errAgentDown):
-		if agentwarn.WarnAndWait(invokedAs) {
-			return errors.New("aborted")
+	if shouldInject() {
+		extra, fetchErr := fetchEnv(invokedAs)
+		switch {
+		case errors.Is(fetchErr, errAgentDown):
+			if agentwarn.WarnAndWait(invokedAs) {
+				return errors.New("aborted")
+			}
+		case fetchErr != nil:
+			// Other error (config parse, fetch failure). Surface to
+			// stderr but don't block — the user explicitly invoked the
+			// command.
+			fmt.Fprintf(os.Stderr, "jitenv shim: %s: %v\n", invokedAs, fetchErr)
+		default:
+			for k, v := range extra {
+				env = append(env, k+"="+v)
+			}
+			injected = len(extra)
 		}
-	case fetchErr != nil:
-		// Other error (config parse, fetch failure). Surface to
-		// stderr but don't block — the user explicitly invoked the
-		// command.
-		fmt.Fprintf(os.Stderr, "jitenv shim: %s: %v\n", invokedAs, fetchErr)
-	default:
-		for k, v := range extra {
-			env = append(env, k+"="+v)
-		}
-		injected = len(extra)
 	}
 
 	if injected > 0 && runnotice.Enabled() {
@@ -97,6 +100,29 @@ func run(invokedAs string, args []string) error {
 		return fmt.Errorf("exec %s: %w", realPath, execErr)
 	}
 	return nil
+}
+
+// shouldInject decides whether the shim should pull in mapped env
+// vars. The shell hook exports __JITENV_SHELL_PID=$$ when sourced;
+// the shim only injects when the typing shell is its direct parent —
+// either bash/zsh forked then exec'd us (Getppid matches) or, for a
+// trailing-single-command script, the shell exec'd into us in place
+// and we now wear its PID (Getpid matches). A wrapped command run as
+// a child of an unmapped command (e.g. npm spawning node) shares
+// neither identity, so it transparently execs the real binary with
+// the parent env (issue #52). When the marker is unset (no hook
+// loaded) we fall back to injecting, matching pre-fix behaviour for
+// hand-invoked wrappers.
+func shouldInject() bool {
+	raw := os.Getenv("__JITENV_SHELL_PID")
+	if raw == "" {
+		return true
+	}
+	want, err := strconv.Atoi(raw)
+	if err != nil || want <= 0 {
+		return true
+	}
+	return os.Getppid() == want || os.Getpid() == want
 }
 
 func firstArg() string {
