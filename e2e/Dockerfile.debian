@@ -1,45 +1,51 @@
 # syntax=docker/dockerfile:1
 #
-# Debian-flavoured jitenv test image. The build stage compiles jitenv
-# and the seed helper inside the image (rather than mounting the host
-# binary) so the same Dockerfile works in CI without artefact handoff.
+# Debian-flavoured jitenv test image. Installs jitenv from the
+# snapshot .deb under dist/ (built by `make e2e-build-artifacts`),
+# exercising the goreleaser nfpms layout, postinstall script, and
+# /usr/bin install path. The harness helpers (jitenv-e2e-seed,
+# jitenv-e2e-unlock) are not shipped by the package so they are
+# still built from source in a small builder stage.
 #
 # Run as user `jitenv` (uid 1000). XDG_RUNTIME_DIR is left unset so
-# agent.DefaultPaths() falls back to /tmp/jitenv-<uid>, which works
-# without systemd. If you want to exercise the XDG branch instead,
-# set XDG_RUNTIME_DIR=/run/user/1000 in the compose file.
+# agent.DefaultPaths() falls back to /tmp/jitenv-<uid>.
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.25-bookworm AS helper-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv ./cmd/jitenv \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock
 
 FROM debian:bookworm-slim AS runtime
+ARG TARGETARCH=amd64
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && \
+# debian:*-slim ships /etc/dpkg/dpkg.cfg.d/docker which excludes
+# /usr/share/doc/* and /usr/share/man/* from package installs. We need
+# the package's docs to land on disk so the install-layout scenario can
+# assert against /usr/share/doc/jitenv/{LICENSE,README.md}.
+RUN rm -f /etc/dpkg/dpkg.cfg.d/docker && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         bash zsh ca-certificates curl tini coreutils procps && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --create-home --shell /bin/bash --uid 1000 jitenv && \
     install -d -m 0700 -o jitenv -g jitenv /home/jitenv/.config/jitenv && \
-    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/scripts
+    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/scripts && \
+    install -d -m 0755 /opt/pkg
 
-COPY --from=build /out/jitenv /usr/local/bin/jitenv
-COPY --from=build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
-COPY --from=build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+# The snapshot .deb is the artefact under test. We keep a copy under
+# /opt/pkg so install-layout scenarios can re-run `dpkg -i` / `dpkg -r`
+# at runtime to capture postinstall / preremove output.
+COPY dist/jitenv_*_linux_${TARGETARCH}.deb /opt/pkg/
+RUN ln -s $(ls /opt/pkg/jitenv_*_linux_${TARGETARCH}.deb | head -n1) /opt/pkg/jitenv.deb && \
+    dpkg -i /opt/pkg/jitenv.deb
 
-# Tini reaps the agent if a scenario forgets to lock; this matters
-# because the daemon double-forks and would otherwise leak as a
-# container-level zombie on `docker compose down`.
+COPY --from=helper-build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
+COPY --from=helper-build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# `sleep infinity` keeps the container alive so scenarios can `docker
-# compose exec` into it. The healthcheck looks for the binary, so a
-# broken build fails the stack early instead of after the first scenario.
 USER jitenv
 WORKDIR /home/jitenv
 HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=3 \

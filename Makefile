@@ -3,7 +3,8 @@ BIN := jitenv
 PREFIX ?= $(HOME)/.local
 
 .PHONY: build install test fmt vet tidy lint release-snapshot clean \
-	e2e-up e2e-down e2e-down-hard e2e-build e2e-run e2e-runner-build e2e-shell
+	e2e-up e2e-down e2e-down-hard e2e-build e2e-build-artifacts \
+	e2e-run e2e-runner-build e2e-shell
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -49,7 +50,26 @@ E2E_COMPOSE := e2e/docker-compose.yml
 E2E_PROJECT := jitenv-e2e
 E2E_RUNNER  := e2e/harness/bin/runner
 
-e2e-build:
+# Snapshot artefacts under dist/ are the source of truth for the
+# package-installing distro images (debian deb, fedora rpm, alpine tar.gz).
+# We rebuild them only when something in the source tree is newer than the
+# stamp file. The stamp records the git HEAD that produced the artefacts;
+# changing branches or committing invalidates it via the find below.
+GORELEASER ?= goreleaser
+DIST_STAMP := dist/.snapshot-stamp
+DIST_SOURCES := $(shell find cmd internal pkg packaging .goreleaser.yaml LICENSE README.md go.mod go.sum -type f 2>/dev/null)
+
+e2e-build-artifacts: $(DIST_STAMP)
+
+$(DIST_STAMP): $(DIST_SOURCES)
+	@command -v $(GORELEASER) >/dev/null 2>&1 || { \
+		echo "goreleaser not found. Install via: go install github.com/goreleaser/goreleaser/v2@latest"; \
+		exit 1; \
+	}
+	$(GORELEASER) release --snapshot --clean --skip=publish,sign
+	@git rev-parse HEAD > $(DIST_STAMP)
+
+e2e-build: e2e-build-artifacts
 	docker compose -f $(E2E_COMPOSE) -p $(E2E_PROJECT) build
 
 e2e-up: e2e-build

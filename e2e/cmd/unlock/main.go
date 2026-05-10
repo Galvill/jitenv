@@ -13,9 +13,11 @@
 // `jitenv-e2e-unlock`, not `jitenv`. The helper would then re-enter
 // itself with `__agent ...` flags and crash. So this command does the
 // daemon spawn inline against the path of the real `jitenv` binary
-// (configurable via -jitenv-bin, default /usr/local/bin/jitenv). The
-// rest — pipe handover, Setsid double-fork, socket-presence wait —
-// is copied from SpawnDaemon.
+// (configurable via -jitenv-bin; resolved via $PATH when unset, so
+// the same helper works against /usr/bin/jitenv (the deb/rpm install
+// path) and /usr/local/bin/jitenv (the source-build path)). The rest
+// — pipe handover, Setsid double-fork, socket-presence wait — is
+// copied from SpawnDaemon.
 //
 // We deliberately do NOT add a `--passphrase-fd` flag to the real
 // `jitenv unlock` to avoid weakening its UX contract; the e2e harness
@@ -42,9 +44,17 @@ func main() {
 		passphrase = flag.String("passphrase", "", "passphrase (or use -passphrase-stdin)")
 		stdinPW    = flag.Bool("passphrase-stdin", false, "read passphrase from stdin (newline-terminated)")
 		idle       = flag.String("idle", "30m", "agent idle timeout")
-		jitenvBin  = flag.String("jitenv-bin", "/usr/local/bin/jitenv", "path to the jitenv binary to spawn as the daemon")
+		jitenvBin  = flag.String("jitenv-bin", "", "path to the jitenv binary to spawn as the daemon (default: resolved via $PATH)")
 	)
 	flag.Parse()
+
+	if *jitenvBin == "" {
+		p, err := exec.LookPath("jitenv")
+		if err != nil {
+			die("locate jitenv: %v (set -jitenv-bin to override)", err)
+		}
+		*jitenvBin = p
+	}
 
 	pw := []byte(*passphrase)
 	if *stdinPW {
