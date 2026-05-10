@@ -1,0 +1,92 @@
+name: install-layout-fedora
+description: |
+  Asserts the goreleaser .rpm install layout: jitenv binary at /usr/bin,
+  snippets at /usr/share/jitenv/snippets/, docs at /usr/share/doc/jitenv/.
+  Re-runs the package install at scenario time to capture the postinstall
+  script's stdout, then exercises a real removal to capture preremove.
+  An "upgrade" install (rpm -U over an existing version) must still run
+  postinstall but the preremove path must stay silent.
+
+service: fedora
+user: jitenv
+
+steps:
+  # Reset to a known-good state. A prior failed run may have left the
+  # package erased. rpm -e ignores "not installed" via the || true so
+  # the subsequent install always lays every file down fresh.
+  - name: ensure-installed
+    user: root
+    exec: rpm -e jitenv >/dev/null 2>&1 || true; rpm -i /opt/pkg/jitenv.rpm >/dev/null 2>&1
+
+  - name: jitenv-version
+    exec: jitenv version
+  - name: assert-version-ok
+    assert_exit_code: 0
+
+  - name: jitenv-binary-path
+    exec: command -v jitenv
+  - name: assert-binary-path
+    assert_stdout_equals: "/usr/bin/jitenv"
+
+  - name: bash-snippet-exists
+    exec: test -f /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-snippet
+    assert_exit_code: 0
+
+  - name: zsh-snippet-exists
+    exec: test -f /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-snippet
+    assert_exit_code: 0
+
+  - name: bash-snippet-matches-hook
+    exec: diff -u <(jitenv hook bash) /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-match
+    assert_exit_code: 0
+
+  - name: zsh-snippet-matches-hook
+    exec: diff -u <(jitenv hook zsh) /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-match
+    assert_exit_code: 0
+
+  - name: license-doc-exists
+    exec: test -f /usr/share/doc/jitenv/LICENSE
+  - name: assert-license
+    assert_exit_code: 0
+
+  - name: readme-doc-exists
+    exec: test -f /usr/share/doc/jitenv/README.md
+  - name: assert-readme
+    assert_exit_code: 0
+
+  # Postinstall message on an upgrade-style reinstall: rpm -U
+  # --replacepkgs runs the preremove of the existing copy with arg 1
+  # (upgrade) and the postinstall of the new copy.
+  - name: rpm-reinstall
+    user: root
+    exec: rpm -U --replacepkgs /opt/pkg/jitenv.rpm 2>&1
+  - name: assert-postinstall-hint
+    assert_stdout_contains: "jitenv hook install"
+
+  # Preremove on upgrade must stay silent. "NOT removed automatically"
+  # is the unique preremove-only sentence (postinstall doesn't contain it).
+  - name: assert-preremove-silent-on-upgrade
+    target: rpm-reinstall
+    assert_stdout_not_contains: "NOT removed automatically"
+
+  # Real removal: rpm -e invokes preremove with arg 0, which prints
+  # the manual-cleanup reminder.
+  - name: rpm-remove
+    user: root
+    exec: rpm -e jitenv 2>&1
+  - name: assert-preremove-reminder
+    assert_stdout_contains: "NOT removed automatically"
+  - name: assert-preremove-mentions-bashrc
+    target: rpm-remove
+    assert_stdout_contains: ".bashrc"
+
+  # Reinstall so subsequent scenarios on this image are unaffected.
+  - name: rpm-reinstall-after-remove
+    user: root
+    exec: rpm -i /opt/pkg/jitenv.rpm
+  - name: assert-reinstall-ok
+    assert_exit_code: 0

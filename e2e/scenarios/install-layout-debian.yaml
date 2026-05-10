@@ -1,0 +1,98 @@
+name: install-layout-debian
+description: |
+  Asserts the goreleaser .deb install layout: jitenv binary at /usr/bin,
+  snippets at /usr/share/jitenv/snippets/, docs at /usr/share/doc/jitenv/.
+  Re-runs the package install at scenario time to capture the postinstall
+  script's stdout, then exercises a real removal to capture preremove.
+  An "upgrade" install (dpkg -i over an existing version) must still run
+  postinstall but the preremove path must stay silent.
+
+service: debian
+user: jitenv
+
+steps:
+  # Reset to a known-good state. A prior failed run may have left the
+  # package removed (docs gone) or partially upgraded (dpkg -i over the
+  # same version doesn't restore deleted files). Purge first so the
+  # subsequent install always lays every file down fresh.
+  - name: ensure-installed
+    user: root
+    exec: dpkg --purge jitenv >/dev/null 2>&1; dpkg -i /opt/pkg/jitenv.deb >/dev/null 2>&1
+
+  - name: jitenv-version
+    exec: jitenv version
+  - name: assert-version-ok
+    assert_exit_code: 0
+
+  - name: jitenv-binary-path
+    exec: command -v jitenv
+  - name: assert-binary-path
+    assert_stdout_equals: "/usr/bin/jitenv"
+
+  - name: bash-snippet-exists
+    exec: test -f /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-snippet
+    assert_exit_code: 0
+
+  - name: zsh-snippet-exists
+    exec: test -f /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-snippet
+    assert_exit_code: 0
+
+  # The shipped snippet must be byte-identical to what `jitenv hook bash`
+  # emits today; otherwise users get drift between `hook install` and a
+  # source-the-snippet workflow.
+  - name: bash-snippet-matches-hook
+    exec: diff -u <(jitenv hook bash) /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-match
+    assert_exit_code: 0
+
+  - name: zsh-snippet-matches-hook
+    exec: diff -u <(jitenv hook zsh) /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-match
+    assert_exit_code: 0
+
+  - name: license-doc-exists
+    exec: test -f /usr/share/doc/jitenv/LICENSE
+  - name: assert-license
+    assert_exit_code: 0
+
+  - name: readme-doc-exists
+    exec: test -f /usr/share/doc/jitenv/README.md
+  - name: assert-readme
+    assert_exit_code: 0
+
+  # Postinstall message: the package is already installed in the image,
+  # so re-installing is the dpkg "upgrade" path - postinstall still runs
+  # and prints the activation hint.
+  - name: dpkg-reinstall
+    user: root
+    exec: dpkg -i /opt/pkg/jitenv.deb 2>&1
+  - name: assert-postinstall-hint
+    assert_stdout_contains: "jitenv hook install"
+
+  # Preremove on upgrade must stay silent: dpkg -i over an existing
+  # version invokes preremove with arg "upgrade", which the script
+  # short-circuits. "NOT removed automatically" is the unique
+  # preremove-only sentence (postinstall doesn't contain it).
+  - name: assert-preremove-silent-on-upgrade
+    target: dpkg-reinstall
+    assert_stdout_not_contains: "NOT removed automatically"
+
+  # Real removal: dpkg -r invokes preremove with arg "remove", which
+  # prints the manual-cleanup reminder.
+  - name: dpkg-remove
+    user: root
+    exec: dpkg -r jitenv 2>&1
+  - name: assert-preremove-reminder
+    assert_stdout_contains: "NOT removed automatically"
+  - name: assert-preremove-mentions-bashrc
+    target: dpkg-remove
+    assert_stdout_contains: ".bashrc"
+
+  # Reinstall so subsequent scenarios on this image are unaffected.
+  - name: dpkg-reinstall-after-remove
+    user: root
+    exec: dpkg -i /opt/pkg/jitenv.deb
+  - name: assert-reinstall-ok
+    assert_exit_code: 0

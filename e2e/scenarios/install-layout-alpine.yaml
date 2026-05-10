@@ -1,0 +1,51 @@
+name: install-layout-alpine
+description: |
+  Asserts the goreleaser .tar.gz install layout once extracted into the
+  same paths used by the .deb / .rpm. The tar.gz ships only the binary,
+  snippets, and docs - no postinstall / preremove scripts - so this
+  scenario covers layout only; postinstall / preremove are covered by
+  the debian and fedora variants.
+
+service: alpine
+user: jitenv
+
+steps:
+  - name: jitenv-version
+    exec: jitenv version
+  - name: assert-version-ok
+    assert_exit_code: 0
+
+  - name: jitenv-binary-path
+    exec: command -v jitenv
+  - name: assert-binary-path
+    assert_stdout_equals: "/usr/bin/jitenv"
+
+  - name: bash-snippet-exists
+    exec: test -f /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-snippet
+    assert_exit_code: 0
+
+  - name: zsh-snippet-exists
+    exec: test -f /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-snippet
+    assert_exit_code: 0
+
+  - name: bash-snippet-matches-hook
+    exec: diff -u <(jitenv hook bash) /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-match
+    assert_exit_code: 0
+
+  - name: zsh-snippet-matches-hook
+    exec: diff -u <(jitenv hook zsh) /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-match
+    assert_exit_code: 0
+
+  - name: license-doc-exists
+    exec: test -f /usr/share/doc/jitenv/LICENSE
+  - name: assert-license
+    assert_exit_code: 0
+
+  - name: readme-doc-exists
+    exec: test -f /usr/share/doc/jitenv/README.md
+  - name: assert-readme
+    assert_exit_code: 0

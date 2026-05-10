@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+#
+# Fedora-flavoured jitenv test image. Installs jitenv from the snapshot
+# .rpm under dist/ (built by `make e2e-build-artifacts`), exercising the
+# rpm-side of the goreleaser nfpms layout, postinstall script, and
+# /usr/bin install path. Without this image the rpm path is uncovered.
+#
+# Run as user `jitenv` (uid 1000). XDG_RUNTIME_DIR is left unset so
+# agent.DefaultPaths() falls back to /tmp/jitenv-<uid>.
+
+FROM golang:1.25-bookworm AS helper-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock
+
+FROM fedora:40 AS runtime
+ARG TARGETARCH=amd64
+RUN dnf install -y --setopt=install_weak_deps=False --nodocs \
+        bash zsh ca-certificates curl tini coreutils diffutils procps-ng \
+        shadow-utils util-linux rpm && \
+    dnf clean all && rm -rf /var/cache/dnf && \
+    useradd --create-home --shell /bin/bash --uid 1000 jitenv && \
+    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/.config/jitenv && \
+    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/scripts && \
+    install -d -m 0755 /opt/pkg
+
+# The snapshot .rpm is the artefact under test. Kept under /opt/pkg so
+# install-layout scenarios can re-run `rpm -i` / `rpm -e` at runtime to
+# capture postinstall / preremove output.
+COPY dist/jitenv_*_linux_${TARGETARCH}.rpm /opt/pkg/
+RUN ln -s $(ls /opt/pkg/jitenv_*_linux_${TARGETARCH}.rpm | head -n1) /opt/pkg/jitenv.rpm && \
+    rpm -i /opt/pkg/jitenv.rpm
+
+COPY --from=helper-build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
+COPY --from=helper-build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+USER jitenv
+WORKDIR /home/jitenv
+HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=3 \
+    CMD jitenv version || exit 1
+CMD ["sleep", "infinity"]

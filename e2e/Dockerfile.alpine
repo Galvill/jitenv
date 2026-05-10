@@ -1,29 +1,48 @@
 # syntax=docker/dockerfile:1
 #
-# Alpine (musl) jitenv test image. Building jitenv against musl is
-# the point — SO_PEERCRED, Setsid double-fork, syscall.Exec all need
-# to round-trip a non-glibc libc. CGO is off so we don't drag in
-# musl-dev unnecessarily.
+# Alpine (musl) jitenv test image, install-from-artifact variant.
+# Extracts the snapshot .tar.gz under dist/ and lays the contents out
+# to match the goreleaser nfpms layout so the install-layout scenario
+# can assert against the same paths used by the .deb / .rpm.
+#
+# The tar.gz only ships the binary, snippets, and docs (no
+# postinstall / preremove scripts), so this image deliberately does
+# NOT exercise those scripts; that's covered by debian + fedora.
+#
+# Harness helpers (jitenv-e2e-seed, jitenv-e2e-unlock) are still built
+# from source against musl in a small builder stage.
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.25-alpine AS helper-build
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv ./cmd/jitenv \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock
 
 FROM alpine:3.20 AS runtime
-RUN apk add --no-cache bash zsh ca-certificates curl tini coreutils procps shadow util-linux && \
+ARG TARGETARCH=amd64
+RUN apk add --no-cache --no-progress \
+        bash zsh ca-certificates curl tini coreutils procps shadow util-linux && \
     useradd --create-home --shell /bin/bash --uid 1000 jitenv && \
     install -d -m 0700 -o jitenv -g jitenv /home/jitenv/.config/jitenv && \
-    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/scripts
+    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/scripts && \
+    install -d -m 0755 /opt/pkg
 
-COPY --from=build /out/jitenv /usr/local/bin/jitenv
-COPY --from=build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
-COPY --from=build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+COPY dist/jitenv_*_linux_${TARGETARCH}.tar.gz /opt/pkg/
+RUN ln -s $(ls /opt/pkg/jitenv_*_linux_${TARGETARCH}.tar.gz | head -n1) /opt/pkg/jitenv.tar.gz && \
+    tmp=$(mktemp -d) && \
+    tar -C "$tmp" -xzf /opt/pkg/jitenv.tar.gz && \
+    install -Dm0755 "$tmp/jitenv" /usr/bin/jitenv && \
+    install -Dm0644 "$tmp/snippets/bash.sh" /usr/share/jitenv/snippets/bash.sh && \
+    install -Dm0644 "$tmp/snippets/zsh.sh" /usr/share/jitenv/snippets/zsh.sh && \
+    install -Dm0644 "$tmp/LICENSE" /usr/share/doc/jitenv/LICENSE && \
+    install -Dm0644 "$tmp/README.md" /usr/share/doc/jitenv/README.md && \
+    rm -rf "$tmp"
+
+COPY --from=helper-build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
+COPY --from=helper-build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
 
 ENTRYPOINT ["/sbin/tini", "--"]
 USER jitenv

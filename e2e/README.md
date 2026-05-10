@@ -23,11 +23,21 @@ Failed runs leave a self-contained artefact directory under
 
 `e2e/docker-compose.yml` runs:
 
-| service       | role                                                                         |
-| ------------- | ---------------------------------------------------------------------------- |
-| `debian`      | Debian bookworm-slim (glibc) test container; bash + zsh + non-root user      |
-| `alpine`      | Alpine 3.20 (musl) test container; same setup, exercises the non-glibc path  |
-| `localstack`  | LocalStack 3.x with Secrets Manager, seeded with one JSON secret             |
+| service          | role                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `debian`         | Debian bookworm-slim (glibc); installs jitenv from `dist/*.deb` (covers nfpms layout + postinstall)   |
+| `fedora`         | Fedora 40 (glibc); installs jitenv from `dist/*.rpm` (covers rpm layout + postinstall)                |
+| `alpine`         | Alpine 3.20 (musl); extracts `dist/*.tar.gz` into the deb/rpm layout (covers archive contents)        |
+| `alpine-source`  | Alpine 3.20 (musl); builds jitenv from `HEAD` so the source build path against musl stays exercised   |
+| `localstack`     | LocalStack 3.x with Secrets Manager, seeded with one JSON secret                                      |
+
+The three install-from-artefact services (`debian`, `fedora`, `alpine`)
+depend on `dist/` being populated by `make e2e-build-artifacts`, which
+runs `goreleaser release --snapshot --clean --skip=publish,sign` and
+records the source HEAD in `dist/.snapshot-stamp`. The stamp's mtime
+is compared against the source tree by Make, so subsequent
+`make e2e-up` cycles skip the rebuild when nothing relevant has
+changed. Force a rebuild by deleting the stamp.
 
 Each distro container has:
 
@@ -116,22 +126,49 @@ assertion refer back to an earlier step explicitly.
 
 ## Adding a new distro
 
-1. Create `e2e/Dockerfile.<distro>` using the existing two as a
-   template. Multi-stage build: copy `cmd/jitenv` and `e2e/seed` from
-   the build stage into the runtime stage.
-2. The runtime image MUST install:
+The default model is **install from the goreleaser artefact**, not
+build-from-source. We only keep one source-build image
+(`alpine-source`) so the musl Go build path stays exercised against
+HEAD; everything else mirrors what real users install.
+
+1. Pick the artefact format your distro consumes from `dist/` after
+   `make e2e-build-artifacts`:
+   - `.deb` for Debian / Ubuntu derivatives — `dpkg -i`
+   - `.rpm` for Fedora / RHEL / openSUSE derivatives — `rpm -i` (or
+     `dnf install ./pkg.rpm`)
+   - `.tar.gz` for distros without a goreleaser nfpms format
+     (Alpine, Arch); extract and lay the contents out to match the
+     deb/rpm paths so install-layout scenarios stay portable
+2. Create `e2e/Dockerfile.<distro>` modelled on the closest existing
+   one. Use a small `helper-build` stage to compile
+   `e2e/seed` and `e2e/cmd/unlock` (those are NOT shipped by the
+   package). Then in the runtime stage:
+   - `COPY dist/jitenv_*_linux_${TARGETARCH}.<ext> /opt/pkg/`
+   - install via the distro's package manager
+   - keep the artefact under `/opt/pkg/` so install-layout scenarios
+     can re-run `dpkg -i` / `rpm -i` / `rpm -e` at runtime to capture
+     postinstall / preremove output without rebuilding the image
+3. The runtime image MUST install:
    - `bash`, `zsh`, `ca-certificates`, `curl`, `tini`, `coreutils`,
-     `procps`
-   - `script(1)` — bsdutils on Debian, util-linux on Alpine
-3. Provision a non-root `jitenv` user (uid 1000) with `~/.config/jitenv/`
-   and `~/scripts/` pre-created (mode 0700).
-4. Add a `<distro>:` service to `e2e/docker-compose.yml`. Mount
+     `procps` (or `procps-ng` on Fedora)
+   - `script(1)` — bsdutils on Debian, util-linux on Alpine /
+     Fedora — only if a future scenario adds back a PTY-driven step
+4. Provision a non-root `jitenv` user (uid 1000) with
+   `~/.config/jitenv/` and `~/scripts/` pre-created (mode 0700).
+5. Add a `<distro>:` service to `e2e/docker-compose.yml`. Mount
    `/tmp` as tmpfs owned by uid 1000 so `agent.DefaultPaths()` lands
    somewhere fresh per `make e2e-up`.
-5. The new service's healthcheck should run `jitenv version` — that
-   way a broken cross-compile fails the stack startup, not the
-   first scenario.
-6. Bump `service:` in any new scenarios to point at it.
+6. The new service's healthcheck should run `jitenv version` — that
+   way a broken artefact fails the stack startup, not the first
+   scenario.
+7. Add an `install-layout-<distro>.yaml` scenario alongside the
+   existing ones if you want layout / postinstall coverage.
+8. Bump `service:` in any new functional scenarios to point at it.
+
+If you need a true source-build image (e.g. to validate a new libc
+combination at HEAD before the next release), follow the
+`alpine-source` template — it has no dependency on `dist/` and is
+useful for "does it even compile" smoke tests.
 
 ## Adding a new source backend
 

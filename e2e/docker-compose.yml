@@ -1,8 +1,9 @@
 # jitenv e2e stack. Bring up with `make e2e-up`.
 #
-# Two distros (debian-glibc, alpine-musl) sit alongside a LocalStack
-# instance for the AWS Secrets Manager source. The harness runs on
-# the host and shells into a chosen service via `docker compose exec`.
+# Three install-from-package distros (debian-glibc deb, fedora-glibc rpm,
+# alpine-musl tar.gz) plus one source-built alpine image so the musl
+# build path against current HEAD is still exercised. All install
+# variants depend on `dist/` being populated by `make e2e-build-artifacts`.
 #
 # All services are unprivileged. The runtime dir for jitenv falls back
 # to /tmp/jitenv-<uid> automatically (see internal/agent/paths.go).
@@ -10,9 +11,8 @@
 services:
   debian:
     build:
-      # Build context is the repo root so the Dockerfile can `COPY .`
-      # without a subtree-mount; this keeps the e2e image self-contained
-      # and means CI reproduction needs nothing more than `docker compose build`.
+      # Build context is the repo root so the Dockerfile can `COPY dist/...`
+      # and reach the snapshot .deb produced by goreleaser.
       context: ..
       dockerfile: e2e/Dockerfile.debian
     image: jitenv-e2e-debian
@@ -29,12 +29,44 @@ services:
       JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
       LOCALSTACK_HOSTNAME: localstack
 
+  fedora:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.fedora
+    image: jitenv-e2e-fedora
+    container_name: jitenv-e2e-fedora
+    init: true
+    tmpfs:
+      - /tmp:exec,uid=1000,gid=1000
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
+      LOCALSTACK_HOSTNAME: localstack
+
   alpine:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.alpine
     image: jitenv-e2e-alpine
     container_name: jitenv-e2e-alpine
+    init: true
+    tmpfs:
+      - /tmp:exec,uid=1000,gid=1000
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
+      LOCALSTACK_HOSTNAME: localstack
+
+  alpine-source:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.alpine-source
+    image: jitenv-e2e-alpine-source
+    container_name: jitenv-e2e-alpine-source
     init: true
     tmpfs:
       - /tmp:exec,uid=1000,gid=1000
