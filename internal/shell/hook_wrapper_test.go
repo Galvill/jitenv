@@ -296,11 +296,9 @@ fakecmd
 	))
 	cmd.Env = append(os.Environ(),
 		"XDG_RUNTIME_DIR="+runtimeDir,
-		"JITENV_HOOK_DELAY=1", // shrink the 10s wait
+		"JITENV_HOOK_DELAY=1",
 	)
-	start := time.Now()
 	out, err := cmd.CombinedOutput()
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("bash run: %v\noutput=%s", err, out)
 	}
@@ -309,11 +307,10 @@ fakecmd
 		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
 	}
 	if !strings.Contains(got, "RAN") {
-		t.Errorf("expected fakecmd to still run after the countdown; got:\n%s", got)
+		t.Errorf("expected fakecmd to still run; got:\n%s", got)
 	}
-	if elapsed < 800*time.Millisecond {
-		t.Errorf("expected the shim to wait ~1s; only %s elapsed", elapsed)
-	}
+	// Stdin is a pipe (bash -c), so WarnAndWait short-circuits the
+	// countdown — we no longer assert on elapsed time. See #64.
 }
 
 // TestBashWrapperOutsideMappedDir exercises the "outside" case: cd

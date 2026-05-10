@@ -34,9 +34,11 @@ jitenv is a 3-process design that keeps secrets out of the parent shell:
 The bash/zsh snippets switch on the exit code of `jitenv is-mapped`:
 - **0** → mapped, route through `jitenv run`.
 - **1** → not mapped, run normally.
-- **2** → agent unreachable. The hook prints a red 10s warning and lets Ctrl-C abort. This is the "agent is locked" UX path; do not collapse it into 1.
+- **2** → config unreadable. Run normally — no env injection, no warning. Treated like an unmapped path; only `JITENV_HOOK_DEBUG=1` reveals it.
 
-See `internal/cli/ismapped.go` for the exit-code contract and `bash.sh:74-100` for the dispatch.
+`jitenv is-mapped` reads the config directly and never contacts the agent, so exit 2 always means a missing/malformed `config.toml`, never an agent-down condition. The agent-down UX (red countdown, "Press Enter to skip, Ctrl+C to abort") lives in `internal/agentwarn/agentwarn.go` and only fires inside `jitenv run` / the cwd_glob shim — i.e. *after* `is-mapped` returned 0.
+
+See `internal/cli/ismapped.go` for the exit-code contract and `bash.sh` for the dispatch.
 
 ### Source plugin model
 

@@ -130,7 +130,7 @@ make test            # go test ./...
 make install         # installs to $PREFIX/bin (default ~/.local/bin)
 ```
 
-Go 1.22+ required.
+Go 1.25+ required (see `go.mod`).
 
 ## License
 
