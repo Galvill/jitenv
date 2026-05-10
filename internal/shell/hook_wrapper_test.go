@@ -576,3 +576,137 @@ ls $__JITENV_WRAP_DIR
 		t.Errorf("after edit: expected both firstcmd and secondcmd; got:\n%s", after)
 	}
 }
+
+// TestBashWrapperNoLeakIntoChildProcesses is the regression for
+// issue #52: in a cwd_glob-mapped folder where `fakecmd` is mapped,
+// running an unmapped `fakeparent` that internally invokes `fakecmd`
+// must NOT inject env vars into the inner fakecmd. The wrapper dir
+// is on $PATH for the whole shell tree, so without a guard the
+// inner fakecmd lookup hits the wrapper symlink → shim → injection.
+//
+// Two assertions in the same shell:
+//
+//  1. Direct invocation of fakecmd (typed at the prompt) DOES inject —
+//     the desired behaviour and a guard against an over-zealous fix.
+//  2. Indirect invocation via fakeparent (the npm → node case from
+//     the issue) does NOT inject.
+func TestBashWrapperNoLeakIntoChildProcesses(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdPath := filepath.Join(fakeBin, "fakecmd")
+	if err := os.WriteFile(cmdPath, []byte("#!/bin/sh\nprintf 'FOO=%s\\n' \"${FOO:-MISSING}\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Stand-in for npm: an unmapped script that runs fakecmd. The
+	// wrapper dir sits at the head of $PATH, so the bare `fakecmd`
+	// lookup inside this script lands on the symlink → shim. We
+	// capture fakecmd's output via $(...) so the surrounding shell
+	// has to fork+wait — matching how npm/yarn/pnpm actually run
+	// node (they keep running to capture child output rather than
+	// `exec`-ing into it).
+	parentPath := filepath.Join(fakeBin, "fakeparent")
+	if err := os.WriteFile(parentPath, []byte("#!/bin/bash\nout=$(fakecmd)\nprintf '%s\\n' \"$out\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-noleak")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, _ := config.Load(cfgPath)
+	key, _ := config.DeriveKeyFromMeta(cfg, pw)
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{"my-secret": "from-cwd"}},
+	}
+	cfg.Mappings = []config.Mapping{{
+		CwdGlob:  projectDir,
+		Commands: []string{"fakecmd"},
+		Vars:     []config.VarRef{{Name: "FOO", Source: "n", Ref: "my-secret"}},
+	}}
+	tmp, _ := os.CreateTemp(dir, "save-*.toml")
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	paths, _ := agent.DefaultPaths()
+
+	pr, pw2, _ := os.Pipe()
+	daemon := exec.Command(bin, "__agent", "--key-fd=3", "--config="+cfgPath, "--idle=10s")
+	daemon.ExtraFiles = []*os.File{pr}
+	daemon.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	if err := daemon.Start(); err != nil {
+		t.Fatalf("daemon: %v", err)
+	}
+	pr.Close()
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	pw2.Close()
+	defer func() { _ = daemon.Process.Kill() }()
+
+	cli := agent.NewClient(paths.Socket)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := cli.Status(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	binDir := filepath.Dir(bin)
+	// Trailing `:` after each invocation defeats bash's
+	// exec-into-the-last-command optimisation, which would otherwise
+	// collapse the whole chain into a single PID and make the test
+	// lie about who fakecmd's parent is.
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
+eval "$(%s/jitenv hook bash)"
+cd %q
+__jitenv_chpwd
+echo '--- direct ---'
+fakecmd
+:
+echo '--- indirect ---'
+fakeparent
+:
+`, binDir, fakeBin, cfgPath, binDir, projectDir,
+	))
+	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash run: %v\noutput=%s", err, out)
+	}
+	got := string(out)
+	t.Logf("bash output:\n%s", got)
+
+	direct := sectionBetween(got, "--- direct ---", "--- indirect ---")
+	indirect := sectionBetween(got, "--- indirect ---", "")
+	if !strings.Contains(direct, "FOO=from-cwd") {
+		t.Errorf("direct: expected FOO=from-cwd; got:\n%s", direct)
+	}
+	if !strings.Contains(indirect, "FOO=MISSING") {
+		t.Errorf("indirect: expected FOO=MISSING (no leak into child of unmapped command); got:\n%s", indirect)
+	}
+}

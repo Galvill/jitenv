@@ -22,6 +22,10 @@ else
     __JITENV_RUNTIME_DIR="${__JITENV_RUNTIME_DIR%/}/jitenv-$UID"
 fi
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
+# Recorded so the shim can tell "this shell typed the command" from
+# "an unmapped descendant spawned the wrapped binary"; only the former
+# should pull in mapped env vars (issue #52).
+export __JITENV_SHELL_PID=$$
 mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
 case ":$PATH:" in
     *":$__JITENV_WRAP_DIR:"*) : ;;
