@@ -3,24 +3,16 @@
 # re-run the first token through `jitenv run` if it maps to a configured
 # file. Only acts on commands whose first token resolves to /, ./ or ../
 # paths (not PATH lookups) — keeps the hook fast and predictable.
+#
+# The runtime-dir + config-path values below are baked in by
+# `jitenv hook bash` at print time so the shell never duplicates the
+# Go side's path resolution. See internal/shell/render.go.
 
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 __JITENV_LOADED=1
 
-# Per-shell wrapper-symlink dir. The chpwd helper populates it on
-# directory changes that hit a cwd_glob mapping; an empty dir is a
-# silent fall-through. We pre-create it and prepend to $PATH once,
-# right here, so PATH stays stable for the rest of the shell's life.
-if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-    # Strip a trailing slash so the concat doesn't yield "//jitenv"
-    # for users whose XDG_RUNTIME_DIR happens to end in /. The Go
-    # side normalises with filepath.Join; the shell needs to do it
-    # by hand or the wrapper dir lands in $PATH with double slashes.
-    __JITENV_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/jitenv"
-else
-    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}"
-    __JITENV_RUNTIME_DIR="${__JITENV_RUNTIME_DIR%/}/jitenv-$UID"
-fi
+__JITENV_RUNTIME_DIR={{RuntimeDir}}
+__JITENV_CFG_PATH={{ConfigPath}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # Recorded so the shim can tell "this shell typed the command" from
 # "an unmapped descendant spawned the wrapped binary"; only the former
@@ -32,43 +24,33 @@ case ":$PATH:" in
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
 esac
 
-# chpwd hook: bash has no native chpwd, so we run a tiny PWD-diff
-# in PROMPT_COMMAND. The diff makes the per-prompt cost a single
-# string compare; the full helper only fires on actual directory
-# changes.
-# Resolve the config-file path the same way the Go side does.
+# Tiny per-shell $JITENV_CONFIG override so users can re-point one
+# shell at a different config without re-sourcing the hook. The
+# baked-in default (see __JITENV_CFG_PATH above) is what `jitenv`
+# itself resolves; this function only exists so callers can query the
+# effective config path from inside the shell.
 __jitenv_cfg_path() {
     if [[ -n "${JITENV_CONFIG:-}" ]]; then
         printf '%s' "$JITENV_CONFIG"
     else
-        printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/jitenv/config.toml"
+        printf '%s' "$__JITENV_CFG_PATH"
     fi
 }
-# stat -c is GNU; -f is BSD/macOS. Echo 0 on any failure so the
-# comparison treats "missing" identically across runs.
-__jitenv_cfg_mtime() {
-    local cfg="$1"
-    [[ -e "$cfg" ]] || { printf '0'; return; }
-    stat -c %Y "$cfg" 2>/dev/null || stat -f %m "$cfg" 2>/dev/null || printf '0'
-}
+# chpwd hook: bash has no native chpwd, so we drive `jitenv __chpwd`
+# from PROMPT_COMMAND. The Go side compares pwd and the config-file
+# mtime against per-shell sidecar state ($__JITENV_RUNTIME_DIR/shells/
+# $$/last-mtime + the wrapper-dir contents) and short-circuits when
+# nothing changed. One fork per prompt; ~50us when Go has nothing to
+# do. Keeping the state in Go means a fresh `eval "$(jitenv hook bash)"`
+# doesn't cause a spurious reconcile.
 __jitenv_chpwd() {
-    local cfg mtime
-    cfg="$(__jitenv_cfg_path)"
-    mtime="$(__jitenv_cfg_mtime "$cfg")"
-    # Fire when EITHER the directory changed OR the config file's
-    # mtime changed since the last fire. The mtime branch handles
-    # "user edits config while sitting in the mapped dir": symlinks
-    # get re-reconciled on the next prompt without requiring a cd.
-    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" || "$mtime" != "${__JITENV_LAST_CFG_MTIME-}" ]]; then
-        # No 2>/dev/null on purpose: the chpwd subcommand is silent
-        # in normal operation (it only writes to stderr when
-        # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
-        # hide debug diagnostics + a "jitenv: command not found"
-        # if the binary ever falls off $PATH mid-session.
-        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
-        __JITENV_LAST_PWD="$PWD"
-        __JITENV_LAST_CFG_MTIME="$mtime"
-    fi
+    # No 2>/dev/null on purpose: the chpwd subcommand is silent
+    # in normal operation (it only writes to stderr when
+    # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
+    # hide debug diagnostics + a "jitenv: command not found"
+    # if the binary ever falls off $PATH mid-session.
+    jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    __JITENV_LAST_PWD="$PWD"
 }
 # Run once at hook-load time so the wrapper dir is populated before
 # the first command in this shell.
