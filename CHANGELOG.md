@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.5.0](https://github.com/Galvill/jitenv/compare/v0.4.0...v0.5.0) (2026-05-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* configs containing `[sources.<name>]` of type `github` will fail `jitenv config validate`. Remove the entry (and any mappings that referenced it) from your `config.toml`.
+
+* remove the github Variables source backend ([3dc2804](https://github.com/Galvill/jitenv/commit/3dc28045c1d50351668010d1290a60c62b48d39a))
+
+
+### Features
+
+* display version via -v, --help footer, and TUI ([f02cad1](https://github.com/Galvill/jitenv/commit/f02cad1aff43ba477e64847a404f1071e0db2f70))
+* **e2e:** containerised harness with two distros + LocalStack ([cbd1848](https://github.com/Galvill/jitenv/commit/cbd18488dc52deff53517881935ea0e130387c18))
+* **e2e:** containerised harness with two distros + LocalStack ([fad6bff](https://github.com/Galvill/jitenv/commit/fad6bffdbddd159c08edf423252dddc28258466f))
+* **e2e:** install jitenv from release artefacts ([ac6b6e6](https://github.com/Galvill/jitenv/commit/ac6b6e6ba8db5985a754d8cf7923e4e3dbe2a35f))
+* **e2e:** install jitenv from release artefacts (closes [#53](https://github.com/Galvill/jitenv/issues/53)) ([1aad675](https://github.com/Galvill/jitenv/commit/1aad67530342a99107c050023d7a3d0e96e45210))
+* macOS port (darwin/amd64 + darwin/arm64) ([2b104a8](https://github.com/Galvill/jitenv/commit/2b104a85a5206ea74c9b3ec0bfe7be184d5d2265))
+* **run:** opt-in pre-run notice on stderr ([#45](https://github.com/Galvill/jitenv/issues/45)) ([4a23d5a](https://github.com/Galvill/jitenv/commit/4a23d5a5997d1ff1afc0832cfde2d30087aae034))
+* **run:** opt-in pre-run notification of injected variable count ([2b399ba](https://github.com/Galvill/jitenv/commit/2b399badbb279be562464db6bcd3ad081f13eda0))
+* **run:** turn on the pre-run notice by default ([e6bb499](https://github.com/Galvill/jitenv/commit/e6bb499aa9df7a2ead1b9c4a87569bfeeadcd1ac))
+* **site:** add jitenv.com landing page served from /docs ([3b89f2e](https://github.com/Galvill/jitenv/commit/3b89f2e334438d496333a5cbd30e24dc87c54a14))
+* **site:** add jitenv.com landing page served from /docs ([8a71e04](https://github.com/Galvill/jitenv/commit/8a71e04d09daf1c074ad40b2ae63a48d77950570))
+* surface jitenv version via -v/--version, --help, and TUI footer ([f14db37](https://github.com/Galvill/jitenv/commit/f14db37c2fc8bcc1de0611bb8226a7cf8398a026))
+* **tui:** align Save/Back/Apply/Quit nav conventions across screens ([2b1b0ea](https://github.com/Galvill/jitenv/commit/2b1b0ea7200c71d5bc0160915a6bce5ae0687ec9))
+* **tui:** align Save/Back/Apply/Quit nav conventions across screens ([bf7a8a9](https://github.com/Galvill/jitenv/commit/bf7a8a9ad4697c8574090c4306677accca6bd5d0))
+* **tui:** switch cwd_glob commands editor to a list page ([350f8fb](https://github.com/Galvill/jitenv/commit/350f8fbbc1a0dbea8778345c95971ad14db73443))
+* **tui:** switch cwd_glob commands editor to a list page (closes [#38](https://github.com/Galvill/jitenv/issues/38)) ([f4421fc](https://github.com/Galvill/jitenv/commit/f4421fc702789133aba625967ccb565c6b9f0997))
+
+
+### Bug Fixes
+
+* **hook:** non-interactive UX, stale docs, dead code ([#65](https://github.com/Galvill/jitenv/issues/65)) ([59774b3](https://github.com/Galvill/jitenv/commit/59774b32b0bef3bb8f3097b114b59c0776860e5b))
+* **hook:** strip trailing slash from XDG_RUNTIME_DIR ([566d667](https://github.com/Galvill/jitenv/commit/566d667278888fab697c0e9ef7317ba8fdf1e119))
+* **hook:** strip trailing slash from XDG_RUNTIME_DIR / TMPDIR ([5571308](https://github.com/Galvill/jitenv/commit/557130899f420f673fae89d5ddc6226c2e169ec4))
+* **shim:** emit pre-run notice for cwd_glob commands too ([47e12f6](https://github.com/Galvill/jitenv/commit/47e12f68df6f814ccee886669e8d512cedacd153))
+* **shim:** only inject env vars for direct shell invocations ([#52](https://github.com/Galvill/jitenv/issues/52)) ([e3fbf4e](https://github.com/Galvill/jitenv/commit/e3fbf4e115bca3be5a50d72d3c68b53f000182c8))
+* **shim:** only inject env vars for direct shell invocations ([#52](https://github.com/Galvill/jitenv/issues/52)) ([5db4466](https://github.com/Galvill/jitenv/commit/5db4466318e96aade96cbf791ead3523dec26290))
+* **tui,cli:** rework footer layout and --help trailing newline ([924a6fd](https://github.com/Galvill/jitenv/commit/924a6fdaeb8624374aa40db68225f836ee2027fd))
+* **tui:** align footer's left padding with the status bar ([29844bd](https://github.com/Galvill/jitenv/commit/29844bd550a3226c26cc883b46a9635ae5f4d64a))
+* **tui:** left-align global footer ([539b824](https://github.com/Galvill/jitenv/commit/539b824a2a6252997676c5ba5773df50335c7ed4))
+
 ## [0.4.0](https://github.com/Galvill/jitenv/compare/v0.3.0...v0.4.0) (2026-05-08)
 
 
