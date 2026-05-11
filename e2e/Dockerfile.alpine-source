@@ -13,7 +13,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv ./cmd/jitenv \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-reload ./e2e/cmd/reload
 
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache bash zsh ca-certificates curl tini coreutils procps shadow util-linux && \
@@ -24,6 +25,7 @@ RUN apk add --no-cache bash zsh ca-certificates curl tini coreutils procps shado
 COPY --from=build /out/jitenv /usr/local/bin/jitenv
 COPY --from=build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
 COPY --from=build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+COPY --from=build /out/jitenv-e2e-reload /usr/local/bin/jitenv-e2e-reload
 
 ENTRYPOINT ["/sbin/tini", "--"]
 USER jitenv

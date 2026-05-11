@@ -48,6 +48,9 @@ Each distro container has:
 - `/usr/local/bin/jitenv-e2e-seed` — fixture-config generator.
 - `/usr/local/bin/jitenv-e2e-unlock` — non-interactive replacement for
   `jitenv unlock` (see "Driving unlock" below).
+- `/usr/local/bin/jitenv-e2e-reload` — sends `OpReload` to a running
+  agent; the mid-session-reload scenario uses it as the harness
+  analogue of the TUI's post-save `pingAgentReload`.
 
 ## Run-dir layout
 
@@ -233,9 +236,9 @@ When a scenario fails, look at these files in order:
 ## Out of scope (deferred to follow-ups)
 
 - Vault, mock GitHub, OIDC services
-- Fedora / Arch distros
-- CI workflow integration (`.github/workflows/e2e.yml`)
-- Scenarios for: locked-agent UX, glob mappings, mid-session
-  `pingAgentReload`
-- zsh hook scenarios (the snippets are installed but no scenario
-  exercises them yet)
+- Arch distro (fedora is now covered)
+- Multi-distro coverage of functional scenarios beyond what
+  `install-layout-*` already gives — debian is the canonical
+  reference for behaviour tests; cross-distro packaging is what the
+  install-layout family exists for
+- More than one zsh hook scenario

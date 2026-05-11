@@ -1,0 +1,83 @@
+name: locked-agent-warning
+description: |
+  Exercises the two "agent unavailable" UX paths:
+
+    1. `jitenv run` against a mapped script with no running agent. The
+       Go-side WarnAndWait prints the red "agent is not loaded" line on
+       stderr, suppresses the interactive countdown because stdin is
+       not a TTY under `docker exec -T`, then executes the script with
+       the parent env (no injected vars). Exit code is the script's.
+
+    2. `jitenv is-mapped` against a missing config: exits 2, which the
+       shell hook treats as "agent unreachable" and falls back to
+       running the user's command unchanged.
+
+service: debian
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed -out "$JITENV_CONFIG" -variant local -script /home/jitenv/scripts/show.sh
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'ran=ok\n'
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  # Bring the agent up, then immediately lock it. After this point the
+  # socket is gone but the encrypted config remains, so `jitenv run`
+  # takes the "agent unreachable" branch in fetchOrWarn.
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  - name: lock-agent
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0
+
+  # `jitenv run` should: succeed (script exits 0), print the warning on
+  # stderr, run the script (stdout shows ran=ok), and NOT inject the
+  # bag's FOO (so FOO= appears empty in stdout).
+  - name: run-with-agent-locked
+    exec: jitenv run /home/jitenv/scripts/show.sh
+    timeout: 30s
+  - name: assert-run-exit-ok
+    assert_exit_code: 0
+  - name: assert-warning-printed
+    assert_stderr_contains: "agent is not loaded"
+  - name: assert-script-ran
+    assert_stdout_contains: "ran=ok"
+  - name: assert-no-injection
+    assert_stdout_contains: "FOO="
+  - name: assert-no-leak
+    target: run-with-agent-locked
+    assert_stdout_not_contains: "value-from-local-foo"
+
+  # `is-mapped` with a missing config must exit 2. The shell hook
+  # branches on this code; the harness asserts it directly.
+  - name: ismapped-missing-config
+    exec: JITENV_CONFIG=/tmp/jitenv-nonexistent.toml jitenv is-mapped /home/jitenv/scripts/show.sh
+  - name: assert-ismapped-exit-2
+    assert_exit_code: 2

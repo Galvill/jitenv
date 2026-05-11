@@ -1,0 +1,79 @@
+name: glob-and-bag-expansion
+description: |
+  Two features in one fixture:
+
+    - The mapping uses Glob (`/home/jitenv/scripts/*.sh`) instead of an
+      exact Path, so the resolver's glob branch matches via doublestar.
+    - A single VarRef with empty Name + empty Key expands the whole
+      local bag (FOO, BAR, BAZ) into the child env.
+
+  Drives one of the matching files via `jitenv run` and asserts every
+  bag key appears in the child's environment.
+
+service: debian
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed \
+        -out "$JITENV_CONFIG" \
+        -variant local-glob \
+        -glob '/home/jitenv/scripts/*.sh'
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: validate-config
+    exec: jitenv config validate
+  - name: assert-validate-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      printf 'BAZ=%s\n' "$BAZ"
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  # `is-mapped` against the glob-covered path must hit (exit 0). This
+  # exercises Index.Mapped's glob branch.
+  - name: is-mapped-via-glob
+    exec: jitenv is-mapped /home/jitenv/scripts/show.sh
+  - name: assert-mapped-via-glob
+    assert_exit_code: 0
+
+  - name: run-via-jitenv
+    exec: jitenv run /home/jitenv/scripts/show.sh
+    timeout: 30s
+  - name: assert-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+  - name: assert-baz
+    assert_stdout_contains: "BAZ=value-from-local-baz"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0

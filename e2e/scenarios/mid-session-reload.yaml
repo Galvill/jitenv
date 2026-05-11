@@ -1,0 +1,99 @@
+name: mid-session-reload
+description: |
+  Exercises the agent's OpReload path. The TUI fires this after a
+  successful save (internal/tui/save.go calls pingAgentReload) so an
+  edit propagates without a lock/unlock cycle. Here the harness drives
+  it via a small standalone helper (jitenv-e2e-reload) that wraps
+  agent.Client.Reload.
+
+  Flow:
+    1. Seed config A (FOO=value-from-local-foo), unlock, run the
+       mapped script → asserts the "v1" values.
+    2. Reseed with the local-alt variant, preserving Meta so the
+       agent's existing derived key still decrypts the new file.
+    3. Ping OpReload via jitenv-e2e-reload.
+    4. Re-run the script → asserts the "v2" values and asserts the
+       "v1" values are NOT present (agent really swapped resolvers).
+
+service: debian
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config-v1
+    exec: |
+      jitenv-e2e-seed -out "$JITENV_CONFIG" -variant local -script /home/jitenv/scripts/show.sh
+  - name: assert-seed-v1-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  - name: run-v1
+    exec: jitenv run /home/jitenv/scripts/show.sh
+    timeout: 30s
+  - name: assert-v1-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-v1-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+  # Sanity: v1 must NOT contain the v2 marker yet.
+  - name: assert-v1-no-v2-foo
+    target: run-v1
+    assert_stdout_not_contains: "value-from-local-foo-v2"
+
+  # Reseed in place. -preserve-meta keeps the same salt + verify
+  # sentinel so the running agent's key (derived from the v1 meta)
+  # still decrypts the v2 file. Without that flag the reload below
+  # would fail with a decrypt error.
+  - name: reseed-v2
+    exec: |
+      jitenv-e2e-seed \
+        -out "$JITENV_CONFIG" \
+        -variant local-alt \
+        -script /home/jitenv/scripts/show.sh \
+        -preserve-meta
+  - name: assert-reseed-ok
+    assert_exit_code: 0
+
+  - name: ping-reload
+    exec: jitenv-e2e-reload
+  - name: assert-reload-ok
+    assert_exit_code: 0
+  - name: assert-reload-confirmed
+    assert_stdout_contains: "agent reloaded"
+
+  - name: run-v2
+    exec: jitenv run /home/jitenv/scripts/show.sh
+    timeout: 30s
+  - name: assert-v2-foo
+    assert_stdout_contains: "FOO=value-from-local-foo-v2"
+  - name: assert-v2-bar
+    assert_stdout_contains: "BAR=value-from-local-bar-v2"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0

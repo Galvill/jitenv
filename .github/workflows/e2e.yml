@@ -1,0 +1,85 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "release/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: docker-compose harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          install-only: true
+
+      - name: Build snapshot artefacts
+        run: make e2e-build-artifacts
+
+      - name: Bring up stack
+        run: make e2e-up
+
+      # Loop every YAML under e2e/scenarios/. A single failure marks the
+      # job as failed but the loop continues so the run-dir artefact
+      # covers every scenario, not just the first to break.
+      - name: Run all scenarios
+        id: scenarios
+        run: |
+          set -u
+          failed=0
+          for scn in e2e/scenarios/*.yaml; do
+            name=$(basename "$scn")
+            echo "::group::scenario $name"
+            if ! make e2e-run SCENARIO="$name"; then
+              echo "::error::scenario $name failed"
+              failed=$((failed+1))
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$failed" -gt 0 ]; then
+            echo "$failed scenario(s) failed"
+            exit 1
+          fi
+
+      # The harness drops every run under e2e/runs/<scenario>-<UTC>/ —
+      # those directories are the diagnosable bug report (summary.json,
+      # per-step stdout/stderr/exit, teardown captures). Upload them
+      # whenever any step before this one failed so a maintainer can
+      # triage from the artefact alone.
+      - name: Upload run dirs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-runs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: e2e/runs/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Tear down stack
+        if: always()
+        run: make e2e-down
