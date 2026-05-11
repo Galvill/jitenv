@@ -19,7 +19,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-reload ./e2e/cmd/reload
 
 FROM alpine:3.20 AS runtime
 ARG TARGETARCH=amd64
@@ -43,6 +44,7 @@ RUN ln -s $(ls /opt/pkg/jitenv_*_linux_${TARGETARCH}.tar.gz | head -n1) /opt/pkg
 
 COPY --from=helper-build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
 COPY --from=helper-build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+COPY --from=helper-build /out/jitenv-e2e-reload /usr/local/bin/jitenv-e2e-reload
 
 ENTRYPOINT ["/sbin/tini", "--"]
 USER jitenv

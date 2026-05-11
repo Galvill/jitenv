@@ -1,0 +1,98 @@
+name: zsh-hook-injects-env
+description: |
+  Exercises the zsh `__jitenv_accept_line` widget in a real zsh process.
+  The widget normally runs inside zle when the user submits a line; we
+  cannot drive zle reliably under `docker exec -T` (no controlling TTY,
+  and script(1)-allocated PTYs have well-known input timing issues —
+  see e2e/README.md). So we:
+
+    1. Shim `zle` as a no-op function in the calling zsh, then source
+       the snippet. This loads the widget definition without trying to
+       enter line-editor mode at hook-load time.
+    2. Set BUFFER to a mapped absolute path and invoke
+       `__jitenv_accept_line` directly. The shimmed `zle .accept-line`
+       at the end of the widget no-ops, so BUFFER is observable
+       afterwards.
+    3. Assert BUFFER got rewritten to `jitenv run "<path>"…`.
+    4. Eval the rewritten BUFFER from zsh and capture the script's
+       output — asserts the bag values FOO/BAR were injected, exactly
+       like the bash unlock-and-run-local case.
+
+  This covers the same load-bearing branch the bash hook tests cover
+  (resolve absolute path → is-mapped → rewrite to `jitenv run`), just
+  through the zsh code path.
+
+service: debian
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed -out "$JITENV_CONFIG" -variant local -script /home/jitenv/scripts/showz.sh
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/showz.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      EOF
+      chmod +x /home/jitenv/scripts/showz.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  # Load the snippet under a stubbed `zle` and assert BUFFER rewrites
+  # to `jitenv run "…"`. The widget body resolves the path, calls
+  # `jitenv is-mapped`, and on rc=0 sets BUFFER. The trailing
+  # `zle .accept-line` no-ops via our shim.
+  - name: zsh-rewrite-buffer
+    exec: |
+      zsh -c '
+        zle() { return 0; }
+        eval "$(jitenv hook zsh)"
+        typeset BUFFER="/home/jitenv/scripts/showz.sh"
+        __jitenv_accept_line
+        printf "BUFFER=%s\n" "$BUFFER"
+      '
+  - name: assert-zsh-rewrites
+    assert_stdout_contains: 'BUFFER=jitenv run "/home/jitenv/scripts/showz.sh"'
+
+  # End-to-end via the rewritten BUFFER: run it through eval inside
+  # zsh and inspect the script's stdout for the injected bag values.
+  - name: zsh-execute-rewritten
+    exec: |
+      zsh -c '
+        zle() { return 0; }
+        eval "$(jitenv hook zsh)"
+        typeset BUFFER="/home/jitenv/scripts/showz.sh"
+        __jitenv_accept_line
+        eval "$BUFFER"
+      '
+    timeout: 30s
+  - name: assert-zsh-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-zsh-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0
