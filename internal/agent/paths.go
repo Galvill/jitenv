@@ -22,17 +22,17 @@ func (p Paths) ShellWrapDir(shellPid int) string {
 	return filepath.Join(p.ShellsDir, fmt.Sprintf("%d", shellPid), "bin")
 }
 
-// DefaultPaths returns the per-user paths under $XDG_RUNTIME_DIR (preferred)
-// or /tmp/jitenv-<uid> as a fallback.
-func DefaultPaths() (Paths, error) {
+// ResolvePaths returns the per-user paths under $XDG_RUNTIME_DIR
+// (preferred) or /tmp/jitenv-<uid> as a fallback. Pure computation —
+// it does not create the directory on disk. Use this for read-only
+// callers (e.g. `jitenv hook bash`, which prints paths but doesn't
+// need them to exist yet).
+func ResolvePaths() Paths {
 	dir := os.Getenv("XDG_RUNTIME_DIR")
 	if dir == "" {
 		dir = filepath.Join(os.TempDir(), fmt.Sprintf("jitenv-%d", os.Getuid()))
 	} else {
 		dir = filepath.Join(dir, "jitenv")
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return Paths{}, err
 	}
 	return Paths{
 		Dir:       dir,
@@ -40,7 +40,19 @@ func DefaultPaths() (Paths, error) {
 		PidFile:   filepath.Join(dir, "agent.pid"),
 		LogFile:   filepath.Join(dir, "agent.log"),
 		ShellsDir: filepath.Join(dir, "shells"),
-	}, nil
+	}
+}
+
+// DefaultPaths returns the per-user paths AND mkdir's the runtime
+// dir (0700) so callers that need to bind a socket or open a log
+// file can rely on it existing. Use this from agent startup, chpwd,
+// etc.
+func DefaultPaths() (Paths, error) {
+	p := ResolvePaths()
+	if err := os.MkdirAll(p.Dir, 0700); err != nil {
+		return Paths{}, err
+	}
+	return p, nil
 }
 
 // GcOrphanShells walks ShellsDir and removes any <pid>/ subdirectory

@@ -12,7 +12,9 @@ import (
 // the binary's view of $XDG_RUNTIME_DIR/jitenv and the config path baked
 // in. Replaces the {{RuntimeDir}} and {{ConfigPath}} markers in the
 // embedded template. Eliminates the shell-side duplication of
-// agent.DefaultPaths() / config.DefaultPath().
+// agent.ResolvePaths() / config.DefaultPath(). Calls the no-mkdir
+// variant on purpose — `jitenv hook bash` should be side-effect-free
+// (and the runtime dir often doesn't exist yet at hook-print time).
 func Render(shell string) (string, error) {
 	var tmpl string
 	switch shell {
@@ -24,10 +26,7 @@ func Render(shell string) (string, error) {
 		return "", fmt.Errorf("unsupported shell %q", shell)
 	}
 
-	paths, err := agent.DefaultPaths()
-	if err != nil {
-		return "", fmt.Errorf("resolve runtime dir: %w", err)
-	}
+	paths := agent.ResolvePaths()
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
 		return "", fmt.Errorf("resolve config path: %w", err)
