@@ -52,11 +52,32 @@ bug:
 |---|---|---|
 | **0** | mapped | Re-run the command via `jitenv run` so the env vars are injected. |
 | **1** | not mapped | Run the command normally — no jitenv involvement. |
-| **2** | agent unreachable | Print a red 10-second warning. Ctrl+C aborts; otherwise the original command runs (with no env-var injection). This is the "agent is locked" UX path. |
+| **2** | config unreadable | Run the command normally — no env-var injection, no warning. A broken or missing config is treated like an unmapped path; the user sees nothing unless `JITENV_HOOK_DEBUG=1`. |
+
+`jitenv is-mapped` reads the config file directly and never contacts
+the agent, so an exit code 2 always means the on-disk config is
+missing or malformed. The agent-unreachable UX (red countdown, **Press
+Enter to skip, Ctrl+C to abort**) lives inside `jitenv run` and the
+cwd_glob shim — see `internal/agentwarn/agentwarn.go`. It only fires
+*after* `is-mapped` returned 0 and `jitenv run` then failed to reach
+the agent.
 
 You can see the dispatch in `internal/shell/snippets/bash.sh`. Set
 `JITENV_HOOK_DEBUG=1` in your shell to see which branch the trap
 took for each command.
+
+## Non-interactive use (CI, scripts)
+
+Two env-var knobs make the hook quiet in scripted contexts:
+
+- `JITENV_NO_NOTICE=1` suppresses the green `jitenv: injected N
+  variables` line that `jitenv run` and the shim print on success.
+  The conventional `CI=true` (set by GitHub Actions, GitLab CI,
+  CircleCI, Travis) has the same effect automatically.
+- `JITENV_HOOK_DELAY=0` skips the agent-down countdown. The countdown
+  is also auto-skipped when stdin is not a TTY, so piped or
+  redirected invocations never block — the warning line still prints
+  once so the failure mode is visible in logs.
 
 ## Bash internals: `extdebug` + DEBUG trap
 

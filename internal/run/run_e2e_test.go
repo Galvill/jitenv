@@ -29,6 +29,30 @@ func buildBinary(t *testing.T) string {
 	return out
 }
 
+// filterEnvKeys returns env with any "KEY=..." entries whose KEY is
+// in keys removed. Used to strip CI / JITENV_NO_NOTICE before
+// spawning child processes so tests can exercise the notice path
+// even under GitHub Actions (which sets CI=true).
+func filterEnvKeys(env []string, keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		i := strings.IndexByte(kv, '=')
+		if i < 0 {
+			out = append(out, kv)
+			continue
+		}
+		if _, skip := drop[kv[:i]]; skip {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // shortRuntimeDir creates a per-test runtime directory under /tmp so
 // the Unix-socket path stays well under macOS's 104-byte sun_path
 // limit. t.TempDir() on macOS sits under /var/folders/.../T/...
@@ -119,7 +143,7 @@ func TestRunInjectsEnvAndExecs(t *testing.T) {
 	// Sanity: is-mapped via binary. Note: is-mapped reads config
 	// directly (no agent dial), so JITENV_CONFIG has to point at the
 	// test fixture for the lookup to find the script.
-	subprocEnv := append(os.Environ(),
+	subprocEnv := append(filterEnvKeys(os.Environ(), "CI", "JITENV_NO_NOTICE"),
 		"XDG_RUNTIME_DIR="+runtimeDir,
 		"JITENV_CONFIG="+cfgPath,
 	)
@@ -334,7 +358,10 @@ func TestRunPreRunNotice(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	subprocEnv := append(os.Environ(),
+	// CI / JITENV_NO_NOTICE suppress the notice (see runnotice.Enabled);
+	// strip them so this test exercises the on path even when run under
+	// GitHub Actions or with the var set in the developer's shell.
+	subprocEnv := append(filterEnvKeys(os.Environ(), "CI", "JITENV_NO_NOTICE"),
 		"XDG_RUNTIME_DIR="+runtimeDir,
 		"JITENV_CONFIG="+cfgPath,
 	)

@@ -215,7 +215,10 @@ __jitenv_chpwd
 fakecmd
 `, binDir, fakeBin, cfgPath, binDir, projectDir,
 	))
-	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	// CI / JITENV_NO_NOTICE auto-suppress the notice; strip them so
+	// this test exercises the on path even when run under GitHub
+	// Actions.
+	cmd.Env = append(filterEnv(os.Environ(), "CI", "JITENV_NO_NOTICE"), "XDG_RUNTIME_DIR="+runtimeDir)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -228,6 +231,30 @@ fakecmd
 	if !strings.Contains(stderr.String(), "jitenv: injected 1 variable") {
 		t.Errorf("expected pre-run notice on stderr; got:\nstdout=%s\nstderr=%s", stdout.String(), stderr.String())
 	}
+}
+
+// filterEnv returns env with any "KEY=..." entries whose KEY is in
+// keys removed. Mirrors filterEnvKeys in run_e2e_test.go; kept
+// separate to avoid an exported test-helper dependency between
+// packages.
+func filterEnv(env []string, keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		i := strings.IndexByte(kv, '=')
+		if i < 0 {
+			out = append(out, kv)
+			continue
+		}
+		if _, skip := drop[kv[:i]]; skip {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // TestBashWrapperAgentDownWarns is the locked-agent UX for cwd_glob:
@@ -296,11 +323,9 @@ fakecmd
 	))
 	cmd.Env = append(os.Environ(),
 		"XDG_RUNTIME_DIR="+runtimeDir,
-		"JITENV_HOOK_DELAY=1", // shrink the 10s wait
+		"JITENV_HOOK_DELAY=1",
 	)
-	start := time.Now()
 	out, err := cmd.CombinedOutput()
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("bash run: %v\noutput=%s", err, out)
 	}
@@ -309,11 +334,10 @@ fakecmd
 		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
 	}
 	if !strings.Contains(got, "RAN") {
-		t.Errorf("expected fakecmd to still run after the countdown; got:\n%s", got)
+		t.Errorf("expected fakecmd to still run; got:\n%s", got)
 	}
-	if elapsed < 800*time.Millisecond {
-		t.Errorf("expected the shim to wait ~1s; only %s elapsed", elapsed)
-	}
+	// Stdin is a pipe (bash -c), so WarnAndWait short-circuits the
+	// countdown — we no longer assert on elapsed time. See #64.
 }
 
 // TestBashWrapperOutsideMappedDir exercises the "outside" case: cd

@@ -58,45 +58,11 @@ precmd_functions+=(__jitenv_chpwd)
 # Populate once at hook-load.
 __jitenv_chpwd
 
-# Warn loudly when the agent isn't reachable, count down 10 seconds,
-# and let Ctrl+C abort. Returns non-zero on abort so the caller's `&&`
-# short-circuits the actual command.
-__jitenv_warn_no_agent() {
-    emulate -L zsh
-    local target="$1"
-    local aborted=0
-    trap 'aborted=1' INT
-
-    local red=$'\033[1;31m'
-    local reset=$'\033[0m'
-
-    printf '%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n' \
-        "$red" "$target" "$reset" >&2
-    printf '%sWill run the command anyway in 10s. Press Enter to skip, Ctrl+C to abort.%s\n' \
-        "$red" "$reset" >&2
-
-    local total=${JITENV_HOOK_DELAY:-10}
-    local i
-    for ((i=total; i>0; i--)); do
-        (( aborted )) && break
-        printf '\r%s  %2ds remaining %s' "$red" "$i" "$reset" >&2
-        # zsh's read: -t timeout (seconds), -k 1 (one char), -s silent.
-        # Returns 0 if a key was read, non-zero on timeout — same shape
-        # as the bash version.
-        if read -t 1 -k 1 -s 2>/dev/null; then
-            break
-        fi
-        (( aborted )) && break
-    done
-
-    trap - INT
-    if (( aborted )); then
-        printf '\n%saborted — command not executed.%s\n' "$red" "$reset" >&2
-        return 1
-    fi
-    printf '\n' >&2
-    return 0
-}
+# The agent-down "Press Enter to skip, Ctrl+C to abort" countdown is
+# implemented in Go (internal/agentwarn/agentwarn.go) and rendered by
+# `jitenv run` / the shim. Nothing in the shell hook needs to paint
+# it — the hook just routes through `jitenv run` and lets the Go side
+# handle the UX uniformly across path-mapped and cwd_glob flows.
 
 # Set JITENV_HOOK_DEBUG=1 to log each branch the widget takes.
 __jitenv_log() {

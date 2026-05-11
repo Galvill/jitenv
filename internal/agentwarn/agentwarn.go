@@ -17,12 +17,19 @@ import (
 	"os/signal"
 	"strconv"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // WarnAndWait paints the warning + countdown to stderr and returns
 // true when the user aborted via Ctrl+C (caller should not exec).
 // Returns false on Enter or timeout (caller should exec, possibly
 // without injected env vars).
+//
+// Skipped entirely when stdin is not a TTY: no human can press
+// Enter, so the countdown serves no purpose and only adds latency
+// to scripted / piped invocations. The warning line is still
+// printed once so the failure mode is visible in logs.
 func WarnAndWait(target string) bool {
 	const red = "\033[1;31m"
 	const reset = "\033[0m"
@@ -32,6 +39,13 @@ func WarnAndWait(target string) bool {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			total = n
 		}
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintf(os.Stderr,
+			"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
+			red, target, reset)
+		return false
 	}
 
 	fmt.Fprintf(os.Stderr,

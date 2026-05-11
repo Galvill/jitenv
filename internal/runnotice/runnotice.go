@@ -18,13 +18,30 @@ const (
 	ansiReset = "\033[0m"
 )
 
-// Enabled loads the on-disk config and returns whether the pre-run
-// notice should be printed. The flag is plaintext TOML, so no master
-// key is needed. The notice is on by default; only an explicit
-// `pre_run_notice = false` suppresses it. Config-load errors fall
-// back to off so a broken config never starts surfacing surprise
-// output to the user's terminal.
+// Enabled returns whether the pre-run notice should be printed.
+//
+// Resolution order, first match wins:
+//
+//  1. JITENV_NO_NOTICE set to a non-empty value → off. Per-invocation
+//     escape hatch for scripts and one-off commands; no config edit
+//     required.
+//  2. CI set to a non-empty value → off. Convention used by GitHub
+//     Actions, GitLab CI, CircleCI, Travis — pipelines that pipe
+//     credentials through jitenv don't want a stderr line per call.
+//  3. agent.pre_run_notice in config.toml. Default is on (the helper
+//     PreRunNoticeEnabled returns true for a missing key); explicit
+//     false suppresses.
+//  4. Config-load failure → off. A broken config should never start
+//     surfacing surprise output to the user's terminal.
+//
+// The flag is plaintext TOML, so no master key is needed.
 func Enabled() bool {
+	if os.Getenv("JITENV_NO_NOTICE") != "" {
+		return false
+	}
+	if os.Getenv("CI") != "" {
+		return false
+	}
 	cfgPath, err := config.Resolve(os.Getenv("JITENV_CONFIG"))
 	if err != nil {
 		return false
