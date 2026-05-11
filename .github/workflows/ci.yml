@@ -67,3 +67,35 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: release --snapshot --clean --skip=publish,sign
+
+  test-macos:
+    # Exercises the platform-specific paths that linux runners can't
+    # touch: peer_darwin.go (LOCAL_PEERCRED), os.TempDir() runtime-dir
+    # fallback, the Setsid double-fork on darwin. Without this the
+    # macOS port is "compiles" coverage only, so any syscall-level
+    # regression would only surface after release. See #61.
+    name: test (macos)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Download modules
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Test
+        # Skip the shell-* e2e suites: they shell out to bash with
+        # restricted PATHs and rely on GNU coreutils not present in
+        # the macOS runner image. The peer-cred / agent / run paths
+        # are the macOS-specific surface we actually want covered here.
+        run: go test -race -covermode=atomic ./internal/agent/... ./internal/agentwarn/... ./internal/cli/... ./internal/config/... ./internal/crypto/... ./internal/run/... ./internal/runnotice/... ./internal/sources/... ./internal/tui/... ./internal/version/...
