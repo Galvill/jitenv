@@ -29,6 +29,21 @@ func buildBinary(t *testing.T) string {
 	return out
 }
 
+// shortRuntimeDir creates a per-test runtime directory under /tmp so
+// the Unix-socket path stays well under macOS's 104-byte sun_path
+// limit. t.TempDir() on macOS sits under /var/folders/.../T/...
+// which is ~90 chars before we even append jitenv/agent.sock,
+// blowing the limit and producing "bind: invalid argument".
+func shortRuntimeDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "jr-")
+	if err != nil {
+		t.Fatalf("mkdir tmp runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestRunInjectsEnvAndExecs(t *testing.T) {
 	bin := buildBinary(t)
 
@@ -71,8 +86,7 @@ func TestRunInjectsEnvAndExecs(t *testing.T) {
 	}
 
 	// Spawn the daemon.
-	runtimeDir := filepath.Join(dir, "runtime")
-	_ = os.MkdirAll(runtimeDir, 0700)
+	runtimeDir := shortRuntimeDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	paths, _ := agent.DefaultPaths()
 
@@ -195,8 +209,7 @@ func TestRunLocalBag(t *testing.T) {
 	}
 
 	// Spawn the daemon.
-	runtimeDir := filepath.Join(dir, "runtime")
-	_ = os.MkdirAll(runtimeDir, 0700)
+	runtimeDir := shortRuntimeDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	paths, _ := agent.DefaultPaths()
 
@@ -292,8 +305,7 @@ func TestRunPreRunNotice(t *testing.T) {
 		t.Fatalf("rename: %v", err)
 	}
 
-	runtimeDir := filepath.Join(dir, "runtime")
-	_ = os.MkdirAll(runtimeDir, 0700)
+	runtimeDir := shortRuntimeDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	paths, _ := agent.DefaultPaths()
 
