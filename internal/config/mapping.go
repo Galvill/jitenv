@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -61,8 +62,9 @@ func (idx *Index) Lookup(absPath string) []VarRef {
 	if vs, ok := idx.exact[absPath]; ok {
 		out = append(out, vs...)
 	}
+	slashPath := filepath.ToSlash(absPath)
 	for _, g := range idx.globs {
-		if ok, err := doublestar.Match(g.pattern, absPath); err == nil && ok {
+		if ok, err := doublestar.Match(g.pattern, slashPath); err == nil && ok {
 			out = append(out, g.vars...)
 		}
 	}
@@ -74,8 +76,9 @@ func (idx *Index) Mapped(absPath string) bool {
 	if _, ok := idx.exact[absPath]; ok {
 		return true
 	}
+	slashPath := filepath.ToSlash(absPath)
 	for _, g := range idx.globs {
-		if ok, err := doublestar.Match(g.pattern, absPath); err == nil && ok {
+		if ok, err := doublestar.Match(g.pattern, slashPath); err == nil && ok {
 			return true
 		}
 	}
@@ -143,12 +146,20 @@ func (idx *Index) MappedCwd(pwd, command string) bool {
 // `cwd_glob = "~/work/acme"` therefore covers ~/work/acme and every
 // subdirectory; `**`-suffix patterns also match the root because
 // doublestar treats `**` as zero-or-more segments.
+//
+// doublestar.Match is forward-slash-only. On Windows abs comes in with
+// native backslashes (filepath.Abs result), so we normalise to slashes
+// before matching and walk ancestors with path.Dir (which honours `/`)
+// instead of filepath.Dir (which honours `\` on Windows). Patterns
+// stored in the index are already tilde-expanded; users writing
+// cwd_glob on Windows are expected to use forward slashes per the
+// "doublestar is forward-slash-only" note in the existing tests.
 func matchAncestor(pattern, abs string) bool {
-	for cur := abs; ; {
+	for cur := filepath.ToSlash(abs); ; {
 		if ok, err := doublestar.Match(pattern, cur); err == nil && ok {
 			return true
 		}
-		parent := filepath.Dir(cur)
+		parent := path.Dir(cur)
 		if parent == cur {
 			return false
 		}
