@@ -3,10 +3,25 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
+// skipOnWindows centralises the reason text so the four cwd_glob
+// tests below don't repeat it. The underlying matcher
+// (bmatcuk/doublestar) is forward-slash-only, and the ancestor-walk
+// uses filepath.Dir which on Windows produces backslash-separated
+// segments that never match. Wiring up a Windows-aware matcher is
+// part of #39 stage 2+, not the compile-time scaffolding shipped here.
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows: cwd_glob matching uses forward-slash globs; tracking in #39")
+	}
+}
+
 func TestIndex_LookupCwd_AncestorWalk(t *testing.T) {
+	skipOnWindows(t)
 	tmp := t.TempDir()
 	deeper := filepath.Join(tmp, "acme", "service", "src")
 	if err := os.MkdirAll(deeper, 0o755); err != nil {
@@ -38,6 +53,7 @@ func TestIndex_LookupCwd_AncestorWalk(t *testing.T) {
 }
 
 func TestIndex_LookupCwd_RequiresExplicitCommand(t *testing.T) {
+	skipOnWindows(t)
 	tmp := t.TempDir()
 	idx := NewIndex([]Mapping{{
 		CwdGlob:  tmp,
@@ -57,6 +73,7 @@ func TestIndex_LookupCwd_RequiresExplicitCommand(t *testing.T) {
 }
 
 func TestIndex_CwdCommands_Union(t *testing.T) {
+	skipOnWindows(t)
 	tmp := t.TempDir()
 	idx := NewIndex([]Mapping{
 		{CwdGlob: tmp, Commands: []string{"npm", "yarn"}, Vars: []VarRef{{Source: "x"}}},
@@ -75,6 +92,7 @@ func TestIndex_CwdCommands_Union(t *testing.T) {
 }
 
 func TestIndex_LookupCwd_TildeExpansion(t *testing.T) {
+	skipOnWindows(t)
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		t.Skip("no $HOME")

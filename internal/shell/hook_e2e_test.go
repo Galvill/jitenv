@@ -1,3 +1,5 @@
+//go:build !windows
+
 package shell_test
 
 import (

@@ -7,10 +7,8 @@ package run
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -114,14 +112,7 @@ func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, bo
 }
 
 // replaceProcess substitutes the current process image with the given
-// file using syscall.Exec so secrets live only in the child process tree.
-func replaceProcess(path string, args []string, env []string) error {
-	argv := append([]string{path}, args...)
-	if err := syscall.Exec(path, argv, env); err != nil {
-		if errors.Is(err, syscall.ENOEXEC) {
-			return fmt.Errorf("%s: file is not directly executable (missing shebang?)", path)
-		}
-		return fmt.Errorf("exec syscall on %s: %w", path, err)
-	}
-	return nil
-}
+// file using syscall.Exec so secrets live only in the child process
+// tree. The actual exec is platform-split into run_unix.go (the real
+// thing) and run_windows.go (a "not yet supported" stub) — see #39
+// stage 2+ for the planned Windows model.

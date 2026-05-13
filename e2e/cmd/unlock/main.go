@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Command jitenv-e2e-unlock is a test-only replacement for `jitenv
 // unlock` that takes the passphrase non-interactively. It exists
 // because `jitenv unlock` reads from /dev/tty and we cannot reliably

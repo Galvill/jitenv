@@ -22,18 +22,19 @@ func (p Paths) ShellWrapDir(shellPid int) string {
 	return filepath.Join(p.ShellsDir, fmt.Sprintf("%d", shellPid), "bin")
 }
 
-// ResolvePaths returns the per-user paths under $XDG_RUNTIME_DIR
-// (preferred) or /tmp/jitenv-<uid> as a fallback. Pure computation —
-// it does not create the directory on disk. Use this for read-only
-// callers (e.g. `jitenv hook bash`, which prints paths but doesn't
-// need them to exist yet).
+// ResolvePaths returns the per-user paths under the platform's runtime
+// base directory. Pure computation — it does not create the directory
+// on disk. Use this for read-only callers (e.g. `jitenv hook bash`,
+// which prints paths but doesn't need them to exist yet).
+//
+// The base directory is platform-split in paths_unix.go /
+// paths_windows.go:
+//   - Unix: $XDG_RUNTIME_DIR/jitenv, fallback /tmp/jitenv-<uid>.
+//   - Windows: %LOCALAPPDATA%\jitenv (os.UserConfigDir fallback).
+//     os.Getuid() returns -1 on Windows, so the per-uid suffix used on
+//     Unix doesn't apply.
 func ResolvePaths() Paths {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), fmt.Sprintf("jitenv-%d", os.Getuid()))
-	} else {
-		dir = filepath.Join(dir, "jitenv")
-	}
+	dir := runtimeBaseDir()
 	return Paths{
 		Dir:       dir,
 		Socket:    filepath.Join(dir, "agent.sock"),

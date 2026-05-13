@@ -19,6 +19,8 @@ go test ./internal/run -run TestRunInjectsEnvAndExecs -v
 
 Go 1.22+ (go.mod declares 1.25.6). Linux and macOS. Peer-cred check is platform-split (`SO_PEERCRED` on Linux in `peer_linux.go`, `LOCAL_PEERCRED` on Darwin in `peer_darwin.go`); runtime dir is `$XDG_RUNTIME_DIR/jitenv/` on Linux and `os.TempDir()/jitenv-<uid>/` (typically `/var/folders/.../T/jitenv-<uid>`) on macOS. The `Setsid` double-fork is portable.
 
+The codebase compiles for `GOOS=windows` (`peer_windows.go`, `socket_windows.go`, `daemonize_windows.go`, `paths_windows.go`, `run_windows.go`, `shim_windows.go` keep the build green) but the agent/shim/run paths return "not yet implemented" errors at runtime — see [#39](https://github.com/gv/jitenv/issues/39). Real Windows support (named pipes, token-based peer check, PowerShell hook) is Stage 2+.
+
 The e2e tests under `internal/run` and `internal/shell` shell out to `go build` to produce a real binary against a temp config; they're slow but exercise the unlock → daemonize → hook → run loop end-to-end.
 
 ## Big-picture architecture

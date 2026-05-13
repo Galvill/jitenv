@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +12,15 @@ import (
 )
 
 func TestIndexExactAndGlob(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The glob "/tmp/jitenv-demo/**/*.sh" doesn't match the
+		// Windows-normalised exact path produced by filepath.Abs on
+		// Windows (backslash separators, drive letter prefix). The
+		// underlying mapping logic isn't Windows-aware yet — that's
+		// part of #39 stage 2+. Skip rather than mark the file
+		// !windows so the validation-only tests still run.
+		t.Skip("windows: cwd_glob/path matching not yet supported; tracking in #39")
+	}
 	abs, _ := filepath.Abs("/tmp/jitenv-demo/show.sh")
 	idx := NewIndex([]Mapping{
 		{

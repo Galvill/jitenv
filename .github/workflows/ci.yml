@@ -99,3 +99,48 @@ jobs:
         # the macOS runner image. The peer-cred / agent / run paths
         # are the macOS-specific surface we actually want covered here.
         run: go test -race -covermode=atomic ./internal/agent/... ./internal/agentwarn/... ./internal/cli/... ./internal/config/... ./internal/crypto/... ./internal/run/... ./internal/runnotice/... ./internal/sources/... ./internal/tui/... ./internal/version/...
+
+  test-windows:
+    # Stage 1 of native Windows support (#39): exercise the
+    # cross-platform compile of the agent + shim + run paths against a
+    # real Windows toolchain. Most platform-specific stubs return
+    # "not yet implemented" errors at runtime, so the e2e/agent test
+    # suites are constrained out via `//go:build !windows` — what runs
+    # here is the config/crypto/version surface plus anything else
+    # that's already platform-clean. The job is mandatory so a
+    # regression in the Windows build (a new Unix-only syscall slipped
+    # into a shared file) fails CI immediately rather than being
+    # discovered when Stage 2 starts.
+    name: test (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Download modules
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test
+        # All tests that need a Unix socket, fork+exec, symlinks, or
+        # bash/zsh are gated behind `//go:build !windows` so they
+        # compile-skip here. What remains is the cross-platform surface
+        # (config, crypto, version, sources, tui, runnotice, agentwarn,
+        # the agent's pure-Go bits) — green on Windows means the
+        # compile-time scaffolding from #39 stage 1 is still intact.
+        run: go test -covermode=atomic ./...
