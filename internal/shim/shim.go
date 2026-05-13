@@ -52,6 +52,19 @@ var errAgentDown = errors.New("agent unreachable")
 // without value.
 const warnedMarker = "__JITENV_AGENT_WARNED"
 
+// injectedMarker is the agent-UP analogue of warnedMarker. After a
+// successful fetch+append (or even an empty-but-successful agent
+// response), the first shim in the chain stamps this on the env it
+// hands to syscall.Exec. Subsequent shim entries in the same chain
+// short-circuit on entry: no fetch, no notice, no warn — just
+// transparently exec the real binary. This implements the
+// "first-wrapped-command-in-an-exec-chain wins" policy that matches
+// what the user typed (issue #77). Orthogonal to warnedMarker; they
+// coexist as two independent one-shot flags. Same leak caveat:
+// the marker may be visible to the user's final program, but
+// stripping it before execReal isn't worth the complexity.
+const injectedMarker = "__JITENV_INJECTED"
+
 // Main is the shim entrypoint. invokedAs is filepath.Base(os.Args[0]),
 // args is os.Args[1:] (everything after argv[0]).
 func Main(invokedAs string, args []string) {
@@ -75,6 +88,14 @@ func run(invokedAs string, args []string) error {
 	realPath, err := lookPathExcluding(invokedAs, selfDir)
 	if err != nil {
 		return err
+	}
+
+	// If a previous shim entry in this execve chain already injected
+	// (or attempted to), short-circuit — skip fetch, skip notice, skip
+	// warn. The first hop wins; chained interpreters pass through.
+	// See injectedMarker doc and issue #77.
+	if os.Getenv(injectedMarker) == "1" {
+		return execReal(realPath, invokedAs, args, os.Environ())
 	}
 
 	env := os.Environ()
@@ -104,6 +125,12 @@ func run(invokedAs string, args []string) error {
 				env = append(env, k+"="+v)
 			}
 			injected = len(extra)
+			// Stamp the one-shot marker so chained interpreters
+			// (e.g. npm execve-ing into node via shebang) short-circuit
+			// instead of re-fetching and double-injecting (issue #77).
+			// Set unconditionally on the fetch-success branch: even an
+			// empty result means "agent answered, decision is final".
+			env = append(env, injectedMarker+"=1")
 		}
 	}
 
@@ -111,6 +138,12 @@ func run(invokedAs string, args []string) error {
 		runnotice.Write(os.Stderr, injected, term.IsTerminal(int(os.Stderr.Fd())))
 	}
 
+	return execReal(realPath, invokedAs, args, env)
+}
+
+// execReal replaces the current process with the real binary,
+// preserving argv[0] as the command name the shell typed.
+func execReal(realPath, invokedAs string, args, env []string) error {
 	argv := append([]string{invokedAs}, args...)
 	if execErr := syscall.Exec(realPath, argv, env); execErr != nil {
 		if errors.Is(execErr, syscall.ENOEXEC) {

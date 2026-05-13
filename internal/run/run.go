@@ -20,6 +20,15 @@ import (
 	"github.com/gv/jitenv/internal/runnotice"
 )
 
+// injectedMarker mirrors the one in internal/shim: a one-shot env
+// flag that short-circuits subsequent shim/run entries within the
+// same execve chain so a single user-typed command can't be injected
+// into twice. Less common via this path (`jitenv run` is keyed on
+// absolute file paths from the bash/zsh hook, not on PATH lookups),
+// but the symmetry matters if an absolute-path mapping ever
+// execve-chains into another mapped command. See issue #77.
+const injectedMarker = "__JITENV_INJECTED"
+
 // Run resolves file, asks the agent for any mapped env vars, then
 // replaces the current process with file+args+merged-env.
 //
@@ -39,6 +48,13 @@ func Run(ctx context.Context, file string, args []string) error {
 		return err
 	}
 
+	// If a previous shim/run entry in this execve chain already
+	// injected, pass through transparently — no agent dial, no notice,
+	// no warn. See injectedMarker doc and issue #77.
+	if os.Getenv(injectedMarker) == "1" {
+		return replaceProcess(abs, args, os.Environ())
+	}
+
 	paths, err := agent.DefaultPaths()
 	if err != nil {
 		return err
@@ -46,13 +62,21 @@ func Run(ctx context.Context, file string, args []string) error {
 
 	env := os.Environ()
 	injected := 0
-	if extra, err := fetchOrWarn(ctx, paths.Socket, abs); err != nil {
+	extra, fetched, err := fetchOrWarn(ctx, paths.Socket, abs)
+	if err != nil {
 		return err
-	} else {
-		for k, v := range extra {
-			env = append(env, k+"="+v)
-		}
-		injected = len(extra)
+	}
+	for k, v := range extra {
+		env = append(env, k+"="+v)
+	}
+	injected = len(extra)
+	if fetched {
+		// Agent answered. Stamp the one-shot marker so a chained
+		// shim/run entry in this execve chain skips its own fetch
+		// (issue #77). Only set on the fetch-success branch — the
+		// agent-down warn path uses __JITENV_AGENT_WARNED instead,
+		// which the shim handles independently.
+		env = append(env, injectedMarker+"=1")
 	}
 
 	if injected > 0 && runnotice.Enabled() {
@@ -65,13 +89,16 @@ func Run(ctx context.Context, file string, args []string) error {
 // fetchOrWarn tries to fetch env vars from the agent. On agent-down
 // it paints the warning + countdown; the returned map is nil (caller
 // should run with the parent env). Returns an error only when the
-// user aborted via Ctrl+C.
-func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, error) {
+// user aborted via Ctrl+C. The second return value reports whether
+// the agent actually answered (true = fetch succeeded, possibly with
+// zero vars; false = agent was down and the user dismissed the
+// warning).
+func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, bool, error) {
 	if _, err := os.Stat(socket); err != nil {
 		if agentwarn.WarnAndWait(abs) {
-			return nil, errors.New("aborted")
+			return nil, false, errors.New("aborted")
 		}
-		return nil, nil
+		return nil, false, nil
 	}
 	cli := agent.NewClient(socket)
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -79,11 +106,11 @@ func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, er
 	extra, err := cli.FetchEnv(dctx, abs)
 	if err != nil {
 		if agentwarn.WarnAndWait(abs) {
-			return nil, errors.New("aborted")
+			return nil, false, errors.New("aborted")
 		}
-		return nil, nil
+		return nil, false, nil
 	}
-	return extra, nil
+	return extra, true, nil
 }
 
 // replaceProcess substitutes the current process image with the given

@@ -129,3 +129,95 @@ func TestShimSuppressesWarningWithMarker(t *testing.T) {
 		t.Errorf("second run: expected fakecmd to exec ('RAN');\noutput=%s", out2)
 	}
 }
+
+// TestShimSuppressesInjectionWithMarker is the regression test for
+// issue #77: when a cwd_glob mapping lists both a command and its
+// interpreter (e.g. npm + node), env vars used to be fetched and
+// appended twice because os.Getppid() doesn't change across execve.
+// The fix propagates __JITENV_INJECTED=1 after the first successful
+// fetch so subsequent shim entries short-circuit — no fetch attempt,
+// no notice, no warn — just execReal transparently.
+//
+// We don't fake an execve chain inside the test runner; instead we
+// invoke the shim twice and assert that the second call (marker set)
+// produces no warning, no notice, and still execs the real binary.
+// The agent is intentionally down here (empty runtime dir): call 1
+// would normally hit the agent-down warn path, call 2 with the
+// marker must bypass *everything* — including the warn — and just
+// pass through.
+func TestShimSuppressesInjectionWithMarker(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realCmd := filepath.Join(fakeBin, "fakecmd")
+	// Print the env we received so we can assert the marker propagated
+	// through execve and that no notice/warning was printed on call 2.
+	if err := os.WriteFile(realCmd, []byte("#!/bin/sh\necho RAN\nenv\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wrapDir := filepath.Join(dir, "wrap")
+	if err := os.MkdirAll(wrapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(wrapDir, "fakecmd")
+	if err := os.Symlink(bin, wrapper); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeDir := filepath.Join(dir, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	pathEnv := fakeBin + string(os.PathListSeparator) + os.Getenv("PATH")
+	shellPID := strconv.Itoa(os.Getpid())
+
+	baseEnv := []string{
+		"PATH=" + pathEnv,
+		"XDG_RUNTIME_DIR=" + runtimeDir,
+		"__JITENV_WRAP_DIR=" + wrapDir,
+		"__JITENV_SHELL_PID=" + shellPID,
+		"JITENV_HOOK_DELAY=0",
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		baseEnv = append(baseEnv, "HOME="+home)
+	}
+
+	run := func(env []string) (string, error) {
+		cmd := exec.Command(wrapper)
+		cmd.Env = env
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		err := cmd.Run()
+		return buf.String(), err
+	}
+
+	// Marker set on call: shim must short-circuit. No warning even
+	// though the agent is down; the real binary still runs.
+	out, err := run(append(baseEnv, "__JITENV_INJECTED=1"))
+	if err != nil {
+		t.Fatalf("run: %v\noutput=%s", err, out)
+	}
+	if strings.Contains(out, "agent is not loaded") {
+		t.Errorf("warning fired despite __JITENV_INJECTED=1;\noutput=%s", out)
+	}
+	if strings.Contains(out, "jitenv: injected") {
+		t.Errorf("notice fired despite __JITENV_INJECTED=1;\noutput=%s", out)
+	}
+	if !strings.Contains(out, "RAN") {
+		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
+	}
+	// The marker propagates transparently through execReal — the real
+	// binary sees it in its env. Confirms the short-circuit path
+	// (return execReal(...os.Environ()...)) preserved it.
+	if !strings.Contains(out, "__JITENV_INJECTED=1") {
+		t.Errorf("expected __JITENV_INJECTED=1 to propagate to child env;\noutput=%s", out)
+	}
+}
