@@ -23,6 +23,10 @@
 //   - localstack   an aws-source fixture pointing at LocalStack with
 //     static dummy creds; mapping on .../show.sh fetches
 //     one key from the seeded SM secret.
+//   - vault        a vault-source fixture pointing at the dev-mode
+//     Vault server with the deterministic root token; one
+//     mapping per KV version (v2 expands the whole bag at
+//     myapp/prod; v1 picks a single key at apps/legacy).
 package main
 
 import (
@@ -36,14 +40,19 @@ import (
 
 func main() {
 	var (
-		out          = flag.String("out", "", "output path for config.toml (required)")
-		passphrase   = flag.String("passphrase", "e2e-test-pass", "passphrase for the encrypted config")
-		variant      = flag.String("variant", "local", "fixture variant: local | local-alt | local-glob | localstack")
-		scriptPath   = flag.String("script", "/home/jitenv/scripts/show.sh", "absolute path used in the mapping (path variants)")
-		globPath     = flag.String("glob", "/home/jitenv/scripts/*.sh", "glob pattern used in the mapping (local-glob variant)")
-		smARN        = flag.String("sm-arn", "arn:aws:secretsmanager:us-east-1:000000000000:secret:jitenv/demo", "SM secret ARN (localstack variant)")
-		smEndpoint   = flag.String("sm-endpoint", "http://localstack:4566", "SM endpoint URL (localstack variant)")
-		preserveMeta = flag.Bool("preserve-meta", false, "preserve the existing config's Meta (salt + verify sentinel) so a running agent's derived key still decrypts the new file")
+		out           = flag.String("out", "", "output path for config.toml (required)")
+		passphrase    = flag.String("passphrase", "e2e-test-pass", "passphrase for the encrypted config")
+		variant       = flag.String("variant", "local", "fixture variant: local | local-alt | local-glob | localstack | vault")
+		scriptPath    = flag.String("script", "/home/jitenv/scripts/show.sh", "absolute path used in the mapping (path variants)")
+		globPath      = flag.String("glob", "/home/jitenv/scripts/*.sh", "glob pattern used in the mapping (local-glob variant)")
+		smARN         = flag.String("sm-arn", "arn:aws:secretsmanager:us-east-1:000000000000:secret:jitenv/demo", "SM secret ARN (localstack variant)")
+		smEndpoint    = flag.String("sm-endpoint", "http://localstack:4566", "SM endpoint URL (localstack variant)")
+		vaultAddr     = flag.String("vault-address", "http://vault:8200", "Vault address (vault variant)")
+		vaultToken    = flag.String("vault-token", "dev-root", "Vault root token (vault variant)")
+		vaultV2Path   = flag.String("vault-v2-path", "myapp/prod", "KV v2 path under the secret/ mount (vault variant)")
+		vaultV1Path   = flag.String("vault-v1-path", "apps/legacy", "KV v1 path under the kv/ mount (vault variant)")
+		vaultV1Script = flag.String("vault-v1-script", "/home/jitenv/scripts/show-v1.sh", "absolute path used in the KV v1 mapping (vault variant)")
+		preserveMeta  = flag.Bool("preserve-meta", false, "preserve the existing config's Meta (salt + verify sentinel) so a running agent's derived key still decrypts the new file")
 	)
 	flag.Parse()
 
@@ -51,14 +60,51 @@ func main() {
 		fmt.Fprintln(os.Stderr, "seed: -out is required")
 		os.Exit(2)
 	}
-	if err := run(*out, []byte(*passphrase), *variant, *scriptPath, *globPath, *smARN, *smEndpoint, *preserveMeta); err != nil {
+	opts := runOpts{
+		out:           *out,
+		pw:            []byte(*passphrase),
+		variant:       *variant,
+		scriptPath:    *scriptPath,
+		globPath:      *globPath,
+		smARN:         *smARN,
+		smEndpoint:    *smEndpoint,
+		vaultAddr:     *vaultAddr,
+		vaultToken:    *vaultToken,
+		vaultV2Path:   *vaultV2Path,
+		vaultV1Path:   *vaultV1Path,
+		vaultV1Script: *vaultV1Script,
+		preserveMeta:  *preserveMeta,
+	}
+	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "seed: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stdout, "wrote %s (variant=%s)\n", *out, *variant)
 }
 
-func run(out string, pw []byte, variant, scriptPath, globPath, smARN, smEndpoint string, preserveMeta bool) error {
+// runOpts bundles the seed flags so the run() signature stays
+// manageable as new source variants accumulate.
+type runOpts struct {
+	out           string
+	pw            []byte
+	variant       string
+	scriptPath    string
+	globPath      string
+	smARN         string
+	smEndpoint    string
+	vaultAddr     string
+	vaultToken    string
+	vaultV2Path   string
+	vaultV1Path   string
+	vaultV1Script string
+	preserveMeta  bool
+}
+
+func run(o runOpts) error {
+	out := o.out
+	pw := o.pw
+	variant := o.variant
+	preserveMeta := o.preserveMeta
 	if err := os.MkdirAll(dirOf(out), 0700); err != nil {
 		return fmt.Errorf("mkdir parent: %w", err)
 	}
@@ -103,23 +149,27 @@ func run(out string, pw []byte, variant, scriptPath, globPath, smARN, smEndpoint
 
 	switch variant {
 	case "local":
-		if err := applyLocal(cfg, key, scriptPath, "value-from-local-foo", "value-from-local-bar"); err != nil {
+		if err := applyLocal(cfg, key, o.scriptPath, "value-from-local-foo", "value-from-local-bar"); err != nil {
 			return err
 		}
 	case "local-alt":
-		if err := applyLocal(cfg, key, scriptPath, "value-from-local-foo-v2", "value-from-local-bar-v2"); err != nil {
+		if err := applyLocal(cfg, key, o.scriptPath, "value-from-local-foo-v2", "value-from-local-bar-v2"); err != nil {
 			return err
 		}
 	case "local-glob":
-		if err := applyLocalGlob(cfg, key, globPath); err != nil {
+		if err := applyLocalGlob(cfg, key, o.globPath); err != nil {
 			return err
 		}
 	case "localstack":
-		if err := applyLocalstack(cfg, key, scriptPath, smARN, smEndpoint); err != nil {
+		if err := applyLocalstack(cfg, key, o.scriptPath, o.smARN, o.smEndpoint); err != nil {
+			return err
+		}
+	case "vault":
+		if err := applyVault(cfg, key, o); err != nil {
 			return err
 		}
 	default:
-		return fmt.Errorf("unknown variant %q (want: local | local-alt | local-glob | localstack)", variant)
+		return fmt.Errorf("unknown variant %q (want: local | local-alt | local-glob | localstack | vault)", variant)
 	}
 
 	return config.AtomicSave(out, cfg)
@@ -217,6 +267,65 @@ func applyLocalstack(cfg *config.Config, key []byte, scriptPath, smARN, smEndpoi
 			Path: scriptPath,
 			Vars: []config.VarRef{
 				{Name: "FOO", Source: "awssm", Ref: smARN, Key: "FOO"},
+			},
+		},
+	}
+	return nil
+}
+
+// applyVault wires two Vault sources at the dev-mode server:
+//
+//	vault-kv2  → KV v2 at mount=secret, expand whole bag at <v2Path>
+//	vault-kv1  → KV v1 at mount=kv,     pick a single key at <v1Path>
+//
+// Both sources reuse the same root token (encrypted at rest), so a
+// scenario only has to assert that the seeded values land in the
+// child's env. The v1 mount is created by the scenario via the Vault
+// HTTP API; the seed itself only writes config.toml.
+func applyVault(cfg *config.Config, key []byte, o runOpts) error {
+	tokV2, err := crypto.EncryptField(key, o.vaultToken)
+	if err != nil {
+		return err
+	}
+	tokV1, err := crypto.EncryptField(key, o.vaultToken)
+	if err != nil {
+		return err
+	}
+	cfg.Sources = map[string]config.SourceConfig{
+		"vault-kv2": {
+			Type: "vault",
+			Params: map[string]any{
+				"address":     o.vaultAddr,
+				"auth_method": "token",
+				"token":       tokV2,
+				"mount":       "secret",
+				"kv_version":  "v2",
+			},
+		},
+		"vault-kv1": {
+			Type: "vault",
+			Params: map[string]any{
+				"address":     o.vaultAddr,
+				"auth_method": "token",
+				"token":       tokV1,
+				"mount":       "kv",
+				"kv_version":  "v1",
+			},
+		},
+	}
+	cfg.Mappings = []config.Mapping{
+		{
+			Path: o.scriptPath,
+			Vars: []config.VarRef{
+				// Empty Name + empty Key → expand whole bag.
+				{Source: "vault-kv2", Ref: o.vaultV2Path},
+			},
+		},
+		{
+			Path: o.vaultV1Script,
+			Vars: []config.VarRef{
+				// KV v1: pick a single key out of the path's body.
+				{Name: "LEGACY_TOKEN", Source: "vault-kv1", Ref: o.vaultV1Path, Key: "LEGACY_TOKEN"},
 			},
 		},
 	}
