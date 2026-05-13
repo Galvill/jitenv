@@ -17,6 +17,11 @@ concurrency:
 jobs:
   test:
     name: build / test / lint
+    # Skip the duplicate pull_request run on the release-please tracking
+    # branch — it only differs from main by CHANGELOG.md + the manifest,
+    # so the post-merge push-to-main run already covered the code. Saves
+    # ~6 min of CI per merge across the three jobs in this workflow.
+    if: ${{ github.event_name == 'push' || !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -75,6 +80,7 @@ jobs:
     # macOS port is "compiles" coverage only, so any syscall-level
     # regression would only surface after release. See #61.
     name: test (macos)
+    if: ${{ github.event_name == 'push' || !startsWith(github.head_ref, 'release-please--') }}
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -112,6 +118,7 @@ jobs:
     # into a shared file) fails CI immediately rather than being
     # discovered when Stage 2 starts.
     name: test (windows)
+    if: ${{ github.event_name == 'push' || !startsWith(github.head_ref, 'release-please--') }}
     runs-on: windows-latest
     steps:
       - name: Checkout
