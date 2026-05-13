@@ -1,20 +1,27 @@
 // Package chpwd is the entrypoint for the `jitenv __chpwd` subcommand.
-// The shell hooks call it on every directory change with the shell pid,
+// The shell hooks call it on every prompt fire with the shell pid,
 // the previous PWD, and the new PWD.
 //
 // Behaviour:
 //
-//  1. Read the config file directly (no agent required, no decryption
+//  1. Short-circuit when neither pwd nor the config-file mtime changed
+//     since the last call from this shell. Per-shell state lives in
+//     <runtime>/jitenv/shells/<pid>/last-mtime — see lastMtimePath.
+//  2. Read the config file directly (no agent required, no decryption
 //     required — cwd_glob and commands are plaintext fields).
-//  2. Compute the union of `commands` lists across cwd_glob mappings
+//  3. Compute the union of `commands` lists across cwd_glob mappings
 //     whose pattern matches newPwd.
-//  3. Reconcile the per-shell wrapper bin dir: add missing symlinks,
-//     remove extras.
+//  4. Reconcile the per-shell wrapper bin dir: add missing symlinks,
+//     remove extras. Write the current mtime to the sidecar.
 //
 // Reading config directly (rather than going through the agent) means
 // the wrapper symlinks are correct whether the agent is locked or
 // running. The agent stays in the critical path only at shim-time
 // (to fetch the actual env var values, which DO require decryption).
+//
+// The per-shell sidecar gets reaped automatically by
+// agent.GcOrphanShells, which removes the entire <pid>/ directory when
+// the shell dies.
 package chpwd
 
 import (
@@ -39,6 +46,7 @@ func Run(args []string) error {
 	if err != nil || pid <= 0 {
 		return fmt.Errorf("invalid shell pid %q", args[0])
 	}
+	oldPwd := args[1]
 	newPwd := args[2]
 
 	paths, err := agent.DefaultPaths()
@@ -46,10 +54,26 @@ func Run(args []string) error {
 		return err
 	}
 	wrapDir := paths.ShellWrapDir(pid)
+	mtimePath := lastMtimePath(paths, pid)
 
-	debugLog("pid=%d oldpwd=%q newpwd=%q wrapDir=%q", pid, args[1], newPwd, wrapDir)
+	cfgPath, cfgErr := config.Resolve(os.Getenv("JITENV_CONFIG"))
+	curMtime := statMtime(cfgPath)
+	lastMtime := readLastMtime(mtimePath)
 
-	wanted, err := desiredCommands(newPwd)
+	debugLog("pid=%d oldpwd=%q newpwd=%q wrapDir=%q cfg=%q curMtime=%d lastMtime=%d",
+		pid, oldPwd, newPwd, wrapDir, cfgPath, curMtime, lastMtime)
+
+	// Short-circuit: pwd unchanged AND config mtime unchanged. Cheapest
+	// path; covers the common per-prompt fire. We require lastMtime to
+	// have been recorded at least once so the very first invocation
+	// after hook-load still reconciles (sets up wrapper dir even when
+	// the shell starts inside an already-mapped cwd_glob dir).
+	if cfgErr == nil && oldPwd == newPwd && lastMtime != 0 && curMtime == lastMtime {
+		debugLog("short-circuit: pwd+mtime unchanged")
+		return nil
+	}
+
+	wanted, err := desiredCommandsFor(cfgPath, cfgErr, newPwd)
 	if err != nil {
 		debugLog("desiredCommands error: %v", err)
 		// Config missing or malformed: leave the wrapper dir alone
@@ -62,18 +86,64 @@ func Run(args []string) error {
 		debugLog("reconcile error: %v", err)
 		return err
 	}
+	if err := writeLastMtime(mtimePath, curMtime); err != nil {
+		debugLog("writeLastMtime error: %v", err)
+		// Non-fatal: next call will just see a stale state and reconcile again.
+	}
 	debugLog("reconcile ok (%d symlinks)", len(wanted))
 	return nil
 }
 
-// desiredCommands reads the on-disk config and returns the union of
-// every cwd_glob mapping's commands list whose pattern matches pwd.
-// No agent contact, no decryption — the cwd_glob and commands fields
-// are plaintext TOML.
-func desiredCommands(pwd string) ([]string, error) {
-	cfgPath, err := config.Resolve(os.Getenv("JITENV_CONFIG"))
+// lastMtimePath is the per-shell sidecar that records the config-file
+// mtime as of the last reconcile from this shell. Living alongside the
+// wrapper bin dir means agent.GcOrphanShells reaps it for free when
+// the shell dies — same lifetime as the wrap dir.
+func lastMtimePath(paths agent.Paths, pid int) string {
+	return filepath.Join(filepath.Dir(paths.ShellWrapDir(pid)), "last-mtime")
+}
+
+// statMtime returns the file's mtime in Unix nanoseconds, or 0 if the
+// file is missing/unreadable. Unix nanoseconds give us enough precision
+// to detect rewrites inside the same wall-clock second — the previous
+// shell-side stat fell back to whole seconds and could miss those.
+func statMtime(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	st, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return 0
+	}
+	return st.ModTime().UnixNano()
+}
+
+func readLastMtime(path string) int64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(string(b), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func writeLastMtime(path string, mtime int64) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(strconv.FormatInt(mtime, 10)), 0o600)
+}
+
+// desiredCommandsFor reads the config at cfgPath and returns the union
+// of every cwd_glob mapping's commands list whose pattern matches pwd.
+// No agent contact, no decryption — the cwd_glob and commands fields
+// are plaintext TOML. cfgErr is the pre-resolved Resolve error so the
+// caller doesn't pay a second config.Resolve cost.
+func desiredCommandsFor(cfgPath string, cfgErr error, pwd string) ([]string, error) {
+	if cfgErr != nil {
+		return nil, cfgErr
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {

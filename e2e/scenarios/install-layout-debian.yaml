@@ -39,18 +39,29 @@ steps:
   - name: assert-zsh-snippet
     assert_exit_code: 0
 
-  # The shipped snippet must be byte-identical to what `jitenv hook bash`
-  # emits today; otherwise users get drift between `hook install` and a
-  # source-the-snippet workflow.
-  - name: bash-snippet-matches-hook
-    exec: diff -u <(jitenv hook bash) /usr/share/jitenv/snippets/bash.sh
-  - name: assert-bash-match
+  # The shipped snippets are the template form (with {{RuntimeDir}} /
+  # {{ConfigPath}} placeholders); `jitenv hook bash|zsh` substitutes
+  # them at print time. Assert both halves: file has the markers, hook
+  # output doesn't.
+  - name: bash-snippet-has-template-markers
+    exec: grep -q '{{RuntimeDir}}' /usr/share/jitenv/snippets/bash.sh
+  - name: assert-bash-template
     assert_exit_code: 0
 
-  - name: zsh-snippet-matches-hook
-    exec: diff -u <(jitenv hook zsh) /usr/share/jitenv/snippets/zsh.sh
-  - name: assert-zsh-match
+  - name: zsh-snippet-has-template-markers
+    exec: grep -q '{{RuntimeDir}}' /usr/share/jitenv/snippets/zsh.sh
+  - name: assert-zsh-template
     assert_exit_code: 0
+
+  - name: bash-hook-substitutes-markers
+    exec: jitenv hook bash
+  - name: assert-bash-no-markers
+    assert_stdout_not_contains: "{{RuntimeDir}}"
+
+  - name: zsh-hook-substitutes-markers
+    exec: jitenv hook zsh
+  - name: assert-zsh-no-markers
+    assert_stdout_not_contains: "{{RuntimeDir}}"
 
   - name: license-doc-exists
     exec: test -f /usr/share/doc/jitenv/LICENSE

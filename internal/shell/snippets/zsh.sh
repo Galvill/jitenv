@@ -2,18 +2,16 @@
 # Uses a zle widget bound to "accept-line" to rewrite BUFFER before
 # submission. Only acts on commands whose first token resolves to /, ./
 # or ../ paths.
+#
+# The runtime-dir + config-path values below are baked in by
+# `jitenv hook zsh` at print time so the shell never duplicates the
+# Go side's path resolution. See internal/shell/render.go.
 
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0; fi
 __JITENV_LOADED=1
 
-# Per-shell wrapper-symlink dir for cwd_glob mappings (mirrors
-# bash.sh).
-if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-    __JITENV_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/jitenv"
-else
-    __JITENV_RUNTIME_DIR="${TMPDIR:-/tmp}"
-    __JITENV_RUNTIME_DIR="${__JITENV_RUNTIME_DIR%/}/jitenv-$UID"
-fi
+__JITENV_RUNTIME_DIR={{RuntimeDir}}
+__JITENV_CFG_PATH={{ConfigPath}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # See bash.sh — gates env injection in the shim so vars don't leak
 # into children of unmapped commands (issue #52).
@@ -24,34 +22,29 @@ case ":$PATH:" in
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
 esac
 
+# Tiny per-shell $JITENV_CONFIG override so users can re-point one
+# shell at a different config without re-sourcing the hook. The
+# baked-in default (see __JITENV_CFG_PATH above) is what `jitenv`
+# itself resolves; this function exists so callers can query the
+# effective config path from inside the shell.
 __jitenv_cfg_path() {
     if [[ -n "${JITENV_CONFIG:-}" ]]; then
         print -r -- "$JITENV_CONFIG"
     else
-        print -r -- "${XDG_CONFIG_HOME:-$HOME/.config}/jitenv/config.toml"
+        print -r -- "$__JITENV_CFG_PATH"
     fi
-}
-__jitenv_cfg_mtime() {
-    local cfg="$1"
-    [[ -e "$cfg" ]] || { print -r -- 0; return; }
-    stat -c %Y "$cfg" 2>/dev/null || stat -f %m "$cfg" 2>/dev/null || print -r -- 0
 }
 # precmd-style hook: fires every time the prompt is about to redraw,
-# including after a cd (subsumes chpwd_functions). The PWD-diff +
-# mtime-diff inside makes the no-op case a tiny pair of comparisons.
-# The mtime branch handles "user edits config while sitting in the
-# mapped dir": symlinks get re-reconciled on the next prompt without
-# requiring a cd.
+# including after a cd. The Go side compares pwd and the config-file
+# mtime against per-shell sidecar state ($__JITENV_RUNTIME_DIR/shells/
+# $$/last-mtime + the wrapper-dir contents) and short-circuits when
+# nothing changed. One fork per prompt; Go has nothing to do in the
+# common case. Keeping the state in Go means a fresh re-source of the
+# hook doesn't cause a spurious reconcile.
 __jitenv_chpwd() {
-    local cfg mtime
-    cfg="$(__jitenv_cfg_path)"
-    mtime="$(__jitenv_cfg_mtime "$cfg")"
-    if [[ "$PWD" != "${__JITENV_LAST_PWD-}" || "$mtime" != "${__JITENV_LAST_CFG_MTIME-}" ]]; then
-        # No 2>/dev/null on purpose; see bash.sh for the rationale.
-        jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
-        __JITENV_LAST_PWD="$PWD"
-        __JITENV_LAST_CFG_MTIME="$mtime"
-    fi
+    # No 2>/dev/null on purpose; see bash.sh for the rationale.
+    jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    __JITENV_LAST_PWD="$PWD"
 }
 typeset -ga precmd_functions
 precmd_functions+=(__jitenv_chpwd)

@@ -17,16 +17,26 @@ func newHookCmd() *cobra.Command {
 		Use:   "bash",
 		Short: "Print bash integration",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprint(cmd.OutOrStdout(), shell.Bash)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out, err := shell.Render("bash")
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), out)
+			return nil
 		},
 	})
 	c.AddCommand(&cobra.Command{
 		Use:   "zsh",
 		Short: "Print zsh integration",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprint(cmd.OutOrStdout(), shell.Zsh)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out, err := shell.Render("zsh")
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), out)
+			return nil
 		},
 	})
 	c.AddCommand(newHookInstallCmd())
