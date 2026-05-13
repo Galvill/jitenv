@@ -30,7 +30,7 @@ func schema() []source.ParamField {
 	return []source.ParamField{
 		{Key: "region", Label: "AWS region", Required: true, Help: "e.g. us-east-1"},
 		{Key: "access_key_id", Label: "Access key ID",
-			Help: "Leave all credential fields empty to fall back to the AWS default chain (env vars / shared config / instance role)."},
+			Help: "Leave credential fields empty to use the AWS default chain."},
 		{Key: "secret_access_key", Label: "Secret access key", Sensitive: true,
 			Help: "Encrypted at rest under the master key."},
 		{Key: "session_token", Label: "Session token", Sensitive: true,
@@ -43,10 +43,15 @@ func schema() []source.ParamField {
 			Help: "Optional; default: jitenv"},
 		{Key: "endpoint_override", Label: "Endpoint URL override",
 			Help: "Optional: override STS / Secrets Manager endpoints (e.g. http://localhost:4566 for LocalStack)."},
-		{Key: "profile", Label: "Shared-config profile",
-			Help: "Optional: AWS_PROFILE name when falling back to the default chain. Ignored if Access key ID is set."},
 	}
 }
+
+// errProfileRemoved is returned by New when a stored config still
+// carries a non-empty `profile` value. Falling silently back to the
+// default credential chain risks loading the wrong AWS account, so we
+// fail hard and tell the user how to migrate.
+const errProfileRemoved = `the "profile" field has been removed from the AWS source.
+Clear it from your config and set AWS_PROFILE in your environment instead.`
 
 // New constructs an AWS Secrets Manager source.
 //
@@ -55,8 +60,7 @@ func schema() []source.ParamField {
 //   - access_key_id non-empty → static credentials from the UI fields
 //     (secret_access_key required; session_token optional).
 //   - access_key_id empty     → AWS default credential chain
-//     (env vars, shared config, instance/IRSA), optionally scoped to
-//     `profile`.
+//     (env vars, shared config, instance/IRSA).
 //
 // In either case, if `role_arn` is set, the source assumes that role via
 // STS using the resolved base credentials. `endpoint_override`, when
@@ -66,7 +70,15 @@ func schema() []source.ParamField {
 // source is allowed to read. The TUI surfaces them as bags in the
 // var-tree picker; the agent only ever Fetches IDs the user explicitly
 // added.
+//
+// The legacy `profile` field is no longer accepted; a non-empty value
+// in stored config trips a hard error so credential resolution never
+// silently drifts to the wrong account. Migrate by clearing the field
+// and exporting AWS_PROFILE in the environment.
 func New(cfg map[string]any) (source.Source, error) {
+	if p := asString(cfg["profile"]); p != "" {
+		return nil, errors.New(errProfileRemoved)
+	}
 	s := &awsSource{
 		region:           asString(cfg["region"]),
 		accessKeyID:      asString(cfg["access_key_id"]),
@@ -76,7 +88,6 @@ func New(cfg map[string]any) (source.Source, error) {
 		roleExternalID:   asString(cfg["role_external_id"]),
 		roleSessionName:  asString(cfg["role_session_name"]),
 		endpointOverride: asString(cfg["endpoint_override"]),
-		profile:          asString(cfg["profile"]),
 		arns:             asStringList(cfg["arns"]),
 	}
 	if s.accessKeyID != "" && s.secretAccessKey == "" {
@@ -119,7 +130,6 @@ type awsSource struct {
 	roleExternalID   string
 	roleSessionName  string
 	endpointOverride string
-	profile          string
 	arns             []string
 }
 
@@ -136,13 +146,10 @@ func (a *awsSource) loadAwsCfg(ctx context.Context) (awsv2.Config, error) {
 		opts = append(opts, config.WithRegion(a.region))
 	}
 
-	switch {
-	case a.accessKeyID != "":
+	if a.accessKeyID != "" {
 		opts = append(opts, config.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(a.accessKeyID, a.secretAccessKey, a.sessionToken),
 		))
-	case a.profile != "":
-		opts = append(opts, config.WithSharedConfigProfile(a.profile))
 	}
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
