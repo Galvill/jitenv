@@ -2,13 +2,81 @@
 
 package shim
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
 
-// execReal on Windows refuses to run. The cwd_glob wrapper-symlink
-// model assumes a POSIX exec-in-place primitive (so argv[0] survives
-// and the parent shell's pid is inherited); Windows has no equivalent.
-// A real port will need spawn-and-wait or a different invocation
-// model entirely. Tracking in #39 stage 2+.
-func execReal(_ string, _ []string, _ []string) error {
-	return errors.New("jitenv shim: not yet supported on windows; tracking in #39")
+	"golang.org/x/sys/windows"
+)
+
+// execReal on Windows spawns realPath synchronously: stdio is inherited
+// so the wrapped program is indistinguishable from a direct invocation
+// for the typing user, console-control signals are forwarded to the
+// child's process group, and after Wait() the function calls os.Exit
+// with the child's exit code. The shim parent process stays alive for
+// the child's lifetime (visible in Task Manager) — there is no
+// exec-replace primitive on Windows, so this is the deliberate
+// trade-off.
+//
+// Note the argv parameter: on Unix syscall.Exec uses argv[0] as the
+// program name visible to the child (so wrapped `npm` sees os.Args[0]
+// == "npm" rather than the full symlink path). exec.Cmd does not let
+// us override argv[0] in a portable way — Windows binaries don't have
+// the same convention anyway and most tooling reads its name from
+// GetModuleFileName, not argv[0]. We pass argv[1:] as cmd.Args.
+//
+// Like replaceProcess in internal/run/run_windows.go, this function
+// returns a Go error only when the child failed to start. On a
+// successful spawn + wait it calls os.Exit and never returns.
+func execReal(realPath string, argv []string, env []string) error {
+	// argv[0] is the typed command name; argv[1:] is the rest.
+	var args []string
+	if len(argv) > 1 {
+		args = argv[1:]
+	}
+	cmd := exec.Command(realPath, args...)
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("exec %s: %w", realPath, err)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-sigCh:
+				if cmd.Process != nil {
+					_ = windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(cmd.Process.Pid))
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	err := cmd.Wait()
+	close(done)
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.ExitCode())
+		}
+		return fmt.Errorf("exec %s: %w", realPath, err)
+	}
+	os.Exit(0)
+	return nil // unreachable; satisfies the compiler
 }
