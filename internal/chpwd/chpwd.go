@@ -11,13 +11,26 @@
 //     required — cwd_glob and commands are plaintext fields).
 //  3. Compute the union of `commands` lists across cwd_glob mappings
 //     whose pattern matches newPwd.
-//  4. Reconcile the per-shell wrapper bin dir: add missing symlinks,
+//  4. Reconcile the per-shell wrapper bin dir: add missing wrappers,
 //     remove extras. Write the current mtime to the sidecar.
 //
+// The per-command wrapper shape is platform-split:
+//   - Unix: a symlink named after the command (`npm`) pointing at the
+//     running jitenv binary. main.go's argv[0] dispatch routes the
+//     invocation through internal/shim.
+//   - Windows: a tiny `.ps1` file (`npm.ps1`) that re-invokes
+//     `jitenv.exe __shim npm @args` and propagates $LASTEXITCODE.
+//     Symlinks need admin / developer mode on Windows, and
+//     PowerShell's PATHEXT lookup picks up `.PS1` natively.
+//
+// Both shapes share the same diff loop (compute desired set, drop
+// stragglers, add missing) below; only the create / read-back helpers
+// differ. See reconcile_unix.go and reconcile_windows.go.
+//
 // Reading config directly (rather than going through the agent) means
-// the wrapper symlinks are correct whether the agent is locked or
-// running. The agent stays in the critical path only at shim-time
-// (to fetch the actual env var values, which DO require decryption).
+// the wrappers are correct whether the agent is locked or running.
+// The agent stays in the critical path only at shim-time (to fetch
+// the actual env var values, which DO require decryption).
 //
 // The per-shell sidecar gets reaped automatically by
 // agent.GcOrphanShells, which removes the entire <pid>/ directory when
@@ -90,7 +103,7 @@ func Run(args []string) error {
 		debugLog("writeLastMtime error: %v", err)
 		// Non-fatal: next call will just see a stale state and reconcile again.
 	}
-	debugLog("reconcile ok (%d symlinks)", len(wanted))
+	debugLog("reconcile ok (%d wrappers)", len(wanted))
 	return nil
 }
 
@@ -155,10 +168,14 @@ func desiredCommandsFor(cfgPath string, cfgErr error, pwd string) ([]string, err
 	return config.NewIndex(cfg.Mappings).CwdCommands(pwd), nil
 }
 
-// reconcile makes the wrapper dir contain exactly one symlink per
-// `wanted` command, all pointing at the running jitenv binary. Extra
-// symlinks are removed. Cheap to call repeatedly with the same set —
-// it short-circuits when the dir already matches.
+// reconcile makes the wrapper dir contain exactly one wrapper per
+// `wanted` command, all pointing at (Unix: symlinked to / Windows:
+// invoking) the running jitenv binary. Extra wrappers are removed.
+// Cheap to call repeatedly with the same set — isOurs lets it
+// short-circuit when the dir already matches.
+//
+// The shape of a "wrapper" is platform-split (symlink on Unix,
+// `.ps1` file on Windows). See reconcile_unix.go / reconcile_windows.go.
 func reconcile(wrapDir string, wanted []string) error {
 	if len(wanted) == 0 {
 		// No mapping → empty the dir if it exists. We don't remove
@@ -185,12 +202,15 @@ func reconcile(wrapDir string, wanted []string) error {
 		return err
 	}
 
-	want := make(map[string]struct{}, len(wanted))
+	// Build the desired set keyed by on-disk filename (e.g. "npm" on
+	// Unix, "npm.ps1" on Windows) so the unwanted-entry sweep can
+	// compare apples to apples against os.ReadDir output.
+	want := make(map[string]string, len(wanted)) // filename -> command
 	for _, c := range wanted {
-		want[c] = struct{}{}
+		want[wrapperFileName(c)] = c
 	}
 
-	// Drop unwanted symlinks.
+	// Drop unwanted wrappers.
 	entries, err := os.ReadDir(wrapDir)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -203,16 +223,17 @@ func reconcile(wrapDir string, wanted []string) error {
 		_ = os.Remove(filepath.Join(wrapDir, name))
 	}
 
-	// Add missing ones.
+	// Add missing ones. isOurs decides whether an existing entry is
+	// already a valid jitenv-owned wrapper; if so the create call is
+	// skipped. Otherwise createWrapper rewrites.
 	for _, c := range wanted {
-		link := filepath.Join(wrapDir, c)
-		existing, err := os.Readlink(link)
-		if err == nil && existing == target {
+		wrapPath := filepath.Join(wrapDir, wrapperFileName(c))
+		ok, err := isOurs(wrapPath, target)
+		if err == nil && ok {
 			continue
 		}
-		_ = os.Remove(link) // tolerate stale entries
-		if err := os.Symlink(target, link); err != nil {
-			return fmt.Errorf("symlink %s: %w", link, err)
+		if err := createWrapper(wrapPath, c, target); err != nil {
+			return err
 		}
 	}
 	return nil
