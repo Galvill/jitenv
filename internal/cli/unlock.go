@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,6 +22,11 @@ func newUnlockCmd() *cobra.Command {
 		Short: "Unlock the agent (prompts passphrase, starts background agent)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if runtime.GOOS == "windows" {
+				return fmt.Errorf("jitenv: Windows is not yet supported. " +
+					"The codebase compiles for GOOS=windows but the agent/shim/run paths " +
+					"are stubs. Track progress in https://github.com/gv/jitenv/issues/39.")
+			}
 			cfgPath, err := config.Resolve(configPath)
 			if err != nil {
 				return err

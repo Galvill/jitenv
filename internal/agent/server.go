@@ -76,6 +76,10 @@ func (a *Agent) currentResolver() Resolver {
 //
 // Also runs a one-time GC pass over ShellsDir, removing wrapper dirs
 // for shell pids that aren't alive anymore. Cheap, idempotent.
+//
+// The actual socket-binding step is platform-split into socket_unix.go
+// (real net.ListenUnix) and socket_windows.go (returns "not yet
+// implemented"). See #39 stage 1.
 func (a *Agent) Listen() error {
 	_ = GcOrphanShells(a.paths.ShellsDir)
 	if existing, _ := ReadPidFile(a.paths.PidFile); existing > 0 && PidAlive(existing) {
@@ -83,12 +87,8 @@ func (a *Agent) Listen() error {
 	}
 	_ = os.Remove(a.paths.Socket)
 
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: a.paths.Socket, Net: "unix"})
+	ln, err := listenSocket(a.paths.Socket)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", a.paths.Socket, err)
-	}
-	if err := os.Chmod(a.paths.Socket, 0600); err != nil {
-		ln.Close()
 		return err
 	}
 	a.listener = ln

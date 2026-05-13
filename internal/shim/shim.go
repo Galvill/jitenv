@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -112,13 +111,7 @@ func run(invokedAs string, args []string) error {
 	}
 
 	argv := append([]string{invokedAs}, args...)
-	if execErr := syscall.Exec(realPath, argv, env); execErr != nil {
-		if errors.Is(execErr, syscall.ENOEXEC) {
-			return fmt.Errorf("%s: file is not directly executable", realPath)
-		}
-		return fmt.Errorf("exec %s: %w", realPath, execErr)
-	}
-	return nil
+	return execReal(realPath, argv, env)
 }
 
 // shouldInject decides whether the shim should pull in mapped env
