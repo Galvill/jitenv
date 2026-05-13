@@ -15,7 +15,7 @@ import (
 // Agent is the per-user secret-fetching daemon.
 type Agent struct {
 	paths    Paths
-	listener *net.UnixListener
+	listener net.Listener
 
 	startedAt time.Time
 	hits      atomic.Int64
@@ -72,19 +72,25 @@ func (a *Agent) currentResolver() Resolver {
 	return a.resolver
 }
 
-// Listen creates the unix socket. Caller must call Serve to accept.
+// Listen creates the agent transport endpoint. Caller must call Serve
+// to accept.
 //
 // Also runs a one-time GC pass over ShellsDir, removing wrapper dirs
 // for shell pids that aren't alive anymore. Cheap, idempotent.
 //
-// The actual socket-binding step is platform-split into socket_unix.go
-// (real net.ListenUnix) and socket_windows.go (returns "not yet
-// implemented"). See #39 stage 1.
+// The actual binding step is platform-split into socket_unix.go (real
+// net.ListenUnix at paths.Socket) and socket_windows.go (named-pipe
+// listener at paths.Socket interpreted as a \\.\pipe\... name). The
+// returned listener is just a net.Listener — per-connection peer
+// authentication happens in checkPeerUid, which has its own
+// platform-split implementations.
 func (a *Agent) Listen() error {
 	_ = GcOrphanShells(a.paths.ShellsDir)
 	if existing, _ := ReadPidFile(a.paths.PidFile); existing > 0 && PidAlive(existing) {
 		return fmt.Errorf("agent already running (pid %d)", existing)
 	}
+	// Best-effort cleanup of a stale socket file. No-op on Windows where
+	// Socket is a pipe name, not a filesystem path.
 	_ = os.Remove(a.paths.Socket)
 
 	ln, err := listenSocket(a.paths.Socket)
@@ -114,7 +120,7 @@ func (a *Agent) Serve(ctx context.Context) error {
 	}()
 
 	for {
-		conn, err := a.listener.AcceptUnix()
+		conn, err := a.listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -157,12 +163,14 @@ func (a *Agent) idleLoop(ctx context.Context) {
 	}
 }
 
-// checkPeerUid lives in peer_linux.go / peer_darwin.go so that each
-// platform uses the right peer-credential syscall (SO_PEERCRED on Linux,
-// LOCAL_PEERCRED on Darwin). The agent only builds for those two
-// platforms — see CLAUDE.md "Big-picture architecture" §agent.
+// checkPeerUid lives in peer_linux.go / peer_darwin.go / peer_windows.go
+// so each platform uses the right peer-credential mechanism: SO_PEERCRED
+// on Linux, LOCAL_PEERCRED on Darwin, and GetNamedPipeClientProcessId +
+// token-SID compare on Windows. The handler takes a net.Conn — each
+// implementation type-asserts to the concrete connection type it expects
+// (*net.UnixConn on Unix, the go-winio pipe conn on Windows).
 
-func (a *Agent) handle(ctx context.Context, c *net.UnixConn) {
+func (a *Agent) handle(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	if err := checkPeerUid(c); err != nil {
 		_ = WriteMessage(c, Response{OK: false, Error: "unauthorized"})

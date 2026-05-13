@@ -5,6 +5,8 @@ package agent
 import (
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/windows"
 )
 
 // runtimeBaseDir returns the per-user runtime directory for the agent
@@ -14,10 +16,9 @@ import (
 // (Roaming) on Windows, which is a reasonable second-choice; the
 // final fallback is os.TempDir() so we never return an empty path.
 //
-// The agent itself does not start on Windows today (see SpawnDaemon
-// in daemonize_windows.go) but ResolvePaths is reachable from
-// `jitenv hook` and other read-only commands, so it has to return
-// _something_ sensible.
+// Used for the on-disk side of Paths (Dir, PidFile, LogFile,
+// ShellsDir). The pipe transport's Socket field is computed
+// separately in pipeName().
 func runtimeBaseDir() string {
 	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
 		return filepath.Join(dir, "jitenv")
@@ -26,4 +27,32 @@ func runtimeBaseDir() string {
 		return filepath.Join(dir, "jitenv")
 	}
 	return filepath.Join(os.TempDir(), "jitenv")
+}
+
+// socketEndpoint returns the Paths.Socket value on Windows: the
+// per-user named-pipe name. The baseDir argument is ignored — pipe
+// names live in their own namespace, not on the filesystem.
+func socketEndpoint(_ string) string {
+	return pipeName()
+}
+
+// pipeName returns the per-user named-pipe path the agent listens on.
+// Windows named pipes live in their own namespace (\\.\pipe\...) — not
+// the filesystem — and pipe names are required to be unique
+// system-wide, so the per-user SID is folded into the name to keep
+// multiple users on the same box from colliding. The pipe is further
+// ACL-restricted to that SID in socket_windows.go.
+//
+// If the current user's SID cannot be resolved (extremely unusual on a
+// healthy Windows install), fall back to a static name. The agent will
+// then fail at Listen with a clearer error message than panicking
+// inside Paths construction.
+func pipeName() string {
+	tok := windows.GetCurrentProcessToken()
+	tu, err := tok.GetTokenUser()
+	if err != nil {
+		return `\\.\pipe\jitenv-unknown`
+	}
+	sid := tu.User.Sid.String()
+	return `\\.\pipe\jitenv-` + sid
 }
