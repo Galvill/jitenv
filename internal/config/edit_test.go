@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -37,6 +38,14 @@ func TestInitAndDeriveKey(t *testing.T) {
 }
 
 func TestResolveDefaultPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Hardcoded Unix-style "/tmp/..." paths get rewritten by
+		// filepath.Join on Windows to use backslashes, so the literal
+		// string comparison fails. Real Windows path resolution lives
+		// behind #39 stage 2+; for now skip rather than rewrite the
+		// expected value, which would weaken the Unix assertion.
+		t.Skip("windows: Unix-style /tmp paths in fixtures; tracking in #39")
+	}
 	t.Setenv("JITENV_CONFIG", "/tmp/explicit.toml")
 	got, err := Resolve("")
 	if err != nil {
