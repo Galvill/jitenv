@@ -29,6 +29,10 @@ func newForm(schema []source.ParamField, initial map[string]string) *form {
 	f := &form{}
 	for _, sf := range schema {
 		ti := textinput.New()
+		// Placeholder mirrors Help only when the field is blurred. The
+		// focused field gets its hint from the dedicated hint line in
+		// View(), so showing the same text inside the input as well is
+		// just noise. See focus() / focusFirst() for the swap.
 		ti.Placeholder = sf.Help
 		ti.Prompt = ""
 		ti.CharLimit = 4096
@@ -43,6 +47,7 @@ func newForm(schema []source.ParamField, initial map[string]string) *form {
 	}
 	if len(f.fields) > 0 {
 		f.fields[0].input.Focus()
+		f.fields[0].input.Placeholder = ""
 	}
 	return f
 }
@@ -123,9 +128,16 @@ func (f *form) focus(i int) {
 	if i >= len(f.fields) {
 		i = len(f.fields) - 1
 	}
-	f.fields[f.cursor].input.Blur()
+	prev := f.fields[f.cursor]
+	prev.input.Blur()
+	// Restore the blurred field's placeholder so the help text appears
+	// inside its (empty) input again.
+	prev.input.Placeholder = prev.Help
 	f.cursor = i
 	f.fields[i].input.Focus()
+	// Suppress the focused field's placeholder — the hint line below
+	// the input already shows the same text.
+	f.fields[i].input.Placeholder = ""
 }
 
 func (f *form) View() string {

@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -44,7 +45,6 @@ func TestSchemaHasRequiredFields(t *testing.T) {
 		"role_external_id":  false,
 		"role_session_name": false,
 		"endpoint_override": false,
-		"profile":           false,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("schema fields: got %d, want %d", len(got), len(want))
@@ -58,6 +58,40 @@ func TestSchemaHasRequiredFields(t *testing.T) {
 		if f.Required != req {
 			t.Errorf("field %q required: got %v, want %v", f.Key, f.Required, req)
 		}
+	}
+}
+
+func TestSchemaDoesNotIncludeProfile(t *testing.T) {
+	for _, f := range schema() {
+		if f.Key == "profile" {
+			t.Fatalf("schema still exposes removed %q field", f.Key)
+		}
+	}
+}
+
+func TestNewRejectsLegacyProfileField(t *testing.T) {
+	_, err := New(map[string]any{
+		"region":  "us-east-1",
+		"profile": "default",
+	})
+	if err == nil {
+		t.Fatalf("expected error when legacy profile field is set")
+	}
+	const wantSub = `the "profile" field has been removed`
+	if !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("error message missing %q: got %q", wantSub, err.Error())
+	}
+	if !strings.Contains(err.Error(), "AWS_PROFILE") {
+		t.Fatalf("error message should point to AWS_PROFILE: got %q", err.Error())
+	}
+}
+
+func TestNewIgnoresEmptyProfileField(t *testing.T) {
+	if _, err := New(map[string]any{
+		"region":  "us-east-1",
+		"profile": "",
+	}); err != nil {
+		t.Fatalf("unexpected error for empty profile: %v", err)
 	}
 }
 
