@@ -193,19 +193,9 @@ func lookPathExcluding(name, excludeDir string) (string, error) {
 		if abs == excludeAbs {
 			continue
 		}
-		candidate := filepath.Join(dir, name)
-		info, err := os.Stat(candidate)
-		if err != nil {
-			continue
+		if candidate, ok := findExecutableInDir(dir, name); ok {
+			return candidate, nil
 		}
-		if info.IsDir() {
-			continue
-		}
-		// Same executable check os/exec uses: any executable bit set.
-		if info.Mode()&0o111 == 0 {
-			continue
-		}
-		return candidate, nil
 	}
 	return "", fmt.Errorf("%s: not found on $PATH (excluding %s)", name, excludeDir)
 }

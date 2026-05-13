@@ -8,10 +8,59 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/windows"
 )
+
+// defaultPathExt is the fallback %PATHEXT% set used when the env var
+// is empty — matches the Windows default and os/exec.LookPath.
+const defaultPathExt = ".COM;.EXE;.BAT;.CMD"
+
+// findExecutableInDir returns the absolute path of a usable executable
+// named `name` in `dir`, or ok=false if none. Windows doesn't surface
+// Unix mode bits via os.Stat, so the Unix `Mode()&0o111` test would
+// reject every .exe; instead we follow os/exec.LookPath's PATHEXT
+// rule: if `name` already ends with a known extension, look for that
+// exact file; otherwise try `name + ext` for each %PATHEXT% entry,
+// case-insensitively. First hit wins. See issue #97.
+func findExecutableInDir(dir, name string) (string, bool) {
+	pathext := os.Getenv("PATHEXT")
+	if pathext == "" {
+		pathext = defaultPathExt
+	}
+	exts := strings.Split(strings.ToLower(pathext), ";")
+
+	if hasKnownExt(name, exts) {
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+		return "", false
+	}
+	for _, ext := range exts {
+		if ext == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name+ext)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func hasKnownExt(name string, exts []string) bool {
+	lower := strings.ToLower(name)
+	for _, ext := range exts {
+		if ext != "" && strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
 
 // execReal on Windows spawns realPath synchronously: stdio is inherited
 // so the wrapped program is indistinguishable from a direct invocation
