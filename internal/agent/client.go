@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 )
 
-// Client talks to a running agent over its unix socket.
+// Client talks to a running agent over its per-user transport. On
+// Unix the socketPath is a filesystem path bound to an AF_UNIX socket;
+// on Windows it is a named-pipe name (e.g. \\.\pipe\jitenv-<sid>). The
+// caller doesn't need to care — dialAgent is platform-split.
 type Client struct {
 	socketPath string
 	timeout    time.Duration
@@ -18,8 +20,7 @@ func NewClient(socketPath string) *Client {
 }
 
 func (c *Client) call(ctx context.Context, req Request) (Response, error) {
-	d := net.Dialer{Timeout: c.timeout}
-	conn, err := d.DialContext(ctx, "unix", c.socketPath)
+	conn, err := dialAgent(ctx, c.socketPath, c.timeout)
 	if err != nil {
 		return Response{}, fmt.Errorf("connect agent: %w", err)
 	}

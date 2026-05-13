@@ -2,7 +2,7 @@ GO ?= go
 BIN := jitenv
 PREFIX ?= $(HOME)/.local
 
-.PHONY: build install test fmt vet tidy lint release-snapshot clean \
+.PHONY: build build-windows install test fmt vet tidy lint release-snapshot clean \
 	e2e-up e2e-down e2e-down-hard e2e-build e2e-build-artifacts \
 	e2e-run e2e-runner-build e2e-shell
 
@@ -17,6 +17,14 @@ LDFLAGS := -s -w \
 
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/jitenv
+
+# Cross-compile the Windows binary. Stage 1 (#80) made the codebase
+# compile for GOOS=windows; the runtime port lands in #86-91. Useful
+# for reviewers verifying a Windows-touching PR really produces an
+# executable — `go build ./...` is a compile-check only and does not
+# emit a .exe.
+build-windows:
+	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN).exe ./cmd/jitenv
 
 install: build
 	install -Dm0755 bin/$(BIN) $(PREFIX)/bin/$(BIN)

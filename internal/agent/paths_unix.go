@@ -18,3 +18,9 @@ func runtimeBaseDir() string {
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("jitenv-%d", os.Getuid()))
 }
+
+// socketEndpoint returns the Paths.Socket value on Unix: the path of
+// the AF_UNIX socket file under the runtime base directory.
+func socketEndpoint(baseDir string) string {
+	return filepath.Join(baseDir, "agent.sock")
+}

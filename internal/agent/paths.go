@@ -7,6 +7,14 @@ import (
 )
 
 // Paths describes the per-user runtime locations the agent uses.
+//
+// Socket is overloaded across platforms: on Unix it is the filesystem
+// path of an AF_UNIX socket (e.g. $XDG_RUNTIME_DIR/jitenv/agent.sock);
+// on Windows it is a named-pipe name (e.g. \\.\pipe\jitenv-<sid>) and
+// must not be passed to filesystem APIs other than os.Remove (which
+// is harmless and silently fails). The agent and client both treat it
+// as an opaque transport endpoint string and route it through the
+// platform-split listenSocket / dialAgent functions.
 type Paths struct {
 	Dir       string
 	Socket    string
@@ -37,7 +45,7 @@ func ResolvePaths() Paths {
 	dir := runtimeBaseDir()
 	return Paths{
 		Dir:       dir,
-		Socket:    filepath.Join(dir, "agent.sock"),
+		Socket:    socketEndpoint(dir),
 		PidFile:   filepath.Join(dir, "agent.pid"),
 		LogFile:   filepath.Join(dir, "agent.log"),
 		ShellsDir: filepath.Join(dir, "shells"),

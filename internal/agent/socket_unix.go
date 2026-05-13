@@ -13,9 +13,9 @@ import (
 // in checkPeerUid, but the filesystem permission is the first line of
 // defence against an unrelated uid even attempting to connect.
 //
-// On Windows the named-pipe transport will replace this — see
-// socket_windows.go (#39 stage 2+).
-func listenSocket(path string) (*net.UnixListener, error) {
+// Returns a net.Listener so callers stay platform-agnostic; the Windows
+// counterpart in socket_windows.go uses a named-pipe listener instead.
+func listenSocket(path string) (net.Listener, error) {
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", path, err)
