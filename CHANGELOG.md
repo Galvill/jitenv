@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/Galvill/jitenv/compare/v0.5.0...v0.6.0) (2026-05-13)
+
+
+### Features
+
+* **sources:** add Vault source plugin with token + AppRole auth ([#81](https://github.com/Galvill/jitenv/issues/81)) ([#85](https://github.com/Galvill/jitenv/issues/85)) ([9097092](https://github.com/Galvill/jitenv/commit/9097092be6fc0964f4bbd3a5924514cfd5e7b5b0))
+* **tui:** bulk-import KEY=VALUE pairs into a local bag ([#70](https://github.com/Galvill/jitenv/issues/70)) ([#75](https://github.com/Galvill/jitenv/issues/75)) ([94edf95](https://github.com/Galvill/jitenv/commit/94edf9554e6fdc8d211889ad9f99af89e0d9cd00))
+
+
+### Bug Fixes
+
+* **hook:** bake paths into snippet, sidecar nanosecond mtime ([#69](https://github.com/Galvill/jitenv/issues/69)) ([1fb7cab](https://github.com/Galvill/jitenv/commit/1fb7cab8fd6d42e3783ff0c3a456801146f9232d))
+* **shim:** collapse duplicate execReal after [#79](https://github.com/Galvill/jitenv/issues/79)/[#80](https://github.com/Galvill/jitenv/issues/80) merge race ([#82](https://github.com/Galvill/jitenv/issues/82)) ([08dfabf](https://github.com/Galvill/jitenv/commit/08dfabf83f1847eaee0e369aab3238593983e29c))
+* **shim:** suppress duplicate agent-down warning on execve chains ([#71](https://github.com/Galvill/jitenv/issues/71)) ([#74](https://github.com/Galvill/jitenv/issues/74)) ([7ae916e](https://github.com/Galvill/jitenv/commit/7ae916e15f23c87469020748af11b1cf3f3e2c5c))
+* **shim:** suppress duplicate env injection on execve chains ([#77](https://github.com/Galvill/jitenv/issues/77)) ([#79](https://github.com/Galvill/jitenv/issues/79)) ([4ce1e16](https://github.com/Galvill/jitenv/commit/4ce1e166c591faeee892f9b1c66abc8405b822aa))
+* **tui:** drop dup help-text + remove unsafe AWS profile field ([#76](https://github.com/Galvill/jitenv/issues/76)) ([#78](https://github.com/Galvill/jitenv/issues/78)) ([c06e704](https://github.com/Galvill/jitenv/commit/c06e7041b4d5c35a9b0f325ab622d7f90f82d211))
+
 ## [0.5.0](https://github.com/Galvill/jitenv/compare/v0.4.0...v0.5.0) (2026-05-11)
 
 
