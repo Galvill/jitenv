@@ -41,6 +41,17 @@ import (
 // whether to paint the agent-down warning.
 var errAgentDown = errors.New("agent unreachable")
 
+// warnedMarker is a one-shot env marker that propagates through
+// execve chains so the agent-down warning fires at most once per
+// chain. Set when WarnAndWait returns (user dismissed via Enter or
+// the countdown timed out) and checked on shim re-entry — e.g.
+// `npm` (wrapper) → real npm → `#!/usr/bin/env node` → `node`
+// (wrapper) → shim again, same pid+ppid as the first entry, see
+// issue #71. The marker may leak into the final user program but
+// the alternative (stripping it before execReal) buys complexity
+// without value.
+const warnedMarker = "__JITENV_AGENT_WARNED"
+
 // Main is the shim entrypoint. invokedAs is filepath.Base(os.Args[0]),
 // args is os.Args[1:] (everything after argv[0]).
 func Main(invokedAs string, args []string) {
@@ -68,13 +79,21 @@ func run(invokedAs string, args []string) error {
 
 	env := os.Environ()
 	injected := 0
-	if shouldInject() {
+	// If a previous shim entry in this execve chain already showed the
+	// agent-down countdown (and the user dismissed it), skip fetch and
+	// warn entirely — see warnedMarker doc and issue #71.
+	alreadyWarned := os.Getenv(warnedMarker) == "1"
+	if shouldInject() && !alreadyWarned {
 		extra, fetchErr := fetchEnv(invokedAs)
 		switch {
 		case errors.Is(fetchErr, errAgentDown):
 			if agentwarn.WarnAndWait(invokedAs) {
 				return errors.New("aborted")
 			}
+			// User chose to continue without env. Propagate the marker
+			// so chained shim entries (e.g. npm → node via shebang)
+			// don't re-prompt.
+			env = append(env, warnedMarker+"=1")
 		case fetchErr != nil:
 			// Other error (config parse, fetch failure). Surface to
 			// stderr but don't block — the user explicitly invoked the
