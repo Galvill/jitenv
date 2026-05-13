@@ -223,9 +223,9 @@ func newRenameBagScreen(r *rootModel, oldName string) screen {
 // ----- bag detail (key/value rows) ---------------------------------
 
 // secretDetailScreen mirrors the bag list pattern: a single list whose
-// top row is "< Create New Key >" and whose remaining rows are the
-// bag's keys. Selecting a key opens a popup with Edit / Rename /
-// Delete / Reveal-Hide / Back.
+// top rows are sentinels — "< Create New Key >" and "< Bulk Import
+// (paste KEY=VALUE) >" — followed by the bag's keys. Selecting a key
+// opens a popup with Edit / Delete / Back.
 type secretDetailScreen struct {
 	root   *rootModel
 	bag    string
@@ -233,6 +233,11 @@ type secretDetailScreen struct {
 	cursor int
 	reveal map[string]bool
 }
+
+// secretDetailSentinelCount is the number of action sentinel rows
+// rendered above the bag's keys. cursor in [0, sentinelCount) selects a
+// sentinel; cursor >= sentinelCount selects a key at index cursor-N.
+const secretDetailSentinelCount = 2
 
 func newSecretDetailScreen(r *rootModel, bag string) screen {
 	s := &secretDetailScreen{
@@ -251,7 +256,7 @@ func (s *secretDetailScreen) refresh() {
 		s.keys = append(s.keys, k)
 	}
 	sort.Strings(s.keys)
-	maxRow := len(s.keys)
+	maxRow := len(s.keys) + secretDetailSentinelCount - 1
 	if s.cursor > maxRow {
 		s.cursor = maxRow
 	}
@@ -294,7 +299,7 @@ func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, nil
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
-		total := len(s.keys) + 1 // sentinel + keys
+		total := len(s.keys) + secretDetailSentinelCount
 		switch k.String() {
 		case "up", "k":
 			if s.cursor > 0 {
@@ -305,8 +310,11 @@ func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.cursor++
 			}
 		case "enter":
-			if s.cursor == 0 {
+			switch s.cursor {
+			case 0:
 				return s, emit(pushMsg{s: newKeyValueEditor(s.root, s.bag, "")})
+			case 1:
+				return s, emit(pushMsg{s: newBagBulkImportScreen(s.root, s.bag)})
 			}
 			return s, s.openMenu()
 		case "r":
@@ -321,10 +329,14 @@ func (s *secretDetailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 }
 
 func (s *secretDetailScreen) selectedKey() string {
-	if s.cursor == 0 || len(s.keys) == 0 {
+	if s.cursor < secretDetailSentinelCount || len(s.keys) == 0 {
 		return ""
 	}
-	return s.keys[s.cursor-1]
+	idx := s.cursor - secretDetailSentinelCount
+	if idx < 0 || idx >= len(s.keys) {
+		return ""
+	}
+	return s.keys[idx]
 }
 
 func (s *secretDetailScreen) openMenu() tea.Cmd {
@@ -363,11 +375,16 @@ func (s *secretDetailScreen) View() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Keys in "+s.bag) + "\n\n")
 
-	sentinel := "< Create New Key >"
-	if s.cursor == 0 {
-		b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
-	} else {
-		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+	sentinels := []string{
+		"< Create New Key >",
+		"< Bulk Import (paste KEY=VALUE) >",
+	}
+	for i, label := range sentinels {
+		if s.cursor == i {
+			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(label) + "\n")
+		} else {
+			b.WriteString("   " + listItemStyle.Render(label) + "\n")
+		}
 	}
 
 	for i, k := range s.keys {
@@ -377,7 +394,7 @@ func (s *secretDetailScreen) View() string {
 			shown = v
 		}
 		row := fmt.Sprintf("%-24s = %s", k, shown)
-		if i+1 == s.cursor {
+		if i+secretDetailSentinelCount == s.cursor {
 			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
 		} else {
 			b.WriteString("   " + listItemStyle.Render(row) + "\n")
