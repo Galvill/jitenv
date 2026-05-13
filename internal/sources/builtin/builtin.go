@@ -6,4 +6,5 @@ import (
 	_ "github.com/gv/jitenv/internal/sources/aws"
 	_ "github.com/gv/jitenv/internal/sources/local"
 	_ "github.com/gv/jitenv/internal/sources/noop"
+	_ "github.com/gv/jitenv/internal/sources/vault"
 )
