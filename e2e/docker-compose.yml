@@ -25,9 +25,13 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
       LOCALSTACK_HOSTNAME: localstack
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root
 
   fedora:
     build:
@@ -41,9 +45,13 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
       LOCALSTACK_HOSTNAME: localstack
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root
 
   alpine:
     build:
@@ -57,9 +65,13 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
       LOCALSTACK_HOSTNAME: localstack
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root
 
   alpine-source:
     build:
@@ -73,9 +85,13 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       JITENV_CONFIG: /home/jitenv/.config/jitenv/config.toml
       LOCALSTACK_HOSTNAME: localstack
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root
 
   localstack:
     image: localstack/localstack:3.8
@@ -98,3 +114,29 @@ services:
       # Init scripts run on first boot. /etc/localstack/init/ready.d
       # fires after services are listening.
       - ./seed/localstack-init:/etc/localstack/init/ready.d:ro
+
+  # HashiCorp Vault in dev mode. The root token is deterministic
+  # (`dev-root`) and listens on 0.0.0.0:8200 inside the compose
+  # network. The image's entrypoint runs `vault server -dev` when
+  # VAULT_DEV_ROOT_TOKEN_ID is set, so no command override is needed.
+  # No host port mapping: scenarios reach Vault via http://vault:8200.
+  vault:
+    image: hashicorp/vault:1.18
+    container_name: jitenv-e2e-vault
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://127.0.0.1:8200
+    # Dev mode runs in-memory and unseals automatically; IPC_LOCK would
+    # be required for production storage backends, but not here.
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      # `vault status` exits 0 when initialised & unsealed (the dev
+      # default). Probe inside the container so we don't rely on host
+      # port mapping.
+      test: ["CMD-SHELL", "VAULT_ADDR=http://127.0.0.1:8200 vault status >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 3s

@@ -1,0 +1,165 @@
+name: vault-fetch
+description: |
+  End-to-end Vault source coverage against a dev-mode Vault server.
+  Exercises both KV versions in one scenario:
+
+    - KV v2 (default mount `secret/`) with whole-bag expansion: the
+      mapping has an empty-Name VarRef so every key in the secret
+      becomes its own env var.
+    - KV v1 (custom mount `kv/`) with single-key extraction: the
+      mapping has Name=LEGACY_TOKEN/Key=LEGACY_TOKEN, exercising the
+      ref.Key path through vault.Fetch.
+
+  Vault is pre-seeded via its HTTP API (no `vault` CLI in the runner
+  image, no extra package install). The config carries an encrypted
+  root token round-tripped through the same envelope mechanism the
+  TUI uses, so this also covers the agent's DecryptStringsInPlace
+  walk over the [sources.vault.params] block.
+
+service: debian
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  # Enable a second KV mount at kv/ for the v1 leg. The default
+  # `secret/` mount is already KV v2 (dev mode default), so we only
+  # have to mount a v1 backend explicitly. The Vault dev server
+  # persists across `make e2e-run` invocations within one `e2e-up`
+  # cycle, so we treat "already mounted" (HTTP 400 with
+  # "path is already in use") as a no-op to keep the scenario
+  # rerunnable without an intervening `e2e-down`.
+  - name: vault-enable-kv1
+    exec: |
+      body=$(mktemp)
+      code=$(curl -sS -o "$body" -w '%{http_code}' -X POST \
+        -H "X-Vault-Token: dev-root" \
+        -H "Content-Type: application/json" \
+        --data '{"type":"kv","options":{"version":"1"}}' \
+        http://vault:8200/v1/sys/mounts/kv)
+      if [ "$code" = "204" ] || [ "$code" = "200" ]; then
+        rm -f "$body"
+        exit 0
+      fi
+      if [ "$code" = "400" ] && grep -q 'path is already in use' "$body"; then
+        rm -f "$body"
+        exit 0
+      fi
+      echo "kv mount failed: HTTP $code" >&2
+      cat "$body" >&2
+      rm -f "$body"
+      exit 1
+  - name: assert-kv1-mount-ok
+    assert_exit_code: 0
+
+  - name: vault-seed-kv2
+    exec: |
+      curl -sf -X POST \
+        -H "X-Vault-Token: dev-root" \
+        -H "Content-Type: application/json" \
+        --data '{"data":{"FOO":"value-from-vault-foo","BAR":"value-from-vault-bar"}}' \
+        http://vault:8200/v1/secret/data/myapp/prod
+  - name: assert-kv2-seed-ok
+    assert_exit_code: 0
+
+  - name: vault-seed-kv1
+    exec: |
+      curl -sf -X POST \
+        -H "X-Vault-Token: dev-root" \
+        -H "Content-Type: application/json" \
+        --data '{"LEGACY_TOKEN":"value-from-vault-kv1-token","OTHER":"unused"}' \
+        http://vault:8200/v1/kv/apps/legacy
+  - name: assert-kv1-seed-ok
+    assert_exit_code: 0
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed \
+        -out "$JITENV_CONFIG" \
+        -variant vault \
+        -script /home/jitenv/scripts/show.sh \
+        -vault-v1-script /home/jitenv/scripts/show-v1.sh
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: validate-config
+    exec: jitenv config validate
+  - name: assert-validate-ok
+    assert_exit_code: 0
+
+  - name: write-test-script-v2
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-v2-ok
+    assert_exit_code: 0
+
+  - name: write-test-script-v1
+    exec: |
+      cat > /home/jitenv/scripts/show-v1.sh <<'EOF'
+      #!/bin/sh
+      printf 'LEGACY_TOKEN=%s\n' "$LEGACY_TOKEN"
+      printf 'OTHER=%s\n' "$OTHER"
+      EOF
+      chmod +x /home/jitenv/scripts/show-v1.sh
+  - name: assert-write-v1-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  - name: agent-status
+    exec: jitenv status
+  - name: assert-status-ok
+    assert_exit_code: 0
+
+  # KV v2: whole-bag expansion lands FOO and BAR in the child.
+  - name: run-v2
+    exec: jitenv run /home/jitenv/scripts/show.sh
+    timeout: 30s
+  - name: assert-v2-foo
+    assert_stdout_contains: "FOO=value-from-vault-foo"
+  - name: assert-v2-bar
+    assert_stdout_contains: "BAR=value-from-vault-bar"
+
+  # KV v1: only the picked key reaches the child; OTHER stays empty
+  # because the mapping does not reference it.
+  - name: run-v1
+    exec: jitenv run /home/jitenv/scripts/show-v1.sh
+    timeout: 30s
+  - name: assert-v1-legacy-token
+    assert_stdout_contains: "LEGACY_TOKEN=value-from-vault-kv1-token"
+  - name: assert-v1-other-empty
+    target: run-v1
+    assert_stdout_contains: "OTHER="
+  - name: assert-v1-no-other-leak
+    target: run-v1
+    assert_stdout_not_contains: "OTHER=unused"
+
+  # Bare execution (no jitenv run) must not see Vault secrets — they
+  # only live in the agent and the child it execs.
+  - name: run-bare
+    exec: /home/jitenv/scripts/show.sh
+  - name: assert-bare-no-foo-leak
+    target: run-bare
+    assert_stdout_not_contains: "value-from-vault-foo"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0

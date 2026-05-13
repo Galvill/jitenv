@@ -11,6 +11,7 @@ backends and surface failures from rich on-disk diagnostics.
 make e2e-up                                  # build images, start stack, wait for healthchecks
 make e2e-run SCENARIO=unlock-and-run-local.yaml
 make e2e-run SCENARIO=localstack-fetch.yaml
+make e2e-run SCENARIO=vault-fetch.yaml
 make e2e-down                                # tear stack down (keeps volumes)
 make e2e-down-hard                           # tear stack down + drop volumes
 ```
@@ -30,6 +31,7 @@ Failed runs leave a self-contained artefact directory under
 | `alpine`         | Alpine 3.20 (musl); extracts `dist/*.tar.gz` into the deb/rpm layout (covers archive contents)        |
 | `alpine-source`  | Alpine 3.20 (musl); builds jitenv from `HEAD` so the source build path against musl stays exercised   |
 | `localstack`     | LocalStack 3.x with Secrets Manager, seeded with one JSON secret                                      |
+| `vault`          | HashiCorp Vault in dev mode (deterministic root token `dev-root`, no host port, KV v2 at `secret/`)   |
 
 The three install-from-artefact services (`debian`, `fedora`, `alpine`)
 depend on `dist/` being populated by `make e2e-build-artifacts`, which
@@ -175,21 +177,39 @@ useful for "does it even compile" smoke tests.
 
 ## Adding a new source backend
 
-The fixture generator is `e2e/seed/seed.go`. Today it knows two
-variants (`local`, `localstack`). To add another:
+The fixture generator is `e2e/seed/seed.go`. Today it knows the
+`local`, `localstack`, and `vault` variants. To add another:
 
 1. Add a new `apply<Source>` function that mirrors the TUI's save
-   shape for that source — see `applyLocalstack` for the
-   encrypted-params pattern (use `crypto.EncryptField` for any
+   shape for that source — see `applyLocalstack` / `applyVault` for
+   the encrypted-params pattern (use `crypto.EncryptField` for any
    `Sensitive` schema field).
-2. Add a case in the `switch *variant` block.
+2. Add a case in the `switch variant` block.
 3. If the source needs a backing service (Vault, mock GitHub, …):
    - add it to `docker-compose.yml` with a healthcheck;
-   - put init scripts under `e2e/seed/<service>-init/`;
+   - put init scripts under `e2e/seed/<service>-init/` if the image
+     supports a ready-hook (LocalStack does);
+   - alternatively, drive setup inline from the scenario via `curl`
+     against the service's HTTP API — `vault-fetch.yaml` does this
+     because the runner images don't ship a `vault` CLI;
    - add the service as a `depends_on: condition: service_healthy`
      for the distro services that need it.
 4. Add a scenario under `e2e/scenarios/` that drives unlock + run
    against a mapped script using the new source.
+
+### Vault scenario notes
+
+The `vault` compose service runs `hashicorp/vault` in dev mode with
+a fixed root token (`dev-root`) on the internal compose network only
+— no host port mapping. KV v2 is the default mount (`secret/`); the
+`vault-fetch.yaml` scenario also enables KV v1 at `kv/` inline via
+`POST /v1/sys/mounts/kv` so a single scenario covers both KV
+versions. Secrets are pre-seeded by the scenario itself with `curl`
+against the Vault HTTP API, keeping seed and assertions
+co-located. The seed binary's `vault` variant writes two
+`[sources.vault]` blocks (one per KV version) and round-trips the
+token through `crypto.EncryptField`, exercising the agent's
+`DecryptStringsInPlace` walk over the params block.
 
 ## Driving `jitenv unlock` non-interactively
 
@@ -235,7 +255,7 @@ When a scenario fails, look at these files in order:
 
 ## Out of scope (deferred to follow-ups)
 
-- Vault, mock GitHub, OIDC services
+- Mock GitHub, OIDC services
 - Arch distro (fedora is now covered)
 - Multi-distro coverage of functional scenarios beyond what
   `install-layout-*` already gives — debian is the canonical
