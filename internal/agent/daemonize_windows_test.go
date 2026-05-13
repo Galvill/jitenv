@@ -130,6 +130,35 @@ func TestSpawnDaemonEndToEndWindows(t *testing.T) {
 	pw2.Close()
 	defer func() { _ = cmd.Process.Kill() }()
 
+	// Surface the agent's log on failure — useful when the child fails
+	// to bind its pipe (config error, missing inherited handle, etc.)
+	// and the test only sees "connect agent: file not found".
+	dumpLog := func() {
+		if !t.Failed() {
+			return
+		}
+		// The child may still hold a write handle to the log file when
+		// the test fails (we haven't Wait'd yet). On Windows that
+		// usually still allows reads thanks to default FILE_SHARE_READ;
+		// best-effort either way.
+		b, err := os.ReadFile(paths.LogFile)
+		if err != nil {
+			t.Logf("agent log unreadable: %v", err)
+		} else {
+			t.Logf("agent log (%s):\n%s", paths.LogFile, string(b))
+		}
+		// Also wait for the child to expose a process state so we can
+		// surface its exit code.
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			if cmd.ProcessState != nil {
+				t.Logf("agent exit: %s", cmd.ProcessState)
+			}
+		}
+	}
+	t.Cleanup(dumpLog)
+
 	// Wait for the pipe to be reachable, then issue a Status request.
 	cli := NewClient(paths.Socket)
 	var st *Status
