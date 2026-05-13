@@ -89,12 +89,14 @@ func run(invokedAs string, args []string) error {
 		return err
 	}
 
+	argv := append([]string{invokedAs}, args...)
+
 	// If a previous shim entry in this execve chain already injected
 	// (or attempted to), short-circuit — skip fetch, skip notice, skip
 	// warn. The first hop wins; chained interpreters pass through.
 	// See injectedMarker doc and issue #77.
 	if os.Getenv(injectedMarker) == "1" {
-		return execReal(realPath, invokedAs, args, os.Environ())
+		return execReal(realPath, argv, os.Environ())
 	}
 
 	env := os.Environ()
@@ -137,13 +139,6 @@ func run(invokedAs string, args []string) error {
 		runnotice.Write(os.Stderr, injected, term.IsTerminal(int(os.Stderr.Fd())))
 	}
 
-	return execReal(realPath, invokedAs, args, env)
-}
-
-// execReal replaces the current process with the real binary,
-// preserving argv[0] as the command name the shell typed.
-func execReal(realPath, invokedAs string, args, env []string) error {
-	argv := append([]string{invokedAs}, args...)
 	return execReal(realPath, argv, env)
 }
 
