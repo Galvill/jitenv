@@ -407,3 +407,59 @@ func TestRunPreRunNotice(t *testing.T) {
 		t.Fatalf("notice should be silent when disabled; got %q", stderr.String())
 	}
 }
+
+// TestRunRespectsInjectedMarker is the regression test for issue #77's
+// run.go branch: when __JITENV_INJECTED=1 is already in the env (set
+// by a prior shim/run in the same execve chain), `jitenv run` must
+// short-circuit — no agent dial, no notice, no warning, no second
+// injection — and just exec the script with the inherited env.
+//
+// To prove "no agent dial", we point XDG_RUNTIME_DIR at an empty dir
+// (no socket). Without the marker, run.go would paint the agent-down
+// warning. With the marker, the script must exec cleanly: no warning,
+// no injection, just whatever env we passed in.
+func TestRunRespectsInjectedMarker(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "show.sh")
+	// Print FOO so we can confirm no injection happened. The agent is
+	// down here, so even without the marker the *value* would be empty
+	// — but with the marker we also expect no "agent is not loaded"
+	// warning on stderr, which is the proof-of-short-circuit.
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf 'FOO=%s\\n' \"$FOO\"\nprintf 'MARKER=%s\\n' \"$__JITENV_INJECTED\"\n"), 0755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	// No agent socket — empty runtime dir.
+	runtimeDir := shortRuntimeDir(t)
+
+	subprocEnv := append(filterEnvKeys(os.Environ(), "CI", "JITENV_NO_NOTICE"),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"__JITENV_INJECTED=1",
+		"JITENV_HOOK_DELAY=0",
+	)
+
+	cmd := exec.Command(bin, "run", scriptPath)
+	cmd.Env = subprocEnv
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// Detach stdin from a TTY so any rogue WarnAndWait would
+	// fast-path (it shouldn't fire here at all, but be defensive).
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run: %v\nstderr=%s", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "agent is not loaded") {
+		t.Fatalf("agent-down warning fired despite __JITENV_INJECTED=1; stderr=%q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "jitenv: injected") {
+		t.Fatalf("pre-run notice fired despite __JITENV_INJECTED=1; stderr=%q", stderr.String())
+	}
+	// Script must have run, and the marker must have propagated through
+	// the syscall.Exec so the script sees it.
+	got := string(out)
+	if !strings.Contains(got, "MARKER=1") {
+		t.Fatalf("expected MARKER=1 to propagate through exec; output=%q", got)
+	}
+}
