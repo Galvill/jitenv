@@ -15,8 +15,14 @@ import (
 
 // __agent is the in-process daemon entrypoint. It is invoked by the
 // parent `unlock` process and is not a user-facing command.
+//
+// The flag the parent uses to hand over the master key is
+// platform-split: --key-fd=<int> on Unix (an inherited fd from
+// ExtraFiles) and --key-handle=<hex> on Windows (an inherited kernel
+// handle from SysProcAttr.AdditionalInheritedHandles). See
+// agent_key_unix.go / agent_key_windows.go.
 func newAgentInternalCmd() *cobra.Command {
-	var keyFd int
+	var keyFlag string
 	var idle time.Duration
 	var cfgArg string
 
@@ -26,7 +32,7 @@ func newAgentInternalCmd() *cobra.Command {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
-			key, err := agent.ReadKeyFromFd(keyFd)
+			key, err := readKeyFromFlag(keyFlag)
 			if err != nil {
 				return fmt.Errorf("read key: %w", err)
 			}
@@ -69,7 +75,7 @@ func newAgentInternalCmd() *cobra.Command {
 			return err
 		},
 	}
-	c.Flags().IntVar(&keyFd, "key-fd", 3, "fd to read the master key from")
+	c.Flags().StringVar(&keyFlag, keyFlagName, keyFlagDefault, "platform-specific handle to read the master key from")
 	c.Flags().DurationVar(&idle, "idle", 30*time.Minute, "idle timeout")
 	c.Flags().StringVar(&cfgArg, "config", "", "config file path")
 	return c

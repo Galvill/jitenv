@@ -1,12 +1,10 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // WritePidFile writes pid to path with 0600 perms.
@@ -31,19 +29,12 @@ func ReadPidFile(path string) (int, error) {
 }
 
 // PidAlive reports whether the process with pid is currently running.
-func PidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	if err := p.Signal(syscall.Signal(0)); err != nil {
-		return errors.Is(err, syscall.EPERM) // EPERM means it exists but we don't own it
-	}
-	return true
-}
+// The actual liveness check is platform-split: pidfile_unix.go uses
+// kill(pid, 0) semantics via os.Process.Signal; pidfile_windows.go uses
+// OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION). os.Process.Signal on
+// Windows does not implement signal 0, so the Unix code path always
+// reports "not alive" there — a Windows-specific implementation is
+// required for SpawnDaemon's "agent already running?" guard to function.
 
 // RemovePidFile removes the pidfile, ignoring not-exist.
 func RemovePidFile(path string) error {
