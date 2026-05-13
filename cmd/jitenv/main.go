@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gv/jitenv/internal/cli"
 	"github.com/gv/jitenv/internal/shim"
@@ -16,7 +17,16 @@ func main() {
 	// ~/.cache/jitenv/shells/<pid>/bin/npm → jitenv). Dispatch to the
 	// shim entrypoint without going through cobra so cold start stays
 	// fast for these per-command wrappings.
-	if base := filepath.Base(os.Args[0]); base != "jitenv" && base != "" {
+	//
+	// On Windows the executable is "jitenv.exe", not "jitenv", so strip
+	// the .exe suffix before the comparison — otherwise every direct
+	// `jitenv.exe ...` invocation would dispatch to the shim and try to
+	// re-find itself on $PATH.
+	base := filepath.Base(os.Args[0])
+	if name := strings.TrimSuffix(base, ".exe"); name != "" {
+		base = name
+	}
+	if base != "jitenv" && base != "" {
 		shim.Main(base, os.Args[1:])
 		return
 	}
