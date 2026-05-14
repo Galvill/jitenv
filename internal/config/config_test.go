@@ -83,6 +83,57 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsCommandMetachars is the regression for security #109:
+// cwd_glob commands containing shell metacharacters would be interpolated
+// unquoted into the generated PowerShell .ps1 wrapper on Windows. Reject
+// them at config-load time so the bad value never reaches the wrapper
+// generator, and configs are portable: a Linux-authored config with a
+// hostile command name fails to validate before it's used anywhere.
+func TestValidateRejectsCommandMetachars(t *testing.T) {
+	bad := []string{
+		"npm; Invoke-WebRequest evil",
+		"npm | bad",
+		"foo`bar",
+		"$(Get-Process)",
+		"foo&bar",
+		"foo bar", // whitespace
+		"foo\nbar",
+		"foo<bar",
+		"foo>bar",
+		"foo{bar",
+		"foo}bar",
+		"foo(bar)",
+	}
+	for _, name := range bad {
+		c := &Config{
+			Version: Version,
+			Sources: map[string]SourceConfig{"src1": {Type: "noop"}},
+			Mappings: []Mapping{{
+				CwdGlob:  "/x/**",
+				Commands: []string{name},
+				Vars:     []VarRef{{Name: "A", Source: "src1"}},
+			}},
+		}
+		if err := c.Validate(); err == nil {
+			t.Errorf("Validate accepted hostile command name %q", name)
+		}
+	}
+
+	// Sanity: a plain, well-formed name must still pass.
+	good := &Config{
+		Version: Version,
+		Sources: map[string]SourceConfig{"src1": {Type: "noop"}},
+		Mappings: []Mapping{{
+			CwdGlob:  "/x/**",
+			Commands: []string{"npm", "node", "go-build", "weird.name_v2"},
+			Vars:     []VarRef{{Name: "A", Source: "src1"}},
+		}},
+	}
+	if err := good.Validate(); err != nil {
+		t.Errorf("Validate rejected a clean command list: %v", err)
+	}
+}
+
 func TestAgentPreRunNoticeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

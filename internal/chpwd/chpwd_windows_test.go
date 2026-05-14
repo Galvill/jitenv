@@ -235,6 +235,31 @@ func TestIsOursContentBased(t *testing.T) {
 	}
 }
 
+// TestWrapperContentQuotesCmd is the regression for security #109: the
+// command name interpolated into the .ps1 body must be PowerShell-
+// single-quoted, otherwise a config-authored command containing `;`,
+// `|`, `$(…)`, backtick, or whitespace breaks out into active syntax
+// and runs at the privilege of every interactive shell that enters
+// the mapped directory.
+func TestWrapperContentQuotesCmd(t *testing.T) {
+	const exe = `C:\Program Files\jitenv\jitenv.exe`
+	cases := []struct {
+		cmd  string
+		want string
+	}{
+		{"npm", "& 'C:\\Program Files\\jitenv\\jitenv.exe' __shim 'npm' @args"},
+		{"npm; Invoke-WebRequest evil", "& 'C:\\Program Files\\jitenv\\jitenv.exe' __shim 'npm; Invoke-WebRequest evil' @args"},
+		{"weird's name", "& 'C:\\Program Files\\jitenv\\jitenv.exe' __shim 'weird''s name' @args"},
+		{"$(Get-Process)", "& 'C:\\Program Files\\jitenv\\jitenv.exe' __shim '$(Get-Process)' @args"},
+	}
+	for _, c := range cases {
+		got := wrapperContent(c.cmd, exe)
+		if !strings.Contains(got, c.want) {
+			t.Errorf("wrapperContent(%q, exe) body missing %q\n--- got ---\n%s", c.cmd, c.want, got)
+		}
+	}
+}
+
 // TestPsSingleQuoteEscaping is the regression for the path-with-quote
 // edge case. PowerShell's only literal-string escape is doubling a
 // single quote; missing this would generate a syntactically invalid
