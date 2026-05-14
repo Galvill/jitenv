@@ -3,24 +3,31 @@ package crypto
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"golang.org/x/term"
 )
 
-// PromptPassphrase reads a passphrase from /dev/tty without echo.
-// If confirm is true, the user is asked twice and an error is returned on mismatch.
+// PromptPassphrase reads a passphrase from the controlling terminal
+// without echo. The terminal is opened directly (rather than via
+// os.Stdin) so the prompt still works when stdin is redirected from a
+// pipe or file. The device differs per platform: /dev/tty on Unix,
+// CONIN$/CONOUT$ on Windows — see openTTY in passphrase_unix.go /
+// passphrase_windows.go. If confirm is true, the user is asked twice
+// and an error is returned on mismatch.
 func PromptPassphrase(prompt string, confirm bool) ([]byte, error) {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	in, out, err := openTTY()
 	if err != nil {
 		return nil, fmt.Errorf("open tty: %w", err)
 	}
-	defer tty.Close()
+	defer in.Close()
+	if out != in {
+		defer out.Close()
+	}
 
 	read := func(label string) ([]byte, error) {
-		fmt.Fprint(tty, label)
-		pw, err := term.ReadPassword(int(tty.Fd()))
-		fmt.Fprintln(tty)
+		fmt.Fprint(out, label)
+		pw, err := term.ReadPassword(int(in.Fd()))
+		fmt.Fprintln(out)
 		return pw, err
 	}
 

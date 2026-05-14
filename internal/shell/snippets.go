@@ -7,3 +7,6 @@ var Bash string
 
 //go:embed snippets/zsh.sh
 var Zsh string
+
+//go:embed snippets/powershell.ps1
+var PowerShell string

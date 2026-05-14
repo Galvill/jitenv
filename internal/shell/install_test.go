@@ -262,3 +262,60 @@ func TestDetectShell(t *testing.T) {
 		t.Fatalf("empty SHELL should return empty, got %q", got)
 	}
 }
+
+// TestHookLinePowerShell pins the PowerShell activation line. The
+// `Invoke-Expression (& jitenv hook powershell | Out-String)` form is
+// load-bearing — pwsh has no `eval "$(...)"` equivalent.
+func TestHookLinePowerShell(t *testing.T) {
+	want := `Invoke-Expression (& jitenv hook powershell | Out-String)`
+	if got := HookLine("powershell"); got != want {
+		t.Errorf("HookLine(powershell): got %q want %q", got, want)
+	}
+	if got := HookLine("pwsh"); got != want {
+		t.Errorf("HookLine(pwsh): got %q want %q", got, want)
+	}
+}
+
+// TestInstallShell_PowerShellTouchesProfileOnly mirrors the zsh test:
+// PowerShell has no analogue of the bash login chain (pwsh sources
+// $PROFILE for every interactive host), so only the rc file gets
+// modified and the LoginPath / LoginAdded fields stay empty.
+//
+// Runs on non-Windows; the rc-path fallback resolves to
+// ~/.config/powershell/Microsoft.PowerShell_profile.ps1 if pwsh isn't
+// on PATH, which is enough to exercise the InstallShell plumbing.
+func TestInstallShell_PowerShellTouchesProfileOnly(t *testing.T) {
+	withFakeHome(t)
+	// Prepend an empty dir to $PATH so queryPwshProfilePath misses
+	// and we hit the documented fallback. Otherwise the test would
+	// depend on whether the host machine has pwsh installed.
+	t.Setenv("PATH", t.TempDir())
+	rep, err := InstallShell("powershell")
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if rep.RcPath == "" {
+		t.Fatalf("expected non-empty RcPath for powershell")
+	}
+	if !strings.HasSuffix(rep.RcPath, "Microsoft.PowerShell_profile.ps1") {
+		t.Errorf("expected pwsh profile path, got %q", rep.RcPath)
+	}
+	if !rep.RcAdded {
+		t.Errorf("expected RcAdded=true on first install")
+	}
+	if rep.LoginPath != "" || rep.LoginAdded {
+		t.Errorf("pwsh install should not touch a login file (got %+v)", rep)
+	}
+	// Idempotent: a second install should be a no-op.
+	rep2, err := InstallShell("powershell")
+	if err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if rep2.RcAdded {
+		t.Errorf("second install should report RcAdded=false")
+	}
+	body, _ := os.ReadFile(rep.RcPath)
+	if strings.Count(string(body), HookLine("powershell")) != 1 {
+		t.Errorf("hook line should appear exactly once: %q", body)
+	}
+}

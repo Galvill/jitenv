@@ -6,12 +6,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-// DetectShell returns "bash" / "zsh" based on $SHELL, or "" if the
-// current shell isn't supported.
+// DetectShell returns "bash" / "zsh" / "powershell", or "" if the
+// current shell isn't supported. On Windows $SHELL is normally unset,
+// so we assume PowerShell 7+ (the only Windows shell jitenv supports —
+// see issue #39 for the cmd.exe / PowerShell 5.x decision).
 func DetectShell() string {
+	if runtime.GOOS == "windows" {
+		return "powershell"
+	}
 	sh := os.Getenv("SHELL")
 	if sh == "" {
 		return ""
@@ -26,7 +32,12 @@ func DetectShell() string {
 }
 
 // RcPath returns the conventional rc file path for shell, or "" if we
-// don't know one.
+// don't know one. For "powershell", this is $PROFILE.CurrentUserCurrentHost
+// — typically Documents\PowerShell\Microsoft.PowerShell_profile.ps1 under
+// the user's home directory on Windows; on non-Windows platforms (a
+// user invoking `jitenv hook install --shell powershell` from a WSL or
+// macOS pwsh session, for example) it resolves to ~/.config/powershell/
+// Microsoft.PowerShell_profile.ps1.
 func RcPath(shell string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -37,6 +48,8 @@ func RcPath(shell string) string {
 		return filepath.Join(home, ".bashrc")
 	case "zsh":
 		return filepath.Join(home, ".zshrc")
+	case "powershell", "pwsh":
+		return pwshProfilePath(home)
 	}
 	return ""
 }
@@ -46,6 +59,14 @@ func RcPath(shell string) string {
 // <shell>` at startup, the hook content itself is always whatever the
 // installed binary prints — there is no separate version to upgrade.
 func HookLine(shell string) string {
+	switch shell {
+	case "powershell", "pwsh":
+		// pwsh doesn't have a shorthand equivalent to `eval "$(...)"`;
+		// piping the snippet to Invoke-Expression is the documented
+		// way to source it (Out-String preserves newlines so the
+		// here-doc-style snippet parses cleanly).
+		return `Invoke-Expression (& jitenv hook powershell | Out-String)`
+	}
 	return fmt.Sprintf(`eval "$(jitenv hook %s)"`, shell)
 }
 
@@ -118,11 +139,13 @@ func CurrentStatus() (Status, error) {
 		return Status{}, err
 	}
 	st := Status{Shell: sh, RcPath: rc, Line: line, Installed: installed}
-	if sh == "bash" {
+	switch sh {
+	case "bash":
 		st.LoginPath, st.LoginSources = inspectBashLogin()
-	} else {
-		// zsh sources ~/.zshrc for both interactive and login shells,
-		// so there is no separate login file to track.
+	default:
+		// zsh sources ~/.zshrc for both interactive and login shells;
+		// PowerShell sources $PROFILE for the current host. Neither
+		// has a separate login file to track.
 		st.LoginSources = true
 	}
 	return st, nil
@@ -143,6 +166,9 @@ type InstallReport struct {
 //     a guarded source line; if none exists, ~/.bash_profile is
 //     created with one).
 //   - zsh: append eval line to ~/.zshrc only.
+//   - powershell / pwsh: append the Invoke-Expression line to
+//     $PROFILE.CurrentUserCurrentHost — no analogue of the bash login
+//     chain because pwsh runs $PROFILE in every interactive session.
 func InstallShell(shellName string) (InstallReport, error) {
 	rc := RcPath(shellName)
 	if rc == "" {

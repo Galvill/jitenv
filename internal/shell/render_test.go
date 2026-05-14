@@ -66,3 +66,68 @@ func TestRenderUnknownShellErrors(t *testing.T) {
 		t.Error("expected error for unsupported shell")
 	}
 }
+
+// TestRenderPowerShellBakesPaths is the pwsh-quoting counterpart to
+// TestRenderBakesPaths: pwsh uses ” to escape an embedded single quote
+// (vs bash's '\”) and otherwise round-trips a path literally. The
+// rendered snippet must wire up the wrap-dir + prompt-override plumbing.
+func TestRenderPowerShellBakesPaths(t *testing.T) {
+	cfgDir := filepath.Join(t.TempDir(), "cfg")
+	runtimeDir := filepath.Join(t.TempDir(), "rt")
+
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	t.Setenv("JITENV_CONFIG", "")
+
+	wantRuntime := filepath.Join(runtimeDir, "jitenv")
+	wantCfg := filepath.Join(cfgDir, "jitenv", "config.toml")
+
+	for _, sh := range []string{"powershell", "pwsh"} {
+		t.Run(sh, func(t *testing.T) {
+			out, err := Render(sh)
+			if err != nil {
+				t.Fatalf("Render(%q): %v", sh, err)
+			}
+			if strings.Contains(out, "{{") || strings.Contains(out, "}}") {
+				t.Errorf("output still contains unfilled markers:\n%s", out)
+			}
+			if !strings.Contains(out, "__JITENV_RUNTIME_DIR = '"+wantRuntime+"'") {
+				t.Errorf("expected pwsh-quoted runtime dir %q in output;\n%s", wantRuntime, out)
+			}
+			if !strings.Contains(out, "__JITENV_CFG_PATH    = '"+wantCfg+"'") {
+				t.Errorf("expected pwsh-quoted config path %q in output;\n%s", wantCfg, out)
+			}
+			if !strings.Contains(out, "__JITENV_WRAP_DIR") {
+				t.Errorf("expected wrap-dir construction in pwsh snippet;\n%s", out)
+			}
+			if !strings.Contains(out, "$env:Path") {
+				t.Errorf("expected $env:Path prepend in pwsh snippet;\n%s", out)
+			}
+			if !strings.Contains(out, "function global:prompt") {
+				t.Errorf("expected global:prompt override in pwsh snippet;\n%s", out)
+			}
+			if !strings.Contains(out, "jitenv __chpwd") {
+				t.Errorf("expected __chpwd invocation in pwsh snippet;\n%s", out)
+			}
+		})
+	}
+}
+
+// TestPwshQuoteEscapesSingleQuote verifies the PowerShell single-quote
+// doubling escape ('don”t') without relying on the rendered snippet —
+// pwsh literal-string semantics differ subtly from bash, so this is
+// worth its own assertion.
+func TestPwshQuoteEscapesSingleQuote(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{`C:\Users\Alice\AppData\Local\jitenv`, `'C:\Users\Alice\AppData\Local\jitenv'`},
+		{"/run/it's/jitenv", `'/run/it''s/jitenv'`},
+		{"", "''"},
+	}
+	for _, c := range cases {
+		if got := pwshQuote(c.in); got != c.want {
+			t.Errorf("pwshQuote(%q): got %q want %q", c.in, got, c.want)
+		}
+	}
+}
