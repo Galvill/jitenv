@@ -1,0 +1,109 @@
+name: powershell-hook-path-mapping-injects-env
+description: |
+  Pins issue #103. Exercises the PowerShell hook's AcceptLine-handler
+  rewrite — when a typed command's first token resolves to a mapped
+  absolute path, the buffer is rewritten to `jitenv run "<path>"…`
+  before submission so the file is exec'd with the merged env.
+
+  PSReadLine key handlers only fire under an interactive line editor,
+  which `pwsh -NoProfile -Command` does not provide. Mirror the zsh
+  scenario's approach: call the pure-function the handler delegates
+  to (`__jitenv_rewrite_buffer`) directly, then once for the rewrite
+  assertion and once via `Invoke-Expression` for the env-injection
+  assertion.
+
+service: powershell
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed -out "$JITENV_CONFIG" -variant local -script /home/jitenv/scripts/show.sh
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      EOF
+      chmod +x /home/jitenv/scripts/show.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  # Pure-function check: a mapped absolute path rewrites to
+  # `jitenv run "<path>"`; arguments after the path are preserved.
+  - name: pwsh-rewrite-buffer
+    exec: |
+      pwsh -NoProfile -Command '
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        $rewritten = __jitenv_rewrite_buffer "/home/jitenv/scripts/show.sh"
+        Write-Host "REWRITTEN=$rewritten"
+        $rewrittenArgs = __jitenv_rewrite_buffer "/home/jitenv/scripts/show.sh extra args"
+        Write-Host "REWRITTEN_ARGS=$rewrittenArgs"
+      '
+  - name: assert-rewrites
+    assert_stdout_contains: 'REWRITTEN=jitenv run "/home/jitenv/scripts/show.sh"'
+  - name: assert-rewrite-preserves-args
+    assert_stdout_contains: 'REWRITTEN_ARGS=jitenv run "/home/jitenv/scripts/show.sh" extra args'
+
+  # End-to-end: rewrite then Invoke-Expression. The shell-script's stdout
+  # should carry the bag values, mirroring zsh-hook-injects-env.
+  - name: pwsh-execute-rewritten
+    exec: |
+      pwsh -NoProfile -Command '
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        $rewritten = __jitenv_rewrite_buffer "/home/jitenv/scripts/show.sh"
+        Invoke-Expression $rewritten
+      '
+    timeout: 30s
+  - name: assert-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+
+  # Negative case: a non-path command (bare name) must NOT be rewritten;
+  # the buffer flows to the existing $PATH / cwd_glob lookup unchanged.
+  - name: pwsh-bare-name-untouched
+    exec: |
+      pwsh -NoProfile -Command '
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        $rewritten = __jitenv_rewrite_buffer "ls /tmp"
+        Write-Host "REWRITTEN=$rewritten"
+      '
+  - name: assert-bare-name-unchanged
+    assert_stdout_contains: 'REWRITTEN=ls /tmp'
+
+  # Negative case: an unmapped absolute path also must NOT be rewritten.
+  - name: pwsh-unmapped-path-untouched
+    exec: |
+      pwsh -NoProfile -Command '
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        $rewritten = __jitenv_rewrite_buffer "/usr/bin/true"
+        Write-Host "REWRITTEN=$rewritten"
+      '
+  - name: assert-unmapped-unchanged
+    assert_stdout_contains: 'REWRITTEN=/usr/bin/true'
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0

@@ -8,10 +8,46 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/windows"
 )
+
+// scriptInterpreter returns the executable + leading args needed to run
+// realPath when it isn't a directly-launchable Win32 binary. CreateProcess
+// only accepts PE files (.exe, .com) and the legacy DOS-style .bat/.cmd
+// (which Go's os/exec already handles); other script extensions fail
+// with "%1 is not a valid Win32 application" unless we dispatch through
+// the appropriate interpreter the way the user's shell would.
+//
+// Currently handles .ps1 → pwsh (PowerShell 7+, preferred) or
+// powershell.exe (Windows PowerShell 5.x, fallback). Other interpreted
+// scripts (.py, .rb, etc.) need their interpreter explicitly named in
+// the mapping target path — we don't try to guess.
+//
+// Returns ok=false when realPath is something we can hand to CreateProcess
+// directly (no wrapping needed).
+func scriptInterpreter(realPath string) (interp string, prefixArgs []string, ok bool) {
+	ext := strings.ToLower(filepath.Ext(realPath))
+	if ext != ".ps1" {
+		return "", nil, false
+	}
+	// Prefer pwsh (PowerShell 7+) — that's the supported Windows shell
+	// per #39 and what `jitenv hook powershell` emits the hook for.
+	// powershell.exe is the legacy 5.x interpreter, useful as a fallback
+	// for users without pwsh installed (the hook itself won't work
+	// there, but a `jitenv run` invocation against a .ps1 might still
+	// be reasonable from cmd.exe or a launcher).
+	if p, err := exec.LookPath("pwsh"); err == nil {
+		return p, []string{"-NoProfile", "-File", realPath}, true
+	}
+	if p, err := exec.LookPath("powershell"); err == nil {
+		return p, []string{"-NoProfile", "-File", realPath}, true
+	}
+	return "", nil, false
+}
 
 // replaceProcess on Windows can't replace the process image — there is
 // no execve equivalent that drops the current image while keeping the
@@ -27,7 +63,19 @@ import (
 // the image and never returns on success), so the call sites in run.go
 // are happy with either shape.
 func replaceProcess(realPath string, args []string, env []string) error {
-	cmd := exec.Command(realPath, args...)
+	// .ps1 (and similar script types) can't be launched via CreateProcess
+	// directly — Windows only knows how to start PE binaries and the
+	// legacy .bat/.cmd shims. Dispatch through the right interpreter
+	// when needed so a path mapping like `path = "C:\\…\\1.ps1"` runs
+	// the way the user's shell would have. See scriptInterpreter above.
+	execPath := realPath
+	execArgs := args
+	if interp, prefix, ok := scriptInterpreter(realPath); ok {
+		execPath = interp
+		execArgs = append(append([]string(nil), prefix...), args...)
+	}
+
+	cmd := exec.Command(execPath, execArgs...)
 	cmd.Env = env
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

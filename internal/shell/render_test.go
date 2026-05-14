@@ -109,6 +109,21 @@ func TestRenderPowerShellBakesPaths(t *testing.T) {
 			if !strings.Contains(out, "jitenv __chpwd") {
 				t.Errorf("expected __chpwd invocation in pwsh snippet;\n%s", out)
 			}
+			// Path/glob interception (issues #103/#104): pure-function
+			// rewrite must exist so the e2e scenarios can call it
+			// directly without instantiating PSReadLine.
+			if !strings.Contains(out, "function global:__jitenv_rewrite_buffer") {
+				t.Errorf("expected __jitenv_rewrite_buffer in pwsh snippet;\n%s", out)
+			}
+			// The AcceptLine binding must be guarded so the snippet is
+			// usable when PSReadLine isn't loaded (constrained-language
+			// mode, Remove-Module, very stripped images).
+			if !strings.Contains(out, "Get-Command Set-PSReadLineKeyHandler") {
+				t.Errorf("expected PSReadLine-availability guard in pwsh snippet;\n%s", out)
+			}
+			if !strings.Contains(out, "Set-PSReadLineKeyHandler -Chord Enter") {
+				t.Errorf("expected Enter chord binding in pwsh snippet;\n%s", out)
+			}
 		})
 	}
 }
