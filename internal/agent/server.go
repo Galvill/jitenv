@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// maxConcurrentAgentConns caps how many in-flight connection handlers
+// the agent allows. A misbehaving (or hostile) same-user process could
+// otherwise open arbitrarily many half-finished connections, each
+// holding a goroutine and an fd. Excess connections are closed at
+// accept time. Tunable from tests; the default is meant to sit well
+// above any realistic workload.
+var maxConcurrentAgentConns = 64
+
 // Agent is the per-user secret-fetching daemon.
 type Agent struct {
 	paths    Paths
@@ -119,6 +127,10 @@ func (a *Agent) Serve(ctx context.Context) error {
 		a.listener.Close()
 	}()
 
+	// Semaphore bounds concurrent connection handlers. Snapshotted at
+	// Serve-time so tests can lower the cap before calling Serve.
+	sem := make(chan struct{}, maxConcurrentAgentConns)
+
 	for {
 		conn, err := a.listener.Accept()
 		if err != nil {
@@ -127,7 +139,18 @@ func (a *Agent) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		go a.handle(ctx, conn)
+		select {
+		case sem <- struct{}{}:
+			go func() {
+				defer func() { <-sem }()
+				a.handle(ctx, conn)
+			}()
+		default:
+			// Cap reached. Drop the conn rather than queue it — a
+			// queue just delays the same DoS, and a legitimate
+			// client will retry within milliseconds.
+			_ = conn.Close()
+		}
 	}
 }
 
@@ -172,12 +195,17 @@ func (a *Agent) idleLoop(ctx context.Context) {
 
 func (a *Agent) handle(ctx context.Context, c net.Conn) {
 	defer c.Close()
-	if err := checkPeerUid(c); err != nil {
-		_ = WriteMessage(c, Response{OK: false, Error: "unauthorized"})
-		return
-	}
+	// Set the per-conn deadline FIRST so even rejected (unauthorized)
+	// clients can't hang the handler with a slow-read attack against
+	// our WriteMessage. Previously the deadline was only applied after
+	// the peer check, leaving the unauthorized-reply write unbounded
+	// (security #114).
 	if err := c.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = WriteMessage(c, Response{OK: false, Error: "set deadline: " + err.Error()})
+		return
+	}
+	if err := checkPeerUid(c); err != nil {
+		_ = WriteMessage(c, Response{OK: false, Error: "unauthorized"})
 		return
 	}
 
