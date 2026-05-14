@@ -118,6 +118,46 @@ func TestRunWindowsExitCodePropagation(t *testing.T) {
 	}
 }
 
+// TestRunWindowsPs1ViaPwsh exercises the .ps1 → pwsh dispatch in
+// scriptInterpreter. Without that, `jitenv run path\to\script.ps1`
+// failed with "%1 is not a valid Win32 application" because Windows
+// CreateProcess can only launch PE binaries and the legacy .bat/.cmd
+// shims. The script writes a known marker to stdout so the test can
+// confirm pwsh actually ran the file.
+//
+// Gated on pwsh.exe being on PATH; CI's windows-latest image ships
+// PowerShell 7+, but a maintainer running the suite locally without
+// it should see a skip, not a failure.
+func TestRunWindowsPs1ViaPwsh(t *testing.T) {
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		if _, err := exec.LookPath("powershell"); err != nil {
+			t.Skip("no pwsh/powershell on PATH")
+		}
+	}
+	bin := buildJitenv(t)
+	script := filepath.Join(t.TempDir(), "show.ps1")
+	body := "Write-Host \"MARKER=$env:FOO\"\r\n"
+	if err := os.WriteFile(script, []byte(body), 0o644); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	env := append(os.Environ(),
+		"__JITENV_INJECTED=1",
+		"FOO=from-jitenv",
+	)
+	cmd := exec.Command(bin, "run", script)
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("jitenv run script.ps1: %v\nstderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "MARKER=from-jitenv") {
+		t.Errorf("pwsh did not interpret the .ps1 with the injected env;\nstdout=%q\nstderr=%q",
+			stdout.String(), stderr.String())
+	}
+}
+
 // TestRunWindowsZeroExit verifies the happy-path exit-code mapping:
 // child exits 0, jitenv run exits 0.
 func TestRunWindowsZeroExit(t *testing.T) {
