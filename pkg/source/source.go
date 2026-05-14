@@ -37,11 +37,18 @@ type Constructor func(cfg map[string]any) (Source, error)
 // uses these to render form fields (mask sensitive values, validate
 // required fields, present enum choices). Sources that omit a schema
 // fall back to a generic key/value editor.
+//
+// NOTE on `Sensitive`: as of the encrypt-by-default change (#112), the
+// save pipeline encrypts EVERY non-envelope string param on disk, not
+// just the ones flagged Sensitive here. This flag is purely a TUI
+// affordance now — it controls whether the field is masked while
+// editing and whether it's listed under the secret-key picker. Do NOT
+// rely on it as a "this stays plaintext on disk" signal.
 type ParamField struct {
 	Key       string   // map key under [sources.<name>.params]
 	Label     string   // human-readable label; falls back to Key when empty
 	Required  bool     // form rejects save when empty
-	Sensitive bool     // mask in TUI; encrypt with master key on save
+	Sensitive bool     // mask in TUI; ALL string params encrypt on save regardless
 	Enum      []string // optional fixed-choice list
 	Help      string   // optional one-line help text
 }
