@@ -4,7 +4,7 @@
 # Requires PowerShell 7+. Windows Server PowerShell 5.x is intentionally
 # unsupported (see issue #39 design call). Drives the cwd_glob wrapper
 # scheme only:
-#   - Prepends the per-shell wrap dir to $env:Path so PATHEXT picks up
+#   - Prepends the per-shell wrap dir to $env:PATH so PATHEXT picks up
 #     the .ps1 wrappers that `jitenv __chpwd` populates.
 #   - Wraps the user's `prompt` function so every new prompt fires
 #     `jitenv __chpwd` to reconcile the wrap dir against the mapping
@@ -38,10 +38,17 @@ New-Item -ItemType Directory -Force -Path $__JITENV_WRAP_DIR | Out-Null
 
 # Prepend, once per shell. PATHEXT must include .PS1 for the wrappers
 # to resolve when the user types `npm` (default on pwsh 7).
+#
+# Use $env:PATH (upper-case) rather than $env:Path. On Windows pwsh
+# env-var lookups are case-insensitive and either form works; on Linux
+# pwsh they are case-sensitive and the env var is named PATH — the
+# mixed-case form returns an empty string, which silently breaks both
+# the contains-check and the assignment. Same applies elsewhere in
+# this script.
 $__jitenv_pathSeparator = [System.IO.Path]::PathSeparator
-$__jitenv_existing = $env:Path -split [regex]::Escape($__jitenv_pathSeparator)
+$__jitenv_existing = $env:PATH -split [regex]::Escape($__jitenv_pathSeparator)
 if (-not ($__jitenv_existing -contains $__JITENV_WRAP_DIR)) {
-    $env:Path = $__JITENV_WRAP_DIR + $__jitenv_pathSeparator + $env:Path
+    $env:PATH = $__JITENV_WRAP_DIR + $__jitenv_pathSeparator + $env:PATH
 }
 Remove-Variable __jitenv_pathSeparator, __jitenv_existing -ErrorAction SilentlyContinue
 

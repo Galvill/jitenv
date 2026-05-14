@@ -104,23 +104,29 @@ jitenv is-mapped <file>    Exit 0 if file is mapped (used by shell hook)
 jitenv sources list        Sources defined in your config
 jitenv sources types       Source types compiled in
 jitenv sources test <n>    Run Validate() against a configured source
-jitenv hook bash|zsh       Print shell hook for eval
-jitenv hook install        Append the activation line to your rc file
-jitenv hook status         Show whether the hook is wired up
+jitenv hook bash|zsh|powershell  Print shell hook for eval
+jitenv hook install              Append the activation line to your rc file
+jitenv hook status               Show whether the hook is wired up
 ```
 
 ## Limitations
 
-- Linux + macOS only. Linux uses `SO_PEERCRED` + `XDG_RUNTIME_DIR`;
-  macOS uses `LOCAL_PEERCRED` + `$TMPDIR`. The agent's `Setsid`
-  double-fork is portable to both. Windows is not yet supported —
-  the codebase compiles for `GOOS=windows` but the agent, shim, and
-  `jitenv run` paths return "not yet implemented" at runtime.
-  Tracking in [#39](https://github.com/gv/jitenv/issues/39).
+- Supported platforms: Linux, macOS, and Windows (PowerShell 7+).
+  Linux uses `SO_PEERCRED` + `XDG_RUNTIME_DIR`; macOS uses
+  `LOCAL_PEERCRED` + `$TMPDIR`; Windows uses named pipes with token-SID
+  peer auth and a `%LOCALAPPDATA%\jitenv` runtime dir. The agent's
+  `Setsid` double-fork on Unix has a Windows analogue using
+  `CREATE_NO_WINDOW | DETACHED_PROCESS`.
+- On Windows the path/glob shell hook (`extdebug` + `DEBUG` / `preexec`)
+  is replaced by `cwd_glob` wrapper-shim `.ps1` files invoked via the
+  PowerShell prompt override — see `jitenv hook powershell`. The
+  bash/zsh hook with absolute-path interception is Unix-only.
 - macOS release binaries are not Apple-notarized; first run requires
   `xattr -d com.apple.quarantine ./jitenv` or right-click → Open.
-- The shell hook only intercepts commands whose first token is an
-  absolute or `./`-relative path — not bare PATH lookups.
+  Windows release binaries are not Authenticode-signed; SmartScreen
+  may warn on first run.
+- The bash/zsh shell hook only intercepts commands whose first token
+  is an absolute or `./`-relative path — not bare PATH lookups.
 - Single agent per user; multiple terminals share one unlocked instance.
 - TUI requires a TTY; for scripted setup use `jitenv config init` then
   re-run interactively.

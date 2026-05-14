@@ -100,8 +100,8 @@ func TestRenderPowerShellBakesPaths(t *testing.T) {
 			if !strings.Contains(out, "__JITENV_WRAP_DIR") {
 				t.Errorf("expected wrap-dir construction in pwsh snippet;\n%s", out)
 			}
-			if !strings.Contains(out, "$env:Path") {
-				t.Errorf("expected $env:Path prepend in pwsh snippet;\n%s", out)
+			if !strings.Contains(out, "$env:PATH") {
+				t.Errorf("expected $env:PATH prepend in pwsh snippet;\n%s", out)
 			}
 			if !strings.Contains(out, "function global:prompt") {
 				t.Errorf("expected global:prompt override in pwsh snippet;\n%s", out)

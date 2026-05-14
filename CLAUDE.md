@@ -17,9 +17,12 @@ go test ./internal/agent
 go test ./internal/run -run TestRunInjectsEnvAndExecs -v
 ```
 
-Go 1.22+ (go.mod declares 1.25.6). Linux and macOS. Peer-cred check is platform-split (`SO_PEERCRED` on Linux in `peer_linux.go`, `LOCAL_PEERCRED` on Darwin in `peer_darwin.go`); runtime dir is `$XDG_RUNTIME_DIR/jitenv/` on Linux and `os.TempDir()/jitenv-<uid>/` (typically `/var/folders/.../T/jitenv-<uid>`) on macOS. The `Setsid` double-fork is portable.
+Go 1.22+ (go.mod declares 1.25.6). Linux, macOS, and Windows. Peer-cred check is platform-split:
+- Linux: `SO_PEERCRED` (`peer_linux.go`), runtime dir `$XDG_RUNTIME_DIR/jitenv/`, config dir `$XDG_CONFIG_HOME/jitenv/` (or `~/.config/jitenv/`).
+- macOS: `LOCAL_PEERCRED` (`peer_darwin.go`), runtime dir `os.TempDir()/jitenv-<uid>/` (typically `/var/folders/.../T/jitenv-<uid>`), config dir XDG-style.
+- Windows: token-SID peer check (`peer_windows.go`), pipe at `\\.\pipe\jitenv-<sid>` (`socket_windows.go`), runtime dir `%LOCALAPPDATA%\jitenv\`, config dir `%APPDATA%\jitenv\` (see `internal/config/path_windows.go`).
 
-The codebase compiles for `GOOS=windows` (`peer_windows.go`, `socket_windows.go`, `daemonize_windows.go`, `paths_windows.go`, `run_windows.go`, `shim_windows.go` keep the build green) but the agent/shim/run paths return "not yet implemented" errors at runtime — see [#39](https://github.com/gv/jitenv/issues/39). Real Windows support (named pipes, token-based peer check, PowerShell hook) is Stage 2+.
+The `Setsid` double-fork is the Unix daemon-spawn primitive; on Windows the equivalent uses `CREATE_NO_WINDOW | DETACHED_PROCESS` plus an anonymous-pipe master-key handoff (`daemonize_windows.go`). The `jitenv run` and shim exec paths use `syscall.Exec` on Unix and spawn-and-wait + `os.Exit(child)` on Windows (no exec-replace primitive there). PowerShell 7+ is the supported Windows shell — see `internal/shell/snippets/powershell.ps1` and `cwd_glob` wrapper `.ps1` files for the activation model.
 
 The e2e tests under `internal/run` and `internal/shell` shell out to `go build` to produce a real binary against a temp config; they're slow but exercise the unlock → daemonize → hook → run loop end-to-end.
 
@@ -76,6 +79,6 @@ Bubble Tea with a screen-stack `rootModel`. Each screen implements `Init / Updat
 
 - **Master key handling.** The key is `defer zeroBytes(...)`'d everywhere it lives outside the agent. Don't print it, don't pass it as a CLI flag (it's an inherited fd in `SpawnDaemon`). New code that touches the key should follow the same zero-on-defer pattern.
 - **Cobra layout.** Commands are constructed by `new<Name>Cmd()` functions and aggregated in `internal/cli/subcommands.go`. To add a top-level command, append it there. The hidden `__agent` command is the daemon entrypoint — it is not a user-facing command.
-- **Config path resolution.** `JITENV_CONFIG` > `$XDG_CONFIG_HOME/jitenv/config.toml` > `~/.config/jitenv/config.toml`. Always go through `config.Resolve` rather than reconstructing.
-- **Agent paths.** `$XDG_RUNTIME_DIR/jitenv/{agent.sock,agent.pid,agent.log}`, falling back to `/tmp/jitenv-<uid>/`. Use `agent.DefaultPaths()`.
+- **Config path resolution.** Unix: `JITENV_CONFIG` > `$XDG_CONFIG_HOME/jitenv/config.toml` > `~/.config/jitenv/config.toml`. Windows: `JITENV_CONFIG` > `%APPDATA%\jitenv\config.toml` > `%USERPROFILE%\AppData\Roaming\jitenv\config.toml`. Always go through `config.Resolve` rather than reconstructing.
+- **Agent paths.** Unix: `$XDG_RUNTIME_DIR/jitenv/{agent.sock,agent.pid,agent.log}`, falling back to `/tmp/jitenv-<uid>/`. Windows: `%LOCALAPPDATA%\jitenv\{agent.pid,agent.log}` with the socket field overloaded to the pipe name `\\.\pipe\jitenv-<sid>`. Use `agent.DefaultPaths()`.
 - **No remote source UI.** AWS Secrets Manager is compiled in and works at runtime, but the TUI's "Remote Sources" page is currently hidden. Existing `[sources.*]` entries in `config.toml` keep working.

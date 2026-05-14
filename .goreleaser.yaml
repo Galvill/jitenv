@@ -15,6 +15,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -28,7 +29,13 @@ builds:
 
 archives:
   - id: jitenv
+    # Unix archives are tar.gz; Windows archives are .zip so users can
+    # extract with the built-in Explorer/PowerShell unzip without
+    # installing tar. format_overrides switches per-GOOS.
     formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
@@ -37,6 +44,8 @@ archives:
         dst: snippets/bash.sh
       - src: internal/shell/snippets/zsh.sh
         dst: snippets/zsh.sh
+      - src: internal/shell/snippets/powershell.ps1
+        dst: snippets/powershell.ps1
 
 nfpms:
   - id: jitenv
@@ -94,10 +103,12 @@ release:
   header: |
     ## jitenv {{ .Tag }}
 
-    Linux + macOS artifacts for `amd64` and `arm64`. macOS binaries are
-    **not** Apple-notarized — first run requires `xattr -d
-    com.apple.quarantine ./jitenv` or a right-click → Open. See #13
-    for the notarization tracking issue. Verify integrity:
+    Linux, macOS, and Windows artifacts for `amd64` and `arm64`.
+    macOS binaries are **not** Apple-notarized — first run requires
+    `xattr -d com.apple.quarantine ./jitenv` or a right-click → Open.
+    Windows binaries are **not** Authenticode-signed — SmartScreen
+    may prompt on first run. See #13 (macOS notarization) and #39
+    (Windows signing) for the tracking issues. Verify integrity:
 
     ```sh
     sha256sum -c SHA256SUMS

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -44,5 +45,32 @@ func TestLookup_BackslashPath_ForwardSlashGlob(t *testing.T) {
 	}
 	if got := idx.Lookup(abs); len(got) != 1 {
 		t.Errorf("Lookup(%q): got %v, want one VarRef", abs, got)
+	}
+}
+
+// TestCwdCommands_TildeExpansion_NormalisesPattern is the regression
+// test for the user-reported bug where a config with
+// `cwd_glob = "~/test/"` never matched on Windows: expandTilde calls
+// filepath.Join(home, "test/"), which emits backslashes on Windows
+// (C:\Users\<user>\test). Without slash-normalisation in NewIndex,
+// doublestar.Match silently returned false for every shell prompt
+// and the wrapper bin dir stayed empty — `node` then ran without
+// the configured env injection.
+func TestCwdCommands_TildeExpansion_NormalisesPattern(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	pwd := filepath.Join(home, "test") // native backslash form
+
+	idx := NewIndex([]Mapping{{
+		CwdGlob:  "~/test/",
+		Commands: []string{"node"},
+		Vars:     []VarRef{{Source: "x"}},
+	}})
+
+	got := idx.CwdCommands(pwd)
+	if len(got) != 1 || got[0] != "node" {
+		t.Fatalf("CwdCommands(%q): got %v, want [node]; expandTilde+filepath.Join produces backslashes on Windows that must be normalised in NewIndex", pwd, got)
 	}
 }
