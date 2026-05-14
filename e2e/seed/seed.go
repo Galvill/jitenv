@@ -20,6 +20,11 @@
 //     Path (defaults to /home/jitenv/scripts/*.sh) and
 //     the bag carries FOO/BAR/BAZ to exercise full bag
 //     expansion via a single empty-Name VarRef.
+//   - local-cwd-glob like local but uses a cwd_glob mapping with one
+//     or more `commands`. -cwd-glob and -commands flags
+//     parameterise the directory and command list. Used
+//     by the PowerShell hook scenarios to drive the
+//     chpwd → wrapper → shim → agent flow.
 //   - localstack   an aws-source fixture pointing at LocalStack with
 //     static dummy creds; mapping on .../show.sh fetches
 //     one key from the seeded SM secret.
@@ -33,6 +38,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
@@ -42,9 +48,11 @@ func main() {
 	var (
 		out           = flag.String("out", "", "output path for config.toml (required)")
 		passphrase    = flag.String("passphrase", "e2e-test-pass", "passphrase for the encrypted config")
-		variant       = flag.String("variant", "local", "fixture variant: local | local-alt | local-glob | localstack | vault")
+		variant       = flag.String("variant", "local", "fixture variant: local | local-alt | local-glob | local-cwd-glob | localstack | vault")
 		scriptPath    = flag.String("script", "/home/jitenv/scripts/show.sh", "absolute path used in the mapping (path variants)")
 		globPath      = flag.String("glob", "/home/jitenv/scripts/*.sh", "glob pattern used in the mapping (local-glob variant)")
+		cwdGlob       = flag.String("cwd-glob", "/home/jitenv/work", "cwd_glob pattern (local-cwd-glob variant)")
+		cmdsFlag      = flag.String("commands", "showenv", "comma-separated command names (local-cwd-glob variant)")
 		smARN         = flag.String("sm-arn", "arn:aws:secretsmanager:us-east-1:000000000000:secret:jitenv/demo", "SM secret ARN (localstack variant)")
 		smEndpoint    = flag.String("sm-endpoint", "http://localstack:4566", "SM endpoint URL (localstack variant)")
 		vaultAddr     = flag.String("vault-address", "http://vault:8200", "Vault address (vault variant)")
@@ -66,6 +74,8 @@ func main() {
 		variant:       *variant,
 		scriptPath:    *scriptPath,
 		globPath:      *globPath,
+		cwdGlob:       *cwdGlob,
+		commands:      splitCommas(*cmdsFlag),
 		smARN:         *smARN,
 		smEndpoint:    *smEndpoint,
 		vaultAddr:     *vaultAddr,
@@ -90,6 +100,8 @@ type runOpts struct {
 	variant       string
 	scriptPath    string
 	globPath      string
+	cwdGlob       string
+	commands      []string
 	smARN         string
 	smEndpoint    string
 	vaultAddr     string
@@ -158,6 +170,10 @@ func run(o runOpts) error {
 		}
 	case "local-glob":
 		if err := applyLocalGlob(cfg, key, o.globPath); err != nil {
+			return err
+		}
+	case "local-cwd-glob":
+		if err := applyLocalCwdGlob(cfg, key, o.cwdGlob, o.commands); err != nil {
 			return err
 		}
 	case "localstack":
@@ -237,6 +253,50 @@ func applyLocalGlob(cfg *config.Config, key []byte, globPath string) error {
 		},
 	}
 	return nil
+}
+
+// applyLocalCwdGlob mirrors applyLocal but routes via a cwd_glob mapping:
+// the bag expands when any of the listed commands runs from a directory
+// matching cwdGlob (or any descendant). Used by the PowerShell hook
+// scenarios to drive the chpwd → wrapper → shim → agent flow.
+func applyLocalCwdGlob(cfg *config.Config, key []byte, cwdGlob string, commands []string) error {
+	foo, err := crypto.EncryptField(key, "value-from-local-foo")
+	if err != nil {
+		return err
+	}
+	bar, err := crypto.EncryptField(key, "value-from-local-bar")
+	if err != nil {
+		return err
+	}
+	cfg.Sources = map[string]config.SourceConfig{
+		"vault": {Type: "local"},
+	}
+	cfg.Secrets = map[string]map[string]string{
+		"demo": {"FOO": foo, "BAR": bar},
+	}
+	cfg.Mappings = []config.Mapping{
+		{
+			CwdGlob:  cwdGlob,
+			Commands: append([]string(nil), commands...),
+			Vars: []config.VarRef{
+				{Source: "vault", Ref: "demo"},
+			},
+		},
+	}
+	return nil
+}
+
+// splitCommas turns "a,b,c" into ["a","b","c"], trimming whitespace and
+// dropping empties. Used by the -commands flag.
+func splitCommas(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		p := strings.TrimSpace(part)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // applyLocalstack wires an aws Secrets Manager source at the LocalStack

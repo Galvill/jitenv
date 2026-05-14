@@ -1,0 +1,112 @@
+name: powershell-hook-cwd-glob-injects-env
+description: |
+  Exercises the `jitenv hook powershell` snippet end-to-end against a
+  real pwsh 7 process: the prompt-override-driven chpwd reconciles the
+  per-shell wrapper bin dir, the typed command resolves to a wrapper
+  in PATH, the shim hits the agent for env, and the wrapped script
+  observes the bag values in its environment.
+
+  The image is Linux (mcr.microsoft.com/powershell:latest is Ubuntu
+  22.04), so the *Unix* shim path runs — not the Windows .ps1-wrapper
+  spawn-and-wait path. Linux pwsh resolves bare command names via
+  Unix mode bits, so chpwd's reconcile_unix.go symlinks are what gets
+  invoked here. The Windows-specific surface (PATHEXT lookup,
+  spawn-and-wait, separator normalisation) stays covered by Windows
+  CI unit tests; this scenario closes the gap on the cross-platform
+  hook plumbing.
+
+  Setup is the symmetric counterpart of unlock-and-run-local for bash
+  and zsh-hook-injects-env for zsh: seed an encrypted config, unlock,
+  source the hook, observe env injection.
+
+service: powershell
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+      mkdir -p /home/jitenv/work
+
+  - name: write-mapped-script
+    exec: |
+      cat > /home/jitenv/bin/showenv <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      EOF
+      chmod +x /home/jitenv/bin/showenv
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed \
+        -out "$JITENV_CONFIG" \
+        -variant local-cwd-glob \
+        -cwd-glob /home/jitenv/work \
+        -commands showenv
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  # cd into the mapped dir *before* sourcing the hook so the
+  # initial __jitenv_chpwd call at hook-load fires from inside a
+  # matching pwd — the prompt-override that drives subsequent
+  # reconciles only fires under an interactive line editor, which
+  # `pwsh -Command` does not provide.
+  - name: pwsh-run-wrapped
+    exec: |
+      pwsh -NoProfile -Command '
+        Set-Location /home/jitenv/work
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        & showenv
+      '
+    timeout: 30s
+  - name: assert-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+
+  # Regression case: bare cwd_glob without a trailing slash must match
+  # the same way the trailing-slash variant does. The user-reported
+  # Windows bug had `cwd_glob = "~/test/"`; mapping.go's NewIndex
+  # normalises slashes after expandTilde, but the trailing-slash form
+  # is still worth pinning so a future expandTilde refactor doesn't
+  # silently regress matching.
+  - name: pwsh-trailing-slash-glob
+    exec: |
+      # Reseed with a trailing-slash cwd_glob, then re-run from a
+      # subdirectory to also exercise the matchAncestor walk.
+      mkdir -p /home/jitenv/work/sub
+      jitenv-e2e-seed \
+        -out "$JITENV_CONFIG" \
+        -variant local-cwd-glob \
+        -cwd-glob "/home/jitenv/work/" \
+        -commands showenv \
+        -preserve-meta
+      jitenv-e2e-reload
+      pwsh -NoProfile -Command '
+        Set-Location /home/jitenv/work/sub
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        & showenv
+      '
+    timeout: 30s
+  - name: assert-trailing-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0

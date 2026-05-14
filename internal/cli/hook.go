@@ -47,7 +47,7 @@ func newHookCmd() *cobra.Command {
     Invoke-Expression (& jitenv hook powershell | Out-String)
 
 The snippet wraps the prompt function to drive cwd_glob reconciliation
-on every prompt and prepends the per-shell wrap dir to $env:Path so
+on every prompt and prepends the per-shell wrap dir to $env:PATH so
 .ps1 shims resolve via PATHEXT. Absolute-path command interception
 (the bash DEBUG trap equivalent) is intentionally not implemented on
 PowerShell — see issue #39. PowerShell 5.x and cmd.exe are unsupported.`,

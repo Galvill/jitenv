@@ -29,14 +29,18 @@ type cwdGlobEntry struct {
 }
 
 // NewIndex builds an Index from the parsed config. Glob and cwd_glob
-// patterns are normalised to forward slashes here because
-// doublestar.Match is forward-slash-only; without normalisation a
-// tilde-prefixed pattern like "~/test" silently fails on Windows
-// (expandTilde calls filepath.Join, which emits backslashes from
-// C:\Users\gv joined with "test", so the stored pattern is
-// "C:\Users\gv\test" — the path side of the comparison normalises
-// to forward slashes in matchAncestor / Lookup but a backslash-laden
-// pattern never matches). ToSlash is a no-op on Unix.
+// patterns are normalised in two ways before storage:
+//
+//  1. Forward slashes. doublestar.Match is forward-slash-only; without
+//     normalisation a tilde-prefixed pattern like "~/test" silently
+//     fails on Windows (expandTilde calls filepath.Join, which emits
+//     backslashes from C:\Users\gv joined with "test"). ToSlash is a
+//     no-op on Unix.
+//  2. No trailing slash. matchAncestor walks ancestors with path.Dir,
+//     which strips trailing slashes — so a stored pattern with a
+//     trailing slash never matches any ancestor form. Users routinely
+//     write `cwd_glob = "~/work/"`; treat it as identical to
+//     `~/work`. The root "/" edge case is preserved as-is.
 func NewIndex(mappings []Mapping) *Index {
 	idx := &Index{exact: map[string][]VarRef{}}
 	for _, m := range mappings {
@@ -49,18 +53,29 @@ func NewIndex(mappings []Mapping) *Index {
 			idx.exact[abs] = append(idx.exact[abs], m.Vars...)
 		case m.Glob != "":
 			idx.globs = append(idx.globs, globEntry{
-				pattern: filepath.ToSlash(expandTilde(m.Glob)),
+				pattern: normalisePattern(m.Glob),
 				vars:    m.Vars,
 			})
 		case m.CwdGlob != "":
 			idx.cwdGlobs = append(idx.cwdGlobs, cwdGlobEntry{
-				pattern:  filepath.ToSlash(expandTilde(m.CwdGlob)),
+				pattern:  normalisePattern(m.CwdGlob),
 				commands: append([]string(nil), m.Commands...),
 				vars:     m.Vars,
 			})
 		}
 	}
 	return idx
+}
+
+// normalisePattern applies the two transforms NewIndex relies on:
+// tilde expansion, forward-slash normalisation, and trailing-slash
+// removal (except the bare root "/").
+func normalisePattern(p string) string {
+	s := filepath.ToSlash(expandTilde(p))
+	if len(s) > 1 {
+		s = strings.TrimRight(s, "/")
+	}
+	return s
 }
 
 // Lookup returns the merged VarRefs for a given absolute path, in

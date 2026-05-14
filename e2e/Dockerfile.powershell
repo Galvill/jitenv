@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+#
+# PowerShell 7 jitenv test image. Lets the harness exercise the
+# `jitenv hook powershell` snippet, the prompt-override-driven chpwd
+# reconcile, and the cwd_glob wrapper -> shim -> agent flow against a
+# real pwsh process. The image is Linux (Ubuntu 22.04, the base of
+# mcr.microsoft.com/powershell:latest); jitenv itself runs as a Linux
+# ELF binary, so the *Linux* shim path executes — not the Windows
+# .ps1-wrapper / spawn-and-wait path. That's a deliberate trade-off:
+# the same surface that Windows CI covers in unit tests isn't
+# reachable from a Linux container, but the cross-platform code paths
+# (hook snippet, chpwd lookup, agent protocol, env injection) ARE
+# exercised here, and on every PR rather than only in a Windows VM.
+#
+# Run as user `jitenv` (uid 1000). XDG_RUNTIME_DIR is left unset so
+# agent.DefaultPaths() falls back to /tmp/jitenv-<uid>. /home/jitenv/bin
+# is on $PATH so wrapped command scripts written by the seed helper
+# are resolvable by the shim's lookPathExcluding.
+
+FROM golang:1.25-bookworm AS helper-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-seed ./e2e/seed \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-unlock ./e2e/cmd/unlock \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/jitenv-e2e-reload ./e2e/cmd/reload
+
+FROM mcr.microsoft.com/powershell:latest AS runtime
+ARG TARGETARCH=amd64
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        bash ca-certificates curl tini coreutils procps && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --create-home --shell /bin/bash --uid 1000 jitenv && \
+    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/.config/jitenv && \
+    install -d -m 0700 -o jitenv -g jitenv /home/jitenv/scripts && \
+    install -d -m 0755 -o jitenv -g jitenv /home/jitenv/bin && \
+    install -d -m 0755 /opt/pkg
+
+COPY dist/jitenv_*_linux_${TARGETARCH}.deb /opt/pkg/
+RUN ln -s $(ls /opt/pkg/jitenv_*_linux_${TARGETARCH}.deb | head -n1) /opt/pkg/jitenv.deb && \
+    dpkg -i /opt/pkg/jitenv.deb
+
+COPY --from=helper-build /out/jitenv-e2e-seed /usr/local/bin/jitenv-e2e-seed
+COPY --from=helper-build /out/jitenv-e2e-unlock /usr/local/bin/jitenv-e2e-unlock
+COPY --from=helper-build /out/jitenv-e2e-reload /usr/local/bin/jitenv-e2e-reload
+
+# Put /home/jitenv/bin on PATH for both bash and pwsh sessions so the
+# shim's lookPathExcluding can find the real command behind the wrapper.
+ENV PATH=/home/jitenv/bin:/usr/local/bin:/usr/bin:/bin
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+USER jitenv
+WORKDIR /home/jitenv
+HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=3 \
+    CMD jitenv version || exit 1
+CMD ["sleep", "infinity"]

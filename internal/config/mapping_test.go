@@ -107,6 +107,32 @@ func TestIndex_LookupCwd_TildeExpansion(t *testing.T) {
 	}
 }
 
+// TestIndex_LookupCwd_TrailingSlash pins the trailing-slash normalisation
+// applied by NewIndex. matchAncestor walks ancestors with path.Dir,
+// which strips trailing slashes; a stored pattern that still carries
+// one therefore never matches any ancestor form. Surfaced via the
+// PowerShell e2e scenario where a user-natural `cwd_glob = "~/work/"`
+// silently produced an empty wanted set and the wrap dir stayed empty.
+func TestIndex_LookupCwd_TrailingSlash(t *testing.T) {
+	skipOnWindows(t)
+	tmp := t.TempDir()
+	sub := filepath.Join(tmp, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	idx := NewIndex([]Mapping{{
+		CwdGlob:  tmp + "/",
+		Commands: []string{"npm"},
+		Vars:     []VarRef{{Source: "x"}},
+	}})
+	if !idx.MappedCwd(tmp, "npm") {
+		t.Errorf("trailing-slash cwd_glob should match its own dir")
+	}
+	if !idx.MappedCwd(sub, "npm") {
+		t.Errorf("trailing-slash cwd_glob should match descendants too")
+	}
+}
+
 func TestValidate_RejectsMultipleKinds(t *testing.T) {
 	c := &Config{
 		Version: Version,
