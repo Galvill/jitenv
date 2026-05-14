@@ -211,8 +211,8 @@ func TestRunLocalBag(t *testing.T) {
 	}
 
 	// Build encrypted bag values exactly as the TUI's save path would.
-	pk, _ := crypto.EncryptField(key, "pk_live_x")
-	sk, _ := crypto.EncryptField(key, "sk_live_y")
+	pk, _ := crypto.EncryptField(key, "pk_live_x", config.SecretAAD("stripe", "STRIPE_PK"))
+	sk, _ := crypto.EncryptField(key, "sk_live_y", config.SecretAAD("stripe", "STRIPE_SK"))
 	cfg.Sources = map[string]config.SourceConfig{
 		"vault": {Type: "local"},
 	}

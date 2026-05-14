@@ -455,16 +455,16 @@ func TestEnvelopeRoundTripIntoNew(t *testing.T) {
 		t.Fatalf("NewSalt: %v", err)
 	}
 	key := crypto.DeriveKey([]byte("correct horse battery staple"), salt, crypto.DefaultArgonParams())
-	tokenEnv, err := crypto.EncryptField(key, "real-token")
+	tokenEnv, err := crypto.EncryptField(key, "real-token", crypto.AAD("src", "vaultsrc", "token"))
 	if err != nil {
 		t.Fatalf("EncryptField: %v", err)
 	}
-	secretEnv, err := crypto.EncryptField(key, "real-secret-id")
+	secretEnv, err := crypto.EncryptField(key, "real-secret-id", crypto.AAD("src", "vaultsrc", "secret_id"))
 	if err != nil {
 		t.Fatalf("EncryptField: %v", err)
 	}
 	if !crypto.IsEnvelope(tokenEnv) || !crypto.IsEnvelope(secretEnv) {
-		t.Fatalf("envelopes not formed as enc:v1:")
+		t.Fatalf("envelopes not formed")
 	}
 
 	// Token-auth envelope round-trip.
@@ -473,7 +473,7 @@ func TestEnvelopeRoundTripIntoNew(t *testing.T) {
 		"auth_method": "token",
 		"token":       tokenEnv,
 	}
-	if err := crypto.DecryptStringsInPlace(key, params); err != nil {
+	if err := crypto.DecryptStringsInPlace(key, params, crypto.AAD("src", "vaultsrc")); err != nil {
 		t.Fatalf("DecryptStringsInPlace: %v", err)
 	}
 	if params["token"] != "real-token" {
@@ -490,7 +490,7 @@ func TestEnvelopeRoundTripIntoNew(t *testing.T) {
 		"role_id":     "rid",
 		"secret_id":   secretEnv,
 	}
-	if err := crypto.DecryptStringsInPlace(key, params2); err != nil {
+	if err := crypto.DecryptStringsInPlace(key, params2, crypto.AAD("src", "vaultsrc")); err != nil {
 		t.Fatalf("DecryptStringsInPlace: %v", err)
 	}
 	if params2["secret_id"] != "real-secret-id" {
