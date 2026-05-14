@@ -122,7 +122,13 @@ __jitenv_debug_trap() {
             __jitenv_log "branch=case0 (mapped → jitenv run)"
             local rest="${cmd#"$first_raw"}"
             __JITENV_REENTRY=1
-            eval "jitenv run \"$resolved\"$rest"
+            # printf %q produces a shell-safe quoted form of the path,
+            # so a filename containing `"`, `$`, backtick, or other
+            # bash-active characters (legal on Linux) can't break the
+            # eval string's quoting (security #123).
+            local quoted_resolved
+            printf -v quoted_resolved '%q' "$resolved"
+            eval "jitenv run $quoted_resolved$rest"
             unset __JITENV_REENTRY
             return 1
             ;;
