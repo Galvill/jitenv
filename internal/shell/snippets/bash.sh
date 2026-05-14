@@ -18,7 +18,12 @@ export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # "an unmapped descendant spawned the wrapped binary"; only the former
 # should pull in mapped env vars (issue #52).
 export __JITENV_SHELL_PID=$$
-mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+# Restrict to 0700 across the full hierarchy. Bash's `mkdir -p -m`
+# only sets the mode on the leaf; intermediates inherit the umask
+# (typically 022 → 0755), which would then trip the runtime-dir
+# ownership check (security #117). A subshell with umask 077 makes
+# every intermediate land at 0700.
+(umask 077 && mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null)
 case ":$PATH:" in
     *":$__JITENV_WRAP_DIR:"*) : ;;
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;

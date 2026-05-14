@@ -16,7 +16,12 @@ export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # See bash.sh — gates env injection in the shim so vars don't leak
 # into children of unmapped commands (issue #52).
 export __JITENV_SHELL_PID=$$
-mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+# Restrict to 0700 across the full hierarchy. `mkdir -p -m` only
+# sets the mode on the leaf; intermediates inherit the umask
+# (typically 022 → 0755), which would trip the runtime-dir
+# ownership check (security #117). A subshell with umask 077 makes
+# every intermediate land at 0700.
+(umask 077 && mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null)
 case ":$PATH:" in
     *":$__JITENV_WRAP_DIR:"*) : ;;
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
