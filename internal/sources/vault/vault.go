@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -74,7 +75,7 @@ func schema() []source.ParamField {
 			Enum: []string{kvV1, kvV2},
 			Help: "v1 or v2 (default v2)"},
 		{Key: "tls_skip_verify", Label: "TLS skip verify",
-			Help: "Bool; for dev-mode against self-signed certs."},
+			Help: "INSECURE: disables certificate verification. Only for dev-mode self-signed targets. Setting this in production allows HTTPS_PROXY to MITM every Vault fetch and capture tokens + secret values."},
 	}
 }
 
@@ -103,6 +104,13 @@ func New(cfg map[string]any) (source.Source, error) {
 	}
 	if err := s.validateStatic(); err != nil {
 		return nil, err
+	}
+	if s.tlsSkipVerify {
+		// One loud line at construction (i.e. once per agent startup
+		// and once per reload). Repeating the warning on every Fetch
+		// would just spam the log.
+		slog.Warn("vault source: TLS verification disabled (tls_skip_verify=true); HTTPS_PROXY can MITM all Vault traffic — do not use in production",
+			"address", s.address)
 	}
 	return s, nil
 }
