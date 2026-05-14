@@ -260,6 +260,13 @@ func (v *vaultSource) Fetch(ctx context.Context, ref source.SecretRef) (map[stri
 	if ref.ID == "" {
 		return nil, fmt.Errorf("vault: ref.ID (KV path) is required")
 	}
+	// Reject path-traversal refs before hitting the network (security
+	// #119). Vault's HTTP router normalises `..` server-side, so a ref
+	// like "../../sys/policies" would otherwise escape the configured
+	// mount and reach any path the token's policy permits.
+	if hasPathTraversal(ref.ID) {
+		return nil, fmt.Errorf("vault: ref %q contains path traversal segment", ref.ID)
+	}
 	cli, err := v.newClient(ctx)
 	if err != nil {
 		return nil, err
@@ -292,6 +299,19 @@ func (v *vaultSource) Fetch(ctx context.Context, ref source.SecretRef) (map[stri
 		out[k] = stringify(val)
 	}
 	return out, nil
+}
+
+// hasPathTraversal reports whether name contains a `..` segment that
+// would let the resulting Vault HTTP path escape its configured
+// mount. We check both raw-component matches ("../foo", "foo/..",
+// "foo/../bar") and the standalone ".." case.
+func hasPathTraversal(name string) bool {
+	for _, seg := range strings.Split(name, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // readPath builds the Vault HTTP path for a KV read. For v2 the path
