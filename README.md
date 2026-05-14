@@ -117,16 +117,25 @@ jitenv hook status               Show whether the hook is wired up
   peer auth and a `%LOCALAPPDATA%\jitenv` runtime dir. The agent's
   `Setsid` double-fork on Unix has a Windows analogue using
   `CREATE_NO_WINDOW | DETACHED_PROCESS`.
-- On Windows the path/glob shell hook (`extdebug` + `DEBUG` / `preexec`)
-  is replaced by `cwd_glob` wrapper-shim `.ps1` files invoked via the
-  PowerShell prompt override — see `jitenv hook powershell`. The
-  bash/zsh hook with absolute-path interception is Unix-only.
+- All three mapping kinds (`path`, `glob`, `cwd_glob`) work on every
+  supported shell. Implementation differs per shell:
+  - bash: `extdebug` + `DEBUG` trap intercepts absolute / `./`-relative
+    paths; `cwd_glob` is driven by wrapper symlinks in a per-shell PATH
+    entry, reconciled on every prompt.
+  - zsh: an `accept-line` zle widget does the same path interception;
+    `cwd_glob` again uses wrapper symlinks reconciled per prompt.
+  - PowerShell 7+: a PSReadLine `Enter` chord handler intercepts paths;
+    `cwd_glob` uses `.ps1` wrappers in a per-shell PATH entry,
+    reconciled by the `prompt` override. PSReadLine is the default
+    module in pwsh 7+; without it, `path`/`glob` interception silently
+    no-ops and `cwd_glob` still works.
 - macOS release binaries are not Apple-notarized; first run requires
   `xattr -d com.apple.quarantine ./jitenv` or right-click → Open.
   Windows release binaries are not Authenticode-signed; SmartScreen
   may warn on first run.
-- The bash/zsh shell hook only intercepts commands whose first token
-  is an absolute or `./`-relative path — not bare PATH lookups.
+- The shell hook only intercepts commands whose first token is an
+  absolute or `./`-relative path — not bare PATH lookups (those are
+  routed via `cwd_glob` wrappers instead).
 - Single agent per user; multiple terminals share one unlocked instance.
 - TUI requires a TTY; for scripted setup use `jitenv config init` then
   re-run interactively.

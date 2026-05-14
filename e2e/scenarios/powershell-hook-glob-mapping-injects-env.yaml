@@ -1,0 +1,77 @@
+name: powershell-hook-glob-mapping-injects-env
+description: |
+  Pins issue #104. The path-interception mechanism that #103 added is
+  shape-agnostic with respect to the underlying mapping kind: both
+  `path` (exact file) and `glob` (file-path glob) flow through the
+  same `jitenv is-mapped` exit-code dispatch. This scenario covers the
+  `glob` case explicitly — a mapping like `/home/jitenv/scripts/*.sh`
+  should match any script in the directory and the bag (FOO/BAR/BAZ)
+  should be expanded into the child env.
+
+  Mirrors the bash analogue: see glob-and-bag-expansion.yaml for the
+  full-bag expansion semantics, and powershell-hook-path-mapping-
+  injects-env.yaml for the rewrite-then-Invoke-Expression shape.
+
+service: powershell
+user: jitenv
+
+steps:
+  - name: reset-state
+    exec: |
+      jitenv lock 2>/dev/null || true
+      rm -rf /tmp/jitenv-1000
+      rm -f "$JITENV_CONFIG"
+
+  - name: seed-config
+    exec: |
+      jitenv-e2e-seed -out "$JITENV_CONFIG" -variant local-glob -glob '/home/jitenv/scripts/*.sh'
+  - name: assert-seed-ok
+    assert_exit_code: 0
+
+  - name: write-test-script
+    exec: |
+      cat > /home/jitenv/scripts/show-glob.sh <<'EOF'
+      #!/bin/sh
+      printf 'FOO=%s\n' "$FOO"
+      printf 'BAR=%s\n' "$BAR"
+      printf 'BAZ=%s\n' "$BAZ"
+      EOF
+      chmod +x /home/jitenv/scripts/show-glob.sh
+  - name: assert-write-ok
+    assert_exit_code: 0
+
+  - name: unlock
+    exec: jitenv-e2e-unlock -passphrase e2e-test-pass
+    timeout: 30s
+  - name: assert-unlock-ok
+    assert_exit_code: 0
+
+  - name: wait-for-socket
+    wait_for_file: /tmp/jitenv-1000/agent.sock
+    timeout: 15s
+
+  # The script matches the glob `/home/jitenv/scripts/*.sh` so the
+  # rewrite must happen and all three bag keys (FOO/BAR/BAZ) must
+  # land in the child env.
+  - name: pwsh-rewrite-and-execute
+    exec: |
+      pwsh -NoProfile -Command '
+        Invoke-Expression (& jitenv hook powershell | Out-String)
+        $rewritten = __jitenv_rewrite_buffer "/home/jitenv/scripts/show-glob.sh"
+        Write-Host "REWRITTEN=$rewritten"
+        Invoke-Expression $rewritten
+      '
+    timeout: 30s
+  - name: assert-glob-rewrites
+    assert_stdout_contains: 'REWRITTEN=jitenv run "/home/jitenv/scripts/show-glob.sh"'
+  - name: assert-foo
+    assert_stdout_contains: "FOO=value-from-local-foo"
+  - name: assert-bar
+    assert_stdout_contains: "BAR=value-from-local-bar"
+  - name: assert-baz
+    assert_stdout_contains: "BAZ=value-from-local-baz"
+
+  - name: lock
+    exec: jitenv lock
+  - name: assert-lock-ok
+    assert_exit_code: 0
