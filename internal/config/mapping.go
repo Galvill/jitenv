@@ -28,7 +28,15 @@ type cwdGlobEntry struct {
 	vars     []VarRef
 }
 
-// NewIndex builds an Index from the parsed config.
+// NewIndex builds an Index from the parsed config. Glob and cwd_glob
+// patterns are normalised to forward slashes here because
+// doublestar.Match is forward-slash-only; without normalisation a
+// tilde-prefixed pattern like "~/test" silently fails on Windows
+// (expandTilde calls filepath.Join, which emits backslashes from
+// C:\Users\gv joined with "test", so the stored pattern is
+// "C:\Users\gv\test" — the path side of the comparison normalises
+// to forward slashes in matchAncestor / Lookup but a backslash-laden
+// pattern never matches). ToSlash is a no-op on Unix.
 func NewIndex(mappings []Mapping) *Index {
 	idx := &Index{exact: map[string][]VarRef{}}
 	for _, m := range mappings {
@@ -41,12 +49,12 @@ func NewIndex(mappings []Mapping) *Index {
 			idx.exact[abs] = append(idx.exact[abs], m.Vars...)
 		case m.Glob != "":
 			idx.globs = append(idx.globs, globEntry{
-				pattern: expandTilde(m.Glob),
+				pattern: filepath.ToSlash(expandTilde(m.Glob)),
 				vars:    m.Vars,
 			})
 		case m.CwdGlob != "":
 			idx.cwdGlobs = append(idx.cwdGlobs, cwdGlobEntry{
-				pattern:  expandTilde(m.CwdGlob),
+				pattern:  filepath.ToSlash(expandTilde(m.CwdGlob)),
 				commands: append([]string(nil), m.Commands...),
 				vars:     m.Vars,
 			})
