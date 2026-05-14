@@ -107,16 +107,15 @@ jobs:
         run: go test -race -covermode=atomic ./internal/agent/... ./internal/agentwarn/... ./internal/cli/... ./internal/config/... ./internal/crypto/... ./internal/run/... ./internal/runnotice/... ./internal/sources/... ./internal/tui/... ./internal/version/...
 
   test-windows:
-    # Stage 1 of native Windows support (#39): exercise the
-    # cross-platform compile of the agent + shim + run paths against a
-    # real Windows toolchain. Most platform-specific stubs return
-    # "not yet implemented" errors at runtime, so the e2e/agent test
-    # suites are constrained out via `//go:build !windows` — what runs
-    # here is the config/crypto/version surface plus anything else
-    # that's already platform-clean. The job is mandatory so a
-    # regression in the Windows build (a new Unix-only syscall slipped
-    # into a shared file) fails CI immediately rather than being
-    # discovered when Stage 2 starts.
+    # Native Windows support (#39, stages 2.1-2.6): named-pipe
+    # transport, token-SID peer auth, hidden-console daemon spawn,
+    # spawn-and-wait run/shim, .ps1 wrapper shims, PowerShell 7 hook,
+    # %APPDATA% config path, and .zip release artifacts. Each platform-
+    # specific package has companion *_windows_test.go files that
+    # exercise the real Windows code paths (winio pipes, %PATHEXT%
+    # lookup, doublestar separator normalisation, etc.). The shell
+    # hook end-to-end suites stay !windows-tagged because they shell
+    # out to bash/zsh; PowerShell e2e is tracked separately.
     name: test (windows)
     if: ${{ github.event_name == 'push' || !startsWith(github.head_ref, 'release-please--') }}
     runs-on: windows-latest
@@ -144,10 +143,8 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        # All tests that need a Unix socket, fork+exec, symlinks, or
-        # bash/zsh are gated behind `//go:build !windows` so they
-        # compile-skip here. What remains is the cross-platform surface
-        # (config, crypto, version, sources, tui, runnotice, agentwarn,
-        # the agent's pure-Go bits) — green on Windows means the
-        # compile-time scaffolding from #39 stage 1 is still intact.
+        # The bash/zsh hook end-to-end tests (internal/shell/hook_*) and
+        # the bash-script-spawning run/shim e2e tests stay `!windows`-
+        # tagged. Everything else has Windows-aware logic (or a
+        # companion *_windows_test.go) and runs here.
         run: go test -covermode=atomic ./...
