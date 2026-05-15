@@ -190,6 +190,46 @@ func TestReadPath_V1(t *testing.T) {
 	}
 }
 
+// TestFetch_RejectsPathTraversal is the regression for security #119:
+// a VarRef.Ref containing ".." segments would otherwise let a user
+// who controls the config escape the configured mount and reach any
+// Vault path their token's policy permits (e.g. ../../sys/policies).
+// Fetch must reject such refs before issuing the HTTP request.
+func TestFetch_RejectsPathTraversal(t *testing.T) {
+	s, err := New(map[string]any{
+		"address":     "http://127.0.0.1:1",
+		"auth_method": "token",
+		"token":       "x",
+		"mount":       "secret",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cases := []string{
+		"../../sys/policies/acl/default",
+		"foo/../../etc",
+		"foo/..",
+		"..",
+		"./.././bar",
+	}
+	for _, name := range cases {
+		// Cancelled context proves we reject BEFORE the network: an
+		// implementation that defers validation would either return
+		// context.Canceled (network attempted) or block. Our reject
+		// returns a synchronous "traversal"-message error.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := s.Fetch(ctx, source.SecretRef{ID: name})
+		if err == nil {
+			t.Errorf("Fetch(%q) must reject path-traversal ref", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "traversal") {
+			t.Errorf("Fetch(%q) error %q should mention 'traversal' (rejection at validation, not network failure)", name, err)
+		}
+	}
+}
+
 func TestUnwrap_V2_MissingDataWrapper(t *testing.T) {
 	v := &vaultSource{kvVersion: "v2"}
 	_, err := v.unwrap(map[string]any{"foo": "bar"})
