@@ -15,6 +15,23 @@ const (
 	SaltLen                    = 16
 )
 
+// Minimum Argon2id parameters. Configs whose [_meta] specifies values
+// below these floors are rejected at derive time (security #111): the
+// params are stored unauthenticated on disk, so without floors a
+// config-write attacker can silently weaken the KDF and reduce the
+// cost of offline brute-force against a leaked memory/swap dump.
+//
+// MinArgonMemKiB tracks the OWASP Password Storage cheat sheet's
+// Argon2id minimum of 19 MiB; the rest are conservative floors well
+// below the project defaults so legitimately-strict (but slower)
+// configurations remain valid.
+const (
+	MinArgonTime    uint32 = 2
+	MinArgonMemKiB  uint32 = 19 * 1024
+	MinArgonThreads uint8  = 1
+	MinSaltLen             = 16
+)
+
 type ArgonParams struct {
 	Time    uint32
 	MemKiB  uint32

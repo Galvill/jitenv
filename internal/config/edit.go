@@ -67,6 +67,23 @@ func DeriveKeyFromMeta(c *Config, passphrase []byte) ([]byte, error) {
 		MemKiB:  nz(c.Meta.ArgonMemoryKiB, crypto.DefaultArgonMemKiB),
 		Threads: nzU8(c.Meta.ArgonThreads, crypto.DefaultArgonThreads),
 	}
+	// Reject KDF params below documented floors. Without this check a
+	// config-write attacker can drop argon_time to 1 and argon_memory_kib
+	// to a few KiB so the next derive (and any offline brute-force
+	// against a leaked memory/swap dump) costs almost nothing
+	// (security #111).
+	if params.Time < crypto.MinArgonTime {
+		return nil, fmt.Errorf("config _meta.argon_time=%d is below minimum %d; re-init with `jitenv config init`", params.Time, crypto.MinArgonTime)
+	}
+	if params.MemKiB < crypto.MinArgonMemKiB {
+		return nil, fmt.Errorf("config _meta.argon_memory_kib=%d is below minimum %d (OWASP floor); re-init with `jitenv config init`", params.MemKiB, crypto.MinArgonMemKiB)
+	}
+	if params.Threads < crypto.MinArgonThreads {
+		return nil, fmt.Errorf("config _meta.argon_threads=%d is below minimum %d; re-init with `jitenv config init`", params.Threads, crypto.MinArgonThreads)
+	}
+	if len(salt) < crypto.MinSaltLen {
+		return nil, fmt.Errorf("config _meta.salt is %d bytes; minimum %d", len(salt), crypto.MinSaltLen)
+	}
 	key := crypto.DeriveKey(passphrase, salt, params)
 	if pt, err := crypto.DecryptField(key, c.Meta.Verify); err != nil || pt != verifySentinel {
 		zero(key)
