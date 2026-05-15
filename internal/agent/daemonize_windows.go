@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -19,27 +18,26 @@ import (
 
 // SpawnDaemon on Windows starts a detached, hidden-console child running
 // `jitenv __agent` and hands the master key over an anonymous pipe whose
-// read end is inherited by the child.
+// read end is wired in as the child's stdin (security #128).
 //
 // The Unix daemonize path uses os/exec ExtraFiles to seat the read end at
-// fd 3 and tells the child --key-fd=3. Windows has no fixed fd 3 — handle
-// inheritance instead works via SysProcAttr.AdditionalInheritedHandles
-// plus a per-spawn handle value the parent communicates to the child via
-// a command-line flag (--key-handle=<hex>). The handle is a kernel
-// handle, not a path or fd, so its hex form is meaningful only inside the
-// child process; the master key itself never appears on the command line,
-// in the environment, or on disk.
+// fd 3 and tells the child --key-fd=3. The Windows path used to pass a
+// kernel-handle hex on the command line (--key-handle=<hex>), but that
+// handle value was visible to any same-user process via cmdline
+// inspection and opened a brief DuplicateHandle race window. Routing the
+// pipe through cmd.Stdin removes the handle value from the cmdline
+// entirely while still relying on Win32 handle inheritance under the
+// hood — stdin is already in the inherited-handle list set by Go's
+// exec.Cmd.
 //
 // Detach is achieved with CREATE_NO_WINDOW (no console window flash) +
-// DETACHED_PROCESS (no inherited console at all) + HideWindow. Stdio is
-// redirected to the agent log file and os.DevNull so the child has no
-// dependence on the parent's console handles.
+// DETACHED_PROCESS (no inherited console at all) + HideWindow.
+// stdout/stderr go to the agent log file.
 //
 // Shutdown: there is no explicit shutdown signal from parent to child.
 // `jitenv lock` issues an OpLock RPC over the pipe and the agent's Serve
 // loop cancels itself + closes the listener; the process then exits
-// naturally. Pipe-close-as-shutdown is sufficient and avoids the
-// extra IPC of a named Windows event.
+// naturally.
 func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte) error {
 	if existing, _ := ReadPidFile(paths.PidFile); existing > 0 && PidAlive(existing) {
 		return fmt.Errorf("agent already running (pid %d)", existing)
@@ -75,22 +73,19 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 		return err
 	}
 	defer logF.Close()
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
-	if err != nil {
-		pr.Close()
-		return err
-	}
-	defer devNull.Close()
 
-	rHandle := syscall.Handle(pr.Fd())
 	args := []string{
 		"__agent",
-		"--key-handle=" + strconv.FormatUint(uint64(rHandle), 16),
+		"--key-handle=stdin",
 		"--config=" + configFile,
 		"--idle=" + idle.String(),
 	}
 	cmd := exec.Command(exe, args...)
-	cmd.Stdin = devNull
+	// Child's stdin = read end of the master-key pipe (security #128).
+	// Go's exec.Cmd ensures the handle is inherited via
+	// STARTUPINFO.hStdInput; no explicit AdditionalInheritedHandles
+	// entry is needed.
+	cmd.Stdin = pr
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -99,8 +94,7 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 		// CREATE_NO_WINDOW prevents Windows from allocating a fresh
 		// console for the child when it is spawned from a GUI process
 		// (e.g. a TUI session running under conpty).
-		CreationFlags:              windows.DETACHED_PROCESS | windows.CREATE_NO_WINDOW,
-		AdditionalInheritedHandles: []syscall.Handle{rHandle},
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NO_WINDOW,
 	}
 
 	if err := cmd.Start(); err != nil {
