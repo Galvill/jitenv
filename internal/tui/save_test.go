@@ -70,9 +70,15 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 	if !crypto.IsEnvelope(sak) {
 		t.Fatalf("secret_access_key not encrypted on disk: %q", sak)
 	}
+	// Security #112: encrypt-by-default. Every non-envelope string
+	// param must land on disk as an envelope, regardless of whether
+	// the schema flagged it Sensitive. The previous behaviour treated
+	// the schema as the sole gate, which silently leaked params from
+	// sources without a registered schema (or sources where an author
+	// forgot the Sensitive flag).
 	region := reloaded.Sources["prod_aws"].Params["region"].(string)
-	if crypto.IsEnvelope(region) {
-		t.Fatalf("non-sensitive region got encrypted: %q", region)
+	if !crypto.IsEnvelope(region) {
+		t.Fatalf("non-sensitive region was NOT encrypted on disk: %q", region)
 	}
 	for _, v := range reloaded.Secrets["stripe"] {
 		if !crypto.IsEnvelope(v) {
@@ -87,7 +93,67 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 	if reloaded.Sources["prod_aws"].Params["secret_access_key"] != "AWSsupersecret" {
 		t.Fatalf("secret_access_key round-trip broken: %v", reloaded.Sources["prod_aws"].Params["secret_access_key"])
 	}
+	if reloaded.Sources["prod_aws"].Params["region"] != "us-east-1" {
+		t.Fatalf("region round-trip broken: %v", reloaded.Sources["prod_aws"].Params["region"])
+	}
 	if reloaded.Secrets["stripe"]["PK"] != "pk_live_x" {
 		t.Fatalf("PK round-trip: %v", reloaded.Secrets["stripe"]["PK"])
+	}
+}
+
+// TestEncryptForSave_EncryptsParamsWithoutSchema is the regression for
+// security #112: a source type whose schema is missing entirely (e.g.
+// `noop` — registered but with no RegisterSchema call) MUST still get
+// its string params encrypted on save. The previous schema-only gate
+// would silently leak any value typed into the TUI's generic editor.
+func TestEncryptForSave_EncryptsParamsWithoutSchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2")
+	if err := config.InitNew(path, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	key, err := config.DeriveKeyFromMeta(c, pw)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	defer zero(key)
+
+	// `noop` is the schema-less source; a user-entered string in the
+	// generic editor lands in Params as a bare string.
+	c.Sources = map[string]config.SourceConfig{
+		"myop": {Type: "noop", Params: map[string]any{
+			"opaque_token": "shhh-this-is-a-secret-someone-typed-here",
+		}},
+	}
+	c.Mappings = []config.Mapping{
+		{Path: "/x", Vars: []config.VarRef{{Name: "TOKEN", Source: "myop"}}},
+	}
+
+	out := cloneForSave(c)
+	if err := encryptForSave(out, key); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := config.AtomicSave(path, out); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	v := reloaded.Sources["myop"].Params["opaque_token"].(string)
+	if !crypto.IsEnvelope(v) {
+		t.Fatalf("schema-less param was NOT encrypted on disk: %q", v)
+	}
+	if err := config.DecryptInPlace(reloaded, key); err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if reloaded.Sources["myop"].Params["opaque_token"] != "shhh-this-is-a-secret-someone-typed-here" {
+		t.Fatalf("round-trip broken: %v", reloaded.Sources["myop"].Params["opaque_token"])
 	}
 }
