@@ -38,6 +38,7 @@ func newAgentInternalCmd() *cobra.Command {
 				return fmt.Errorf("read key: %w", err)
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 			slog.Info("agent starting", "config", cfgArg, "idle", idle.String())
 
 			loadAndBuild := func() (agent.Resolver, error) {
