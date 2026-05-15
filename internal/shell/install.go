@@ -275,9 +275,14 @@ func bashLoginCandidates() []string {
 // loginSourcingBlock returns the comment + source line to append. If
 // the target is .profile (which sh may also source), the source line
 // is wrapped in a $BASH_VERSION guard so non-bash shells skip it.
+//
+// The bashrc path is shell-quoted via shellQuote (security #124) so
+// $HOME directories containing spaces or other shell metacharacters
+// (legal on macOS, WSL-mounted Windows homes, etc.) don't produce
+// broken syntax in the generated .bash_profile / .profile.
 func loginSourcingBlock(target string) string {
 	home, _ := os.UserHomeDir()
-	bashrc := filepath.Join(home, ".bashrc")
+	bashrc := shellQuote(filepath.Join(home, ".bashrc"))
 	if filepath.Base(target) == ".profile" {
 		return fmt.Sprintf(
 			"\n# jitenv: ensure bash login shells load ~/.bashrc (sh-safe)\n"+
@@ -291,7 +296,9 @@ func loginSourcingBlock(target string) string {
 }
 
 // loginFileSourcesBashrc reports whether `text` contains a line that
-// sources ~/.bashrc, in any of the common forms.
+// sources ~/.bashrc, in any of the common forms. Recognises both the
+// historical unquoted forms and the quoted form emitted by
+// loginSourcingBlock since security #124.
 func loginFileSourcesBashrc(text string) bool {
 	home, _ := os.UserHomeDir()
 	bashrc := filepath.Join(home, ".bashrc")
@@ -302,6 +309,8 @@ func loginFileSourcesBashrc(text string) bool {
 		". $HOME/.bashrc",
 		"source " + bashrc,
 		". " + bashrc,
+		"source " + shellQuote(bashrc),
+		". " + shellQuote(bashrc),
 	}
 	for _, p := range patterns {
 		if strings.Contains(text, p) {
