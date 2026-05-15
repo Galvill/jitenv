@@ -27,6 +27,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
 	approleauth "github.com/hashicorp/vault/api/auth/approle"
@@ -146,7 +148,29 @@ type vaultSource struct {
 	mount         string
 	kvVersion     string
 	tlsSkipVerify bool
+
+	// Cached authenticated client (security #133). AppRole logins burn
+	// a use-count on every call and re-send role_id + secret_id over
+	// the wire, so re-authenticating per-Fetch was both wasteful and a
+	// secret_id leak amplifier. The cache is invalidated when the
+	// recorded lease expiry passes (with a 60s safety margin) or on
+	// any auth failure the client surfaces. Static tokens have no
+	// known expiry from this side; we cache the client for tokenCacheTTL
+	// and let downstream API errors trigger a rebuild.
+	cacheMu      sync.Mutex
+	cachedClient *vaultapi.Client
+	cachedExpiry time.Time
 }
+
+// tokenCacheTTL is the cache lifetime for static-token auth where we
+// have no lease-duration to derive from. An hour balances "cheap" vs
+// "responsive to token revocation".
+const tokenCacheTTL = time.Hour
+
+// authCacheSafetyMargin is the slack we subtract from the Vault-reported
+// lease duration so we re-authenticate before the cached token actually
+// expires. Hides clock skew + in-flight request latency.
+const authCacheSafetyMargin = 60 * time.Second
 
 func (v *vaultSource) Name() string { return TypeName }
 
@@ -184,9 +208,31 @@ func (v *vaultSource) validateStatic() error {
 	return nil
 }
 
-// newClient builds a configured *api.Client and authenticates it. The
-// resulting client carries the auth token that subsequent calls use.
+// newClient returns an authenticated Vault client, reusing a cached
+// one when it's still within its lease window (security #133). The
+// cache is keyed off the source instance so two sources with the same
+// address but different auth params get separate clients.
 func (v *vaultSource) newClient(ctx context.Context) (*vaultapi.Client, error) {
+	v.cacheMu.Lock()
+	defer v.cacheMu.Unlock()
+
+	if v.cachedClient != nil && time.Now().Before(v.cachedExpiry) {
+		return v.cachedClient, nil
+	}
+
+	cli, expiry, err := v.buildAndAuthenticate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	v.cachedClient = cli
+	v.cachedExpiry = expiry
+	return cli, nil
+}
+
+// buildAndAuthenticate constructs a fresh *vaultapi.Client and runs
+// the configured auth flow. Returns the client plus the time at which
+// its credentials should be treated as expired.
+func (v *vaultSource) buildAndAuthenticate(ctx context.Context) (*vaultapi.Client, time.Time, error) {
 	cfg := vaultapi.DefaultConfig()
 	cfg.Address = v.address
 
@@ -202,16 +248,17 @@ func (v *vaultSource) newClient(ctx context.Context) (*vaultapi.Client, error) {
 
 	cli, err := vaultapi.NewClient(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("vault: new client: %w", err)
+		return nil, time.Time{}, fmt.Errorf("vault: new client: %w", err)
 	}
 	if v.namespace != "" {
 		cli.SetNamespace(v.namespace)
 	}
 
-	if err := v.authenticate(ctx, cli); err != nil {
-		return nil, err
+	expiry, err := v.authenticate(ctx, cli)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
-	return cli, nil
+	return cli, expiry, nil
 }
 
 // cleanTransport returns a fresh http.Transport sized for one-shot
@@ -228,27 +275,39 @@ func cleanTransport() *http.Transport {
 	}
 }
 
-func (v *vaultSource) authenticate(ctx context.Context, cli *vaultapi.Client) error {
+// authenticate runs the configured auth flow against cli and returns
+// the time at which the resulting credentials should be re-acquired.
+// For static-token auth there's no server-reported expiry, so we use
+// the local tokenCacheTTL ceiling; downstream API errors will force
+// a rebuild sooner if the token is revoked.
+func (v *vaultSource) authenticate(ctx context.Context, cli *vaultapi.Client) (time.Time, error) {
 	switch v.authMethod {
 	case authToken:
 		cli.SetToken(v.token)
-		return nil
+		return time.Now().Add(tokenCacheTTL), nil
 	case authAppRole:
 		secret := &approleauth.SecretID{FromString: v.secretID}
 		appRole, err := approleauth.NewAppRoleAuth(v.roleID, secret)
 		if err != nil {
-			return fmt.Errorf("vault: approle auth setup: %w", err)
+			return time.Time{}, fmt.Errorf("vault: approle auth setup: %w", err)
 		}
 		out, err := cli.Auth().Login(ctx, appRole)
 		if err != nil {
-			return fmt.Errorf("vault: approle login: %w", err)
+			return time.Time{}, fmt.Errorf("vault: approle login: %w", err)
 		}
 		if out == nil || out.Auth == nil || out.Auth.ClientToken == "" {
-			return fmt.Errorf("vault: approle login returned no token")
+			return time.Time{}, fmt.Errorf("vault: approle login returned no token")
 		}
-		return nil
+		lease := time.Duration(out.Auth.LeaseDuration) * time.Second
+		if lease <= authCacheSafetyMargin {
+			// Server returned a near-zero lease (or 0 = no expiry).
+			// Default to a short cache so we don't pin a stale token,
+			// but still avoid per-Fetch re-auth.
+			return time.Now().Add(authCacheSafetyMargin), nil
+		}
+		return time.Now().Add(lease - authCacheSafetyMargin), nil
 	}
-	return fmt.Errorf("vault: unsupported auth_method %q", v.authMethod)
+	return time.Time{}, fmt.Errorf("vault: unsupported auth_method %q", v.authMethod)
 }
 
 // Validate authenticates against Vault without reading any secret.

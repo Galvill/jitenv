@@ -458,6 +458,49 @@ func TestFetch_AppRoleAuth_V2(t *testing.T) {
 	}
 }
 
+// TestFetch_AppRoleAuth_CachesToken is the regression for security
+// #133: two consecutive Fetches against the same source should reuse
+// the previous AppRole login rather than calling /auth/approle/login
+// every time. Re-auth-per-Fetch exhausts secret_id use-counts and
+// triples the wire footprint of secret_id over the network.
+func TestFetch_AppRoleAuth_CachesToken(t *testing.T) {
+	var loginCalls atomic.Int32
+	srv := stubServer(t, map[string]http.HandlerFunc{
+		"PUT /v1/auth/approle/login": func(w http.ResponseWriter, r *http.Request) {
+			loginCalls.Add(1)
+			writeJSON(w, 200, map[string]any{
+				"auth": map[string]any{
+					"client_token":   "issued-token",
+					"lease_duration": 3600, // 1h — well above the 60s safety margin
+				},
+			})
+		},
+		"GET /v1/secret/data/myapp/prod": func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, 200, map[string]any{
+				"data": map[string]any{"data": map[string]any{"FOO": "bar"}},
+			})
+		},
+	})
+
+	s, err := New(map[string]any{
+		"address":     srv.URL,
+		"auth_method": "approle",
+		"role_id":     "rid",
+		"secret_id":   "sid",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.Fetch(context.Background(), source.SecretRef{ID: "myapp/prod"}); err != nil {
+			t.Fatalf("Fetch #%d: %v", i, err)
+		}
+	}
+	if got := loginCalls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 AppRole login across 3 fetches; got %d", got)
+	}
+}
+
 func TestFetch_MissingSecret_V2(t *testing.T) {
 	srv := stubServer(t, map[string]http.HandlerFunc{
 		"GET /v1/secret/data/missing": func(w http.ResponseWriter, r *http.Request) {
