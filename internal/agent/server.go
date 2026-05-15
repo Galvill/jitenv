@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+// shutdownDrainTimeout caps how long Shutdown waits for in-flight
+// request handlers to complete before forcing exit. Tunable from tests.
+var shutdownDrainTimeout = 2 * time.Second
+
 // Agent is the per-user secret-fetching daemon.
 type Agent struct {
 	paths    Paths
@@ -25,6 +29,12 @@ type Agent struct {
 
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// handlers tracks in-flight connection goroutines so Shutdown can
+	// drain them with a bounded timeout (security #134). Without this,
+	// SIGTERM mid-fetch dropped a connection while the response was
+	// half-written, surfacing as a confusing IPC error to the client.
+	handlers sync.WaitGroup
 
 	mu       sync.RWMutex
 	resolver Resolver
@@ -127,17 +137,35 @@ func (a *Agent) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		go a.handle(ctx, conn)
+		a.handlers.Add(1)
+		go func() {
+			defer a.handlers.Done()
+			a.handle(ctx, conn)
+		}()
 	}
 }
 
-// Shutdown stops accepting and removes socket + pidfile.
+// Shutdown stops accepting and removes socket + pidfile. Drains any
+// in-flight request handlers for up to shutdownDrainTimeout so a
+// SIGTERM / OpLock mid-fetch doesn't cut a half-written response off
+// at the wire (security #134). Handlers that don't finish in time
+// are abandoned — the OS will tear down the still-open conns when
+// the process exits.
 func (a *Agent) Shutdown() {
 	if a.cancel != nil {
 		a.cancel()
 	}
 	if a.done != nil {
 		<-a.done
+	}
+	drained := make(chan struct{})
+	go func() {
+		a.handlers.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(shutdownDrainTimeout):
 	}
 	_ = os.Remove(a.paths.Socket)
 	_ = RemovePidFile(a.paths.PidFile)
