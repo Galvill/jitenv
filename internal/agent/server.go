@@ -28,6 +28,11 @@ var shutdownDrainTimeout = 2 * time.Second
 type Agent struct {
 	paths    Paths
 	listener net.Listener
+	// pidLock holds the exclusive flock/share-mode lock on the
+	// pidfile for the agent's lifetime. Closing it releases the lock
+	// and lets a future unlock take over without staleness checks
+	// (security #130).
+	pidLock *os.File
 
 	startedAt time.Time
 	hits      atomic.Int64
@@ -104,15 +109,27 @@ func (a *Agent) currentResolver() Resolver {
 // platform-split implementations.
 func (a *Agent) Listen() error {
 	_ = GcOrphanShells(a.paths.ShellsDir)
-	if existing, _ := ReadPidFile(a.paths.PidFile); existing > 0 && PidAlive(existing) {
-		return fmt.Errorf("agent already running (pid %d)", existing)
+	// OS-level advisory lock on the pidfile. Held for the agent's
+	// lifetime; auto-released on process exit (even a crash) so we
+	// never get stuck on a stale lock the way a pure pidfile +
+	// PidAlive check can (security #130).
+	lock, err := acquirePidLock(a.paths.PidFile)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, _ := ReadPidFile(a.paths.PidFile)
+			return fmt.Errorf("agent already running (pid %d)", existing)
+		}
+		return err
 	}
+	a.pidLock = lock
 	// Best-effort cleanup of a stale socket file. No-op on Windows where
 	// Socket is a pipe name, not a filesystem path.
 	_ = os.Remove(a.paths.Socket)
 
 	ln, err := listenSocket(a.paths.Socket)
 	if err != nil {
+		a.pidLock.Close()
+		a.pidLock = nil
 		return err
 	}
 	a.listener = ln
@@ -192,6 +209,10 @@ func (a *Agent) Shutdown() {
 	}
 	_ = os.Remove(a.paths.Socket)
 	_ = RemovePidFile(a.paths.PidFile)
+	if a.pidLock != nil {
+		_ = a.pidLock.Close()
+		a.pidLock = nil
+	}
 }
 
 func (a *Agent) idleLoop(ctx context.Context) {
