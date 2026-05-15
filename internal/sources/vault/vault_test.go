@@ -1,8 +1,10 @@
 package vault
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,6 +105,50 @@ func TestNew_UnknownKVVersion(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "unknown kv_version") {
 		t.Fatalf("expected unknown kv_version error, got %v", err)
+	}
+}
+
+// TestNew_TLSSkipVerify_LogsWarning is the regression for security #113:
+// enabling tls_skip_verify must produce a loud, structured warning at
+// New() time so the operator can spot a misconfigured Vault source in
+// the agent log. Without this signal, a stray dev-mode setting can
+// survive a promotion to production and MITM all Vault fetches via
+// HTTPS_PROXY.
+func TestNew_TLSSkipVerify_LogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if _, err := New(map[string]any{
+		"address":         "https://vault.example.com:8200",
+		"auth_method":     "token",
+		"token":           "x",
+		"tls_skip_verify": true,
+	}); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"level":"WARN"`) {
+		t.Errorf("expected a WARN-level log line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "tls_skip_verify") && !strings.Contains(out, "TLS verification disabled") {
+		t.Errorf("warning should mention TLS verification being disabled; got:\n%s", out)
+	}
+
+	// Reset the buffer; a source without the flag must NOT log a
+	// warning, otherwise every legitimate Vault setup spams the log.
+	buf.Reset()
+	if _, err := New(map[string]any{
+		"address":     "https://vault.example.com:8200",
+		"auth_method": "token",
+		"token":       "x",
+	}); err != nil {
+		t.Fatalf("New (clean): %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected warning when tls_skip_verify is unset:\n%s", buf.String())
 	}
 }
 
