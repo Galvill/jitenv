@@ -25,6 +25,36 @@ type bagSink interface {
 	SetBags(map[string]map[string]string)
 }
 
+// wiper is implemented by sources that cache decrypted secret
+// material (the local source's bag map, future caches for remote
+// sources) and need a hook to drop those references on shutdown
+// (security #125). Optional — sources that hold no plaintext
+// secrets don't implement it.
+type wiper interface {
+	Wipe()
+}
+
+// Wipe walks every source the resolver owns and asks it to release
+// any cached plaintext. Then it drops the resolver's own reference
+// to the per-source config map (which still holds the decrypted
+// param strings post-DecryptInPlace). Best-effort: Go strings are
+// immutable, so this can't overwrite the heap bytes — it removes
+// the live reference chain so a future GC can reclaim the memory.
+func (r *resolver) Wipe() {
+	for _, s := range r.sources {
+		if w, ok := s.(wiper); ok {
+			w.Wipe()
+		}
+	}
+	for name, sc := range r.cfg {
+		for k := range sc.Params {
+			sc.Params[k] = ""
+		}
+		r.cfg[name] = sc
+	}
+	r.cfg = nil
+}
+
 // BuildResolver constructs sources from the (already-decrypted) config
 // and returns a Resolver suitable for an Agent.
 func BuildResolver(cfg *config.Config) (Resolver, error) {

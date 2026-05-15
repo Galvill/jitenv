@@ -131,7 +131,12 @@ func (a *Agent) Serve(ctx context.Context) error {
 	}
 }
 
-// Shutdown stops accepting and removes socket + pidfile.
+// Shutdown stops accepting and removes socket + pidfile. As of
+// security #125 it also asks the resolver to wipe any cached
+// plaintext secret material so a memory dump immediately after
+// shutdown contains fewer recoverable secrets (Go strings are
+// immutable, so this isn't true zeroing — it drops live references
+// so a future GC can reclaim the memory).
 func (a *Agent) Shutdown() {
 	if a.cancel != nil {
 		a.cancel()
@@ -141,6 +146,12 @@ func (a *Agent) Shutdown() {
 	}
 	_ = os.Remove(a.paths.Socket)
 	_ = RemovePidFile(a.paths.PidFile)
+	a.mu.Lock()
+	if w, ok := a.resolver.(interface{ Wipe() }); ok {
+		w.Wipe()
+	}
+	a.resolver = nil
+	a.mu.Unlock()
 }
 
 func (a *Agent) idleLoop(ctx context.Context) {
