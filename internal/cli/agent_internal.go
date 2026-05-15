@@ -69,7 +69,15 @@ func newAgentInternalCmd() *cobra.Command {
 			ctx, cancel := agent.AwaitSignal(context.Background())
 			defer cancel()
 			defer ag.Shutdown()
-			slog.Info("agent listening", "socket", paths.Socket, "sources", res.Sources())
+			// The startup line previously logged res.Sources() at INFO,
+			// which dumps the configured source names into agent.log.
+			// Source names ("aws-prod", "vault-staging", "kube-secrets-
+			// tier1") are operational metadata that constitute a useful
+			// leak to anyone who reads the log file (security #129).
+			// Keep the bare "listening" signal at INFO; the names are
+			// available via the `status` op for callers who want them.
+			slog.Info("agent listening", "socket", paths.Socket, "source_count", len(res.Sources()))
+			slog.Debug("agent sources", "sources", res.Sources())
 			err = ag.Serve(ctx)
 			slog.Info("agent stopped")
 			return err
