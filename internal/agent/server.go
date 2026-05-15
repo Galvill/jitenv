@@ -185,12 +185,19 @@ func (a *Agent) Serve(ctx context.Context) error {
 	}
 }
 
-// Shutdown stops accepting and removes socket + pidfile. Drains any
-// in-flight request handlers for up to shutdownDrainTimeout so a
-// SIGTERM / OpLock mid-fetch doesn't cut a half-written response off
-// at the wire (security #134). Handlers that don't finish in time
-// are abandoned — the OS will tear down the still-open conns when
-// the process exits.
+// Shutdown stops accepting and removes socket + pidfile.
+//
+// Drains any in-flight request handlers for up to
+// shutdownDrainTimeout so a SIGTERM / OpLock mid-fetch doesn't cut
+// a half-written response off at the wire (security #134).
+// Handlers that don't finish in time are abandoned — the OS will
+// tear down the still-open conns when the process exits.
+//
+// Also asks the resolver to wipe any cached plaintext secret
+// material so a memory dump immediately after shutdown contains
+// fewer recoverable secrets (security #125). Go strings are
+// immutable, so this isn't true zeroing — it drops live references
+// so a future GC can reclaim the memory.
 func (a *Agent) Shutdown() {
 	if a.cancel != nil {
 		a.cancel()
@@ -213,6 +220,12 @@ func (a *Agent) Shutdown() {
 		_ = a.pidLock.Close()
 		a.pidLock = nil
 	}
+	a.mu.Lock()
+	if w, ok := a.resolver.(interface{ Wipe() }); ok {
+		w.Wipe()
+	}
+	a.resolver = nil
+	a.mu.Unlock()
 }
 
 func (a *Agent) idleLoop(ctx context.Context) {

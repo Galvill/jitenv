@@ -38,6 +38,21 @@ type localSource struct {
 // the decrypted bag store into the source.
 func (l *localSource) SetBags(b map[string]map[string]string) { l.bags = b }
 
+// Wipe overwrites every cached bag value with the empty string and
+// drops the map references so the GC can reclaim the secret-bearing
+// memory (security #125). Go strings are immutable so this isn't
+// true zeroing, but it breaks the live reference chain — the
+// underlying byte arrays become unreachable from this source and
+// from the bag map. Called by the agent's resolver during Shutdown.
+func (l *localSource) Wipe() {
+	for _, bag := range l.bags {
+		for k := range bag {
+			bag[k] = ""
+		}
+	}
+	l.bags = nil
+}
+
 func (l *localSource) Name() string { return TypeName }
 
 func (l *localSource) Schema() []source.ParamField {
