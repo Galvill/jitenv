@@ -56,9 +56,21 @@ func ResolvePaths() Paths {
 // dir (0700) so callers that need to bind a socket or open a log
 // file can rely on it existing. Use this from agent startup, chpwd,
 // etc.
+//
+// After MkdirAll, verify the resulting directory is owned by the
+// current user with mode 0700 (security #117). MkdirAll silently
+// accepts a pre-existing directory regardless of ownership/mode, so
+// without this check an attacker on a shared host (think the
+// /tmp/jitenv-<uid> fallback) could pre-create the dir and later
+// unlink the agent's socket or replace the log. The check is
+// platform-split; the Windows variant is a no-op because Windows
+// ACLs differ and the LOCALAPPDATA path is already per-user.
 func DefaultPaths() (Paths, error) {
 	p := ResolvePaths()
 	if err := os.MkdirAll(p.Dir, 0700); err != nil {
+		return Paths{}, err
+	}
+	if err := verifyRuntimeDir(p.Dir); err != nil {
 		return Paths{}, err
 	}
 	return p, nil

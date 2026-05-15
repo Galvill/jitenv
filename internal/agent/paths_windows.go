@@ -36,6 +36,14 @@ func socketEndpoint(_ string) string {
 	return pipeName()
 }
 
+// verifyRuntimeDir is a no-op on Windows (security #117). The Unix
+// variant guards a /tmp fallback where pre-existing attacker-owned
+// dirs are realistic; the Windows runtime dir lives under
+// %LOCALAPPDATA% which is per-user by default, and the named pipe is
+// ACL-restricted to the user's SID, so the same class of attack
+// doesn't apply.
+func verifyRuntimeDir(string) error { return nil }
+
 // pipeName returns the per-user named-pipe path the agent listens on.
 // Windows named pipes live in their own namespace (\\.\pipe\...) — not
 // the filesystem — and pipe names are required to be unique
