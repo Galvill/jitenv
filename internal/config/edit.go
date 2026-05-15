@@ -14,6 +14,27 @@ import (
 
 const verifySentinel = "jitenv-ok"
 
+// metaVerifyAAD is the associated-data string that binds the [_meta]
+// verify envelope to its slot. Mirrored on encrypt (InitNew) and
+// decrypt (DeriveKeyFromMeta) — changing either side independently
+// would break the passphrase check (security #110).
+const metaVerifyAAD = "meta.verify"
+
+// SourceParamAAD builds the AAD context for a value stored under
+// [sources.<name>.params.<key>]. Both the TUI save pipeline and the
+// agent's resolver must agree on this exact string; the dotted form
+// matches what DecryptStringsInPlace produces when fed ctx=
+// "src."+name.
+func SourceParamAAD(sourceName, paramKey string) string {
+	return crypto.AAD("src", sourceName, paramKey)
+}
+
+// SecretAAD builds the AAD context for a value stored under
+// [secrets.<bag>.<key>].
+func SecretAAD(bag, key string) string {
+	return crypto.AAD("secret", bag, key)
+}
+
 // InitNew creates a brand-new encrypted config at path. The file is written
 // atomically with 0600.
 func InitNew(path string, passphrase []byte) error {
@@ -28,7 +49,7 @@ func InitNew(path string, passphrase []byte) error {
 	key := crypto.DeriveKey(passphrase, salt, params)
 	defer zero(key)
 
-	verify, err := crypto.EncryptField(key, verifySentinel)
+	verify, err := crypto.EncryptField(key, verifySentinel, metaVerifyAAD)
 	if err != nil {
 		return err
 	}
@@ -85,7 +106,7 @@ func DeriveKeyFromMeta(c *Config, passphrase []byte) ([]byte, error) {
 		return nil, fmt.Errorf("config _meta.salt is %d bytes; minimum %d", len(salt), crypto.MinSaltLen)
 	}
 	key := crypto.DeriveKey(passphrase, salt, params)
-	if pt, err := crypto.DecryptField(key, c.Meta.Verify); err != nil || pt != verifySentinel {
+	if pt, err := crypto.DecryptField(key, c.Meta.Verify, metaVerifyAAD); err != nil || pt != verifySentinel {
 		zero(key)
 		return nil, errors.New("incorrect passphrase")
 	}

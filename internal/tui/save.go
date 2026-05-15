@@ -112,7 +112,7 @@ func encryptForSave(c *config.Config, key []byte) error {
 			if _, isSensitive := sensitive[k]; !isSensitive {
 				continue
 			}
-			env, err := crypto.EncryptField(key, s)
+			env, err := crypto.EncryptField(key, s, config.SourceParamAAD(name, k))
 			if err != nil {
 				return fmt.Errorf("source %q.%s: %w", name, k, err)
 			}
@@ -124,7 +124,7 @@ func encryptForSave(c *config.Config, key []byte) error {
 			if v == "" || crypto.IsEnvelope(v) {
 				continue
 			}
-			env, err := crypto.EncryptField(key, v)
+			env, err := crypto.EncryptField(key, v, config.SecretAAD(bag, k))
 			if err != nil {
 				return fmt.Errorf("secret %q.%s: %w", bag, k, err)
 			}
