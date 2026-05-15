@@ -15,6 +15,20 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// scrubEnvSlice replaces each entry in env with an empty string,
+// dropping the slice's reference to the original (possibly secret-
+// bearing) string. Go strings are immutable; this can't overwrite
+// the heap bytes directly, but it removes the slice from the GC
+// reachability graph for those strings so a future collection can
+// reclaim them. Used on the Windows replaceProcess path after
+// cmd.Start has copied the env into the child's Win32 block
+// (security #121).
+func scrubEnvSlice(env []string) {
+	for i := range env {
+		env[i] = ""
+	}
+}
+
 // scriptInterpreter returns the executable + leading args needed to run
 // realPath when it isn't a directly-launchable Win32 binary. CreateProcess
 // only accepts PE files (.exe, .com) and the legacy DOS-style .bat/.cmd
@@ -92,6 +106,22 @@ func replaceProcess(realPath string, args []string, env []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("run %s: %w", realPath, err)
 	}
+	// On Windows there is no execve, so the jitenv parent stays alive
+	// for the child's lifetime. Once cmd.Start has built the Win32
+	// environment block for the child, the env strings we held in
+	// cmd.Env (and in the caller's env slice) serve no further purpose
+	// here — but keeping references to them pins secret values in the
+	// parent's Go heap for as long as the child runs, where any
+	// process with PROCESS_VM_READ on us (same user) or a Windows
+	// Error Reporting crash dump can scrape them (security #121).
+	//
+	// Go strings are immutable, so this isn't a true zeroing — it just
+	// drops the references so the GC is free to reclaim and overwrite
+	// the underlying memory. Best-effort, but materially smaller than
+	// the previous "hold for hours" exposure on long-running children.
+	scrubEnvSlice(cmd.Env)
+	cmd.Env = nil
+	scrubEnvSlice(env)
 
 	// Forward Ctrl+C / interrupt from the parent to the child's process
 	// group as a CTRL_BREAK_EVENT (CTRL_C_EVENT cannot be sent to a
