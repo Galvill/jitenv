@@ -32,6 +32,7 @@ func newAgentInternalCmd() *cobra.Command {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			scrubInheritedSecretEnv()
 			key, err := readKeyFromFlag(keyFlag)
 			if err != nil {
 				return fmt.Errorf("read key: %w", err)
