@@ -99,6 +99,18 @@ func execReal(realPath string, argv []string, env []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("exec %s: %w", realPath, err)
 	}
+	// Drop references to env strings so the GC can reclaim the secret-
+	// bearing entries while the child runs (security #121). Mirror of
+	// the scrub in internal/run/run_windows.go — same rationale: no
+	// execve, parent stays alive, anything left in cmd.Env / env is
+	// readable by a PROCESS_VM_READ-capable peer or a WER crash dump.
+	for i := range cmd.Env {
+		cmd.Env[i] = ""
+	}
+	cmd.Env = nil
+	for i := range env {
+		env[i] = ""
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
