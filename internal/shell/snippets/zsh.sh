@@ -93,7 +93,11 @@ __jitenv_accept_line() {
                     # countdown when the agent is locked, so we just
                     # rewrite BUFFER and let it handle everything.
                     __jitenv_log "branch=case0 (mapped → jitenv run)"
-                    BUFFER="jitenv run \"$resolved\"$rest"
+                    # ${(q+)resolved} produces a zsh-safe quoted form,
+                    # so a filename containing `"`, `$`, backtick, or
+                    # other zsh-active characters (legal on Linux/macOS)
+                    # can't break BUFFER's quoting (security #123).
+                    BUFFER="jitenv run ${(q+)resolved}$rest"
                     ;;
                 *)
                     # rc=1 (not mapped) or rc=2 (config unreadable) →
