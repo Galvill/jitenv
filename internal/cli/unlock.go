@@ -39,6 +39,7 @@ func newUnlockCmd() *cobra.Command {
 				return err
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 
 			paths, err := agent.DefaultPaths()
 			if err != nil {

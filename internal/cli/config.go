@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -113,4 +114,23 @@ func zeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// lockKey pins the master-key buffer into RAM so it won't be paged
+// to swap / pagefile (security #127). On failure (RLIMIT_MEMLOCK on
+// Linux, working-set ceilings on Windows) a slog warning is emitted
+// and execution continues — running unlocked is degraded but still
+// works, and dying mid-startup over a kernel-mode tuning issue
+// would be worse UX than the security tightening it represents.
+//
+// Returns a cleanup closure that unlocks the buffer. Callers should
+// defer it next to defer zeroBytes(key) so the unlock + zero run
+// in tandem.
+func lockKey(key []byte) func() {
+	if err := crypto.LockBytes(key); err != nil {
+		slog.Warn("could not mlock master key; running with un-locked key material",
+			"err", err)
+		return func() {}
+	}
+	return func() { _ = crypto.UnlockBytes(key) }
 }
