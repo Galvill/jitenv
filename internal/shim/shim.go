@@ -19,6 +19,8 @@ package shim
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -64,6 +66,12 @@ const warnedMarker = "__JITENV_AGENT_WARNED"
 // stripping it before execReal isn't worth the complexity.
 const injectedMarker = "__JITENV_INJECTED"
 
+// sessionNonce mirrors the value the shell hook generates at load
+// time (security #120). The bypass below treats the marker as valid
+// only when it matches this nonce, so a stale or attacker-pre-set
+// __JITENV_INJECTED=1 can no longer silently disable injection.
+const sessionNonce = "__JITENV_SESSION_NONCE"
+
 // Main is the shim entrypoint. invokedAs is filepath.Base(os.Args[0]),
 // args is os.Args[1:] (everything after argv[0]).
 func Main(invokedAs string, args []string) {
@@ -94,8 +102,10 @@ func run(invokedAs string, args []string) error {
 	// If a previous shim entry in this execve chain already injected
 	// (or attempted to), short-circuit — skip fetch, skip notice, skip
 	// warn. The first hop wins; chained interpreters pass through.
-	// See injectedMarker doc and issue #77.
-	if os.Getenv(injectedMarker) == "1" {
+	// See injectedMarker doc and issue #77. Bypass requires the marker
+	// to match the per-session nonce (security #120) so a stale value
+	// can't silently disable injection.
+	if injectionAlreadyApplied() {
 		return execReal(realPath, argv, os.Environ())
 	}
 
@@ -129,9 +139,17 @@ func run(invokedAs string, args []string) error {
 			// Stamp the one-shot marker so chained interpreters
 			// (e.g. npm execve-ing into node via shebang) short-circuit
 			// instead of re-fetching and double-injecting (issue #77).
-			// Set unconditionally on the fetch-success branch: even an
-			// empty result means "agent answered, decision is final".
-			env = append(env, injectedMarker+"=1")
+			// Bind the marker to the session nonce so a pre-set
+			// __JITENV_INJECTED=1 from an attacker doesn't bypass the
+			// fetch on the first entry (security #120). If the shell
+			// hook didn't set a nonce (CLI / CI usage), mint one so
+			// downstream interpreters still recognise the chain.
+			nonce := os.Getenv(sessionNonce)
+			if nonce == "" {
+				nonce = freshNonce()
+				env = append(env, sessionNonce+"="+nonce)
+			}
+			env = append(env, injectedMarker+"="+nonce)
 		}
 	}
 
@@ -153,6 +171,45 @@ func run(invokedAs string, args []string) error {
 // the parent env (issue #52). When the marker is unset (no hook
 // loaded) we fall back to injecting, matching pre-fix behaviour for
 // hand-invoked wrappers.
+// injectionAlreadyApplied reports whether the current process is a
+// downstream link in an execve chain whose first hop already injected.
+// The marker must (a) be present and (b) match the per-session nonce
+// (security #120). A stale or attacker-supplied value fails the check
+// and the shim re-fetches as a fresh entry.
+func injectionAlreadyApplied() bool {
+	marker := os.Getenv(injectedMarker)
+	if marker == "" {
+		return false
+	}
+	nonce := os.Getenv(sessionNonce)
+	if nonce == "" {
+		return false
+	}
+	return constantTimeEq(marker, nonce)
+}
+
+func constantTimeEq(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := 0; i < len(a); i++ {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
+}
+
+// freshNonce mints a 128-bit random hex string. Used when entering
+// the shim without a shell-supplied __JITENV_SESSION_NONCE so the
+// markers in this execve chain are still chain-unique.
+func freshNonce() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("pid-%d-fallback", os.Getpid())
+	}
+	return hex.EncodeToString(b[:])
+}
+
 func shouldInject() bool {
 	raw := os.Getenv("__JITENV_SHELL_PID")
 	if raw == "" {

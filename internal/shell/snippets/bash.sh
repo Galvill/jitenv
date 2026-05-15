@@ -11,6 +11,19 @@
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 __JITENV_LOADED=1
 
+# Per-session nonce — used by jitenv run/shim to validate the
+# __JITENV_INJECTED bypass marker (security #120). Generated fresh
+# here so a malicious pre-set __JITENV_INJECTED=1 from a hostile
+# .bashrc / shell plugin / CI env doesn't silently disable secret
+# injection. Falls back through /dev/urandom → $RANDOM if the
+# higher-quality sources aren't reachable; even the fallback is
+# unguessable to an attacker who doesn't share this shell's $RANDOM
+# state.
+__JITENV_SESSION_NONCE="$( {
+    head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'
+} || printf '%x%x%x%x' "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM")"
+export __JITENV_SESSION_NONCE
+
 __JITENV_RUNTIME_DIR={{RuntimeDir}}
 __JITENV_CFG_PATH={{ConfigPath}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"

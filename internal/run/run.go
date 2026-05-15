@@ -6,7 +6,10 @@ package run
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -25,7 +28,16 @@ import (
 // absolute file paths from the bash/zsh hook, not on PATH lookups),
 // but the symmetry matters if an absolute-path mapping ever
 // execve-chains into another mapped command. See issue #77.
-const injectedMarker = "__JITENV_INJECTED"
+//
+// Bypass is gated by a per-session nonce (security #120): the shell
+// hook generates __JITENV_SESSION_NONCE at load time, and the marker
+// only short-circuits when its value matches that nonce. A stale or
+// attacker-pre-set marker value won't match and is treated as a
+// fresh entry — injection proceeds normally.
+const (
+	injectedMarker = "__JITENV_INJECTED"
+	sessionNonce   = "__JITENV_SESSION_NONCE"
+)
 
 // Run resolves file, asks the agent for any mapped env vars, then
 // replaces the current process with file+args+merged-env.
@@ -48,8 +60,10 @@ func Run(ctx context.Context, file string, args []string) error {
 
 	// If a previous shim/run entry in this execve chain already
 	// injected, pass through transparently — no agent dial, no notice,
-	// no warn. See injectedMarker doc and issue #77.
-	if os.Getenv(injectedMarker) == "1" {
+	// no warn. Bypass requires the marker to match the per-session
+	// nonce (security #120) so a stale / attacker-pre-set marker
+	// can't silently disable injection.
+	if injectionAlreadyApplied() {
 		return replaceProcess(abs, args, os.Environ())
 	}
 
@@ -69,12 +83,21 @@ func Run(ctx context.Context, file string, args []string) error {
 	}
 	injected = len(extra)
 	if fetched {
-		// Agent answered. Stamp the one-shot marker so a chained
-		// shim/run entry in this execve chain skips its own fetch
-		// (issue #77). Only set on the fetch-success branch — the
-		// agent-down warn path uses __JITENV_AGENT_WARNED instead,
-		// which the shim handles independently.
-		env = append(env, injectedMarker+"=1")
+		// Agent answered. Stamp the one-shot marker with the session
+		// nonce so a chained shim/run entry in this execve chain
+		// skips its own fetch (issue #77 + #120). Only set on the
+		// fetch-success branch — the agent-down warn path uses
+		// __JITENV_AGENT_WARNED instead, which the shim handles
+		// independently.
+		nonce := os.Getenv(sessionNonce)
+		if nonce == "" {
+			// Caller has no shell hook in play (CLI / CI). Mint a
+			// per-chain nonce so descendants can still recognise the
+			// "already injected" state without trusting a static value.
+			nonce = freshNonce()
+			env = append(env, sessionNonce+"="+nonce)
+		}
+		env = append(env, injectedMarker+"="+nonce)
 	}
 
 	if injected > 0 && runnotice.Enabled() {
@@ -83,6 +106,55 @@ func Run(ctx context.Context, file string, args []string) error {
 
 	return replaceProcess(abs, args, env)
 }
+
+// injectionAlreadyApplied reports whether this process is downstream
+// of a successful injection in the same execve chain. The marker
+// must (a) be present and (b) match the per-session nonce. A bare
+// "1" or any attacker-supplied value fails the check and causes
+// jitenv run to re-fetch as a fresh entry.
+func injectionAlreadyApplied() bool {
+	marker := os.Getenv(injectedMarker)
+	if marker == "" {
+		return false
+	}
+	nonce := os.Getenv(sessionNonce)
+	if nonce == "" {
+		return false
+	}
+	return subtleCompare(marker, nonce)
+}
+
+// subtleCompare is a constant-time string comparison. The nonce
+// brute-force surface is tiny in practice (no oracle) but using
+// subtle here keeps the discipline aligned with the rest of the
+// codebase.
+func subtleCompare(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := 0; i < len(a); i++ {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
+}
+
+// freshNonce returns a 128-bit random hex string for the session
+// nonce. Used by callers that entered jitenv without a shell hook
+// having pre-populated __JITENV_SESSION_NONCE.
+func freshNonce() string {
+	var b [16]byte
+	if _, err := cryptoRandRead(b[:]); err != nil {
+		// crypto/rand never fails in practice on supported OSes.
+		// On the off chance it does, fall back to a process-unique
+		// constant — still better than the static "1" sentinel.
+		return fmt.Sprintf("pid-%d-fallback", os.Getpid())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// cryptoRandRead is a seam for tests; defaults to crypto/rand.Read.
+var cryptoRandRead = rand.Read
 
 // fetchOrWarn tries to fetch env vars from the agent. On agent-down
 // it paints the warning + countdown; the returned map is nil (caller
