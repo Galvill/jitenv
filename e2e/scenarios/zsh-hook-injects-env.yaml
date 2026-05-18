@@ -73,7 +73,12 @@ steps:
         printf "BUFFER=%s\n" "$BUFFER"
       '
   - name: assert-zsh-rewrites
-    assert_stdout_contains: 'BUFFER=jitenv run "/home/jitenv/scripts/showz.sh"'
+    # ${(q+)resolved} (security #123) returns the path unquoted when
+    # it contains no shell-special characters, and zsh-quoted when it
+    # does. A bare /home/jitenv/... path qualifies for the unquoted
+    # form, so the rewritten BUFFER lacks the double-quotes the
+    # original eval-style snippet always emitted.
+    assert_stdout_contains: 'BUFFER=jitenv run /home/jitenv/scripts/showz.sh'
 
   # End-to-end via the rewritten BUFFER: run it through eval inside
   # zsh and inspect the script's stdout for the injected bag values.

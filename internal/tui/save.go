@@ -7,8 +7,6 @@ import (
 
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
-	"github.com/gv/jitenv/internal/sources"
-	"github.com/gv/jitenv/pkg/source"
 )
 
 // saveCmd takes a snapshot of the in-memory config, re-encrypts every
@@ -88,17 +86,18 @@ func cloneForSave(c *config.Config) *config.Config {
 // encryptForSave walks the config and re-encrypts every value that
 // must not be on disk in plaintext. It assumes c was decrypted on
 // load: every sensitive param is currently a plaintext string.
+//
+// Encrypt-by-default: every non-envelope string param is encrypted,
+// regardless of whether the source's schema flagged it Sensitive
+// (security #112). A schema-only gate silently leaked params for
+// sources without a registered schema and for fields a source author
+// forgot to flag. The schema's `Sensitive` bit is still meaningful
+// — the TUI uses it to mask the field in the editor — but it no
+// longer controls disk encryption.
 func encryptForSave(c *config.Config, key []byte) error {
 	for name, sc := range c.Sources {
 		if sc.Params == nil {
 			continue
-		}
-		schema := schemaFor(sc.Type)
-		sensitive := map[string]struct{}{}
-		for _, f := range schema {
-			if f.Sensitive {
-				sensitive[f.Key] = struct{}{}
-			}
 		}
 		for k, v := range sc.Params {
 			s, ok := v.(string)
@@ -109,10 +108,7 @@ func encryptForSave(c *config.Config, key []byte) error {
 				// Already encrypted (e.g. unchanged on this save).
 				continue
 			}
-			if _, isSensitive := sensitive[k]; !isSensitive {
-				continue
-			}
-			env, err := crypto.EncryptField(key, s)
+			env, err := crypto.EncryptField(key, s, config.SourceParamAAD(name, k))
 			if err != nil {
 				return fmt.Errorf("source %q.%s: %w", name, k, err)
 			}
@@ -124,7 +120,7 @@ func encryptForSave(c *config.Config, key []byte) error {
 			if v == "" || crypto.IsEnvelope(v) {
 				continue
 			}
-			env, err := crypto.EncryptField(key, v)
+			env, err := crypto.EncryptField(key, v, config.SecretAAD(bag, k))
 			if err != nil {
 				return fmt.Errorf("secret %q.%s: %w", bag, k, err)
 			}
@@ -132,9 +128,4 @@ func encryptForSave(c *config.Config, key []byte) error {
 		}
 	}
 	return nil
-}
-
-// schemaFor returns the registered parameter schema for a source type.
-func schemaFor(typeName string) []source.ParamField {
-	return sources.Schema(typeName)
 }

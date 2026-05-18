@@ -133,6 +133,43 @@ func withFakeHome(t *testing.T) string {
 	return dir
 }
 
+// TestInstallShell_BashHomeWithSpaces is the regression for security
+// #124: loginSourcingBlock used unquoted %s interpolation, so a $HOME
+// containing spaces (legal on macOS and WSL) produced broken shell
+// syntax in the generated .bash_profile — the user's login shell
+// would emit a parse error on every startup.
+func TestInstallShell_BashHomeWithSpaces(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "John Doe")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	rep, err := InstallShell("bash")
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	body, err := os.ReadFile(rep.LoginPath)
+	if err != nil {
+		t.Fatalf("read login file: %v", err)
+	}
+	got := string(body)
+
+	// The path must be shell-quoted (single quotes) so spaces don't
+	// split the [ -f … ] test into multiple arguments.
+	wantQuoted := "'" + filepath.Join(home, ".bashrc") + "'"
+	if !strings.Contains(got, wantQuoted) {
+		t.Errorf("login block should contain shell-quoted bashrc path %q; got:\n%s", wantQuoted, got)
+	}
+	// The raw (unquoted) form would split on the space — a regression
+	// would leave a `[ -f /…/John` token in the file.
+	bad := "-f " + filepath.Join(home, ".bashrc") + " "
+	if strings.Contains(got, bad) {
+		t.Errorf("login block contains unquoted path with embedded space: %q\n%s", bad, got)
+	}
+}
+
 func TestInstallShell_BashCreatesLoginChain(t *testing.T) {
 	home := withFakeHome(t)
 	rep, err := InstallShell("bash")

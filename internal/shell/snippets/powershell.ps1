@@ -20,6 +20,16 @@
 if ($global:__JITENV_LOADED) { return }
 $global:__JITENV_LOADED = $true
 
+# Per-session nonce — used by jitenv run/shim to validate the
+# __JITENV_INJECTED bypass marker (security #120). Generated from
+# the platform CSPRNG so a malicious pre-set __JITENV_INJECTED=1
+# from a hostile profile / CI env doesn't silently disable secret
+# injection.
+$__jitenv_nonceBytes = New-Object byte[] 16
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($__jitenv_nonceBytes)
+$env:__JITENV_SESSION_NONCE = -join ($__jitenv_nonceBytes | ForEach-Object { $_.ToString('x2') })
+Remove-Variable -Name '__jitenv_nonceBytes' -Scope Local -ErrorAction SilentlyContinue
+
 $global:__JITENV_RUNTIME_DIR = {{RuntimeDir}}
 $global:__JITENV_CFG_PATH    = {{ConfigPath}}
 # Recorded so the shim can tell "this shell typed the command" from

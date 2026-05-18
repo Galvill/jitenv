@@ -39,6 +39,7 @@ func newUnlockCmd() *cobra.Command {
 				return err
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 
 			paths, err := agent.DefaultPaths()
 			if err != nil {
@@ -47,7 +48,29 @@ func newUnlockCmd() *cobra.Command {
 			idle := parseIdle(cfg.Agent.IdleTimeout)
 
 			if unlockForeground {
-				ag := agent.NewAgent(paths, idle, nil)
+				// Build a real resolver so the foreground agent
+				// actually injects secrets — previously it was started
+				// with a nil resolver and silently returned empty env
+				// for every mapped command (security #131).
+				loadAndBuild := func() (agent.Resolver, error) {
+					c, err := config.Load(cfgPath)
+					if err != nil {
+						return nil, err
+					}
+					if err := config.DecryptInPlace(c, key); err != nil {
+						return nil, err
+					}
+					if err := c.Validate(); err != nil {
+						return nil, err
+					}
+					return agent.BuildResolver(c)
+				}
+				res, err := loadAndBuild()
+				if err != nil {
+					return err
+				}
+				ag := agent.NewAgent(paths, idle, res)
+				ag.SetReload(loadAndBuild)
 				if err := ag.Listen(); err != nil {
 					return err
 				}

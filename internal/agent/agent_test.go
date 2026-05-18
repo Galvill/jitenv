@@ -4,14 +4,30 @@ package agent
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
+// newTestAgentDir returns a short temp dir suitable for an AF_UNIX
+// socket. macOS caps sun_path at 104 bytes, and t.TempDir() on macOS
+// sits under /var/folders/.../T/<TestName>/NNN/ — already ~90 chars
+// before we even append "agent.sock", so long test names blow the
+// limit. Use /tmp/jr-* (kernel temp, short prefix) instead.
+func newTestAgentDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "jr-")
+	if err != nil {
+		t.Fatalf("mkdir tmp runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func newTestAgent(t *testing.T, r Resolver) (*Agent, Paths) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := newTestAgentDir(t)
 	p := Paths{
 		Dir:     dir,
 		Socket:  filepath.Join(dir, "agent.sock"),

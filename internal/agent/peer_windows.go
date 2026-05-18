@@ -20,17 +20,30 @@ type fdConn interface {
 // checkPeerUid enforces that the connecting named-pipe client runs as
 // the same user as the agent.
 //
-// The pipe ACL set in socket_windows.go already restricts the pipe to
-// the current user SID, but that is a perimeter check. We still grab
-// the client's process ID via GetNamedPipeClientProcessId, open its
-// token, and compare the token's user SID against the agent's own. A
-// matching SID is the load-bearing peer-auth guarantee — anything else
-// (the ACL, the pipe path containing the SID) is defence in depth.
+// History: an earlier revision tried to use ImpersonateNamedPipeClient
+// + OpenThreadToken (security #132) to bind the credential check to
+// the pipe handle itself rather than to a resolved PID. Production
+// pipe clients open via go-winio.DialPipe which does not set
+// SECURITY_SQOS_PRESENT, so the impersonation token came back at
+// "Anonymous" level — OpenThreadToken on an anonymous token fails
+// with "Cannot open an anonymous level security token", breaking
+// every legitimate same-user connection. Until go-winio exposes a
+// CreateFile path that lets us pass SECURITY_IMPERSONATION, the
+// PID-based check below is the working option. The pipe ACL on the
+// listener side (D:(A;;GA;;;<sid>) — see socket_windows.go) is the
+// primary perimeter; the SID comparison here is defence in depth.
+//
+// PID-reuse TOCTOU: between GetNamedPipeClientProcessId and
+// OpenProcess the client's PID could in principle be reused by an
+// unrelated process. In practice the SDDL ACL already restricts
+// connects to our SID, so any same-SID PID-reuse would have been
+// legitimately authorised anyway; an attacker-SID replacement
+// triggers a false reject, not a false accept.
 //
 // Note: this comparison is same-user, not same-session. A second
-// process running under the same user account (e.g. another shell
-// session) is treated as authorised, exactly as on Unix where multiple
-// shells of the same uid all pass SO_PEERCRED.
+// process running under the same user account is treated as
+// authorised, exactly as on Unix where multiple shells of the same
+// uid all pass SO_PEERCRED.
 func checkPeerUid(c net.Conn) error {
 	fc, ok := c.(fdConn)
 	if !ok {

@@ -201,25 +201,28 @@ func TestShimSuppressesInjectionWithMarker(t *testing.T) {
 		return buf.String(), err
 	}
 
-	// Marker set on call: shim must short-circuit. No warning even
-	// though the agent is down; the real binary still runs.
-	out, err := run(append(baseEnv, "__JITENV_INJECTED=1"))
+	// Marker set on call AND matches the session nonce (security #120
+	// requires both — the shell hook sets nonce at load time): shim
+	// must short-circuit. No warning even though the agent is down;
+	// the real binary still runs.
+	const nonce = "feedfacecafebeef"
+	out, err := run(append(baseEnv,
+		"__JITENV_INJECTED="+nonce,
+		"__JITENV_SESSION_NONCE="+nonce,
+	))
 	if err != nil {
 		t.Fatalf("run: %v\noutput=%s", err, out)
 	}
 	if strings.Contains(out, "agent is not loaded") {
-		t.Errorf("warning fired despite __JITENV_INJECTED=1;\noutput=%s", out)
+		t.Errorf("warning fired despite matching marker; output=%s", out)
 	}
 	if strings.Contains(out, "jitenv: injected") {
-		t.Errorf("notice fired despite __JITENV_INJECTED=1;\noutput=%s", out)
+		t.Errorf("notice fired despite matching marker; output=%s", out)
 	}
 	if !strings.Contains(out, "RAN") {
 		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
 	}
-	// The marker propagates transparently through execReal — the real
-	// binary sees it in its env. Confirms the short-circuit path
-	// (return execReal(...os.Environ()...)) preserved it.
-	if !strings.Contains(out, "__JITENV_INJECTED=1") {
-		t.Errorf("expected __JITENV_INJECTED=1 to propagate to child env;\noutput=%s", out)
+	if !strings.Contains(out, "__JITENV_INJECTED="+nonce) {
+		t.Errorf("expected __JITENV_INJECTED=%s to propagate to child env;\noutput=%s", nonce, out)
 	}
 }

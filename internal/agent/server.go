@@ -12,10 +12,27 @@ import (
 	"time"
 )
 
+// maxConcurrentAgentConns caps how many in-flight connection handlers
+// the agent allows. A misbehaving (or hostile) same-user process could
+// otherwise open arbitrarily many half-finished connections, each
+// holding a goroutine and an fd. Excess connections are closed at
+// accept time. Tunable from tests; the default is meant to sit well
+// above any realistic workload.
+var maxConcurrentAgentConns = 64
+
+// shutdownDrainTimeout caps how long Shutdown waits for in-flight
+// request handlers to complete before forcing exit. Tunable from tests.
+var shutdownDrainTimeout = 2 * time.Second
+
 // Agent is the per-user secret-fetching daemon.
 type Agent struct {
 	paths    Paths
 	listener net.Listener
+	// pidLock holds the exclusive flock/share-mode lock on the
+	// pidfile for the agent's lifetime. Closing it releases the lock
+	// and lets a future unlock take over without staleness checks
+	// (security #130).
+	pidLock *os.File
 
 	startedAt time.Time
 	hits      atomic.Int64
@@ -25,6 +42,12 @@ type Agent struct {
 
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// handlers tracks in-flight connection goroutines so Shutdown can
+	// drain them with a bounded timeout (security #134). Without this,
+	// SIGTERM mid-fetch dropped a connection while the response was
+	// half-written, surfacing as a confusing IPC error to the client.
+	handlers sync.WaitGroup
 
 	mu       sync.RWMutex
 	resolver Resolver
@@ -86,15 +109,30 @@ func (a *Agent) currentResolver() Resolver {
 // platform-split implementations.
 func (a *Agent) Listen() error {
 	_ = GcOrphanShells(a.paths.ShellsDir)
-	if existing, _ := ReadPidFile(a.paths.PidFile); existing > 0 && PidAlive(existing) {
-		return fmt.Errorf("agent already running (pid %d)", existing)
+	// OS-level advisory lock on a sibling `.lock` file (security #130).
+	// We use a separate file rather than locking the pidfile itself so
+	// the pidfile stays plain-readable/writable; on Windows, the
+	// no-share CreateFile we use for the lock would otherwise block
+	// WritePidFile's open of the same path with a sharing violation.
+	// Both Unix flock and Windows share-mode locks auto-release on
+	// process exit, so a crashed agent never leaves a stale lock.
+	lock, err := acquirePidLock(a.paths.PidFile + ".lock")
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, _ := ReadPidFile(a.paths.PidFile)
+			return fmt.Errorf("agent already running (pid %d)", existing)
+		}
+		return err
 	}
+	a.pidLock = lock
 	// Best-effort cleanup of a stale socket file. No-op on Windows where
 	// Socket is a pipe name, not a filesystem path.
 	_ = os.Remove(a.paths.Socket)
 
 	ln, err := listenSocket(a.paths.Socket)
 	if err != nil {
+		a.pidLock.Close()
+		a.pidLock = nil
 		return err
 	}
 	a.listener = ln
@@ -119,6 +157,10 @@ func (a *Agent) Serve(ctx context.Context) error {
 		a.listener.Close()
 	}()
 
+	// Semaphore bounds concurrent connection handlers. Snapshotted at
+	// Serve-time so tests can lower the cap before calling Serve.
+	sem := make(chan struct{}, maxConcurrentAgentConns)
+
 	for {
 		conn, err := a.listener.Accept()
 		if err != nil {
@@ -127,11 +169,38 @@ func (a *Agent) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		go a.handle(ctx, conn)
+		select {
+		case sem <- struct{}{}:
+			a.handlers.Add(1)
+			go func() {
+				defer func() {
+					<-sem
+					a.handlers.Done()
+				}()
+				a.handle(ctx, conn)
+			}()
+		default:
+			// Cap reached. Drop the conn rather than queue it — a
+			// queue just delays the same DoS, and a legitimate
+			// client will retry within milliseconds.
+			_ = conn.Close()
+		}
 	}
 }
 
 // Shutdown stops accepting and removes socket + pidfile.
+//
+// Drains any in-flight request handlers for up to
+// shutdownDrainTimeout so a SIGTERM / OpLock mid-fetch doesn't cut
+// a half-written response off at the wire (security #134).
+// Handlers that don't finish in time are abandoned — the OS will
+// tear down the still-open conns when the process exits.
+//
+// Also asks the resolver to wipe any cached plaintext secret
+// material so a memory dump immediately after shutdown contains
+// fewer recoverable secrets (security #125). Go strings are
+// immutable, so this isn't true zeroing — it drops live references
+// so a future GC can reclaim the memory.
 func (a *Agent) Shutdown() {
 	if a.cancel != nil {
 		a.cancel()
@@ -139,8 +208,27 @@ func (a *Agent) Shutdown() {
 	if a.done != nil {
 		<-a.done
 	}
+	drained := make(chan struct{})
+	go func() {
+		a.handlers.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(shutdownDrainTimeout):
+	}
 	_ = os.Remove(a.paths.Socket)
 	_ = RemovePidFile(a.paths.PidFile)
+	if a.pidLock != nil {
+		_ = a.pidLock.Close()
+		a.pidLock = nil
+	}
+	a.mu.Lock()
+	if w, ok := a.resolver.(interface{ Wipe() }); ok {
+		w.Wipe()
+	}
+	a.resolver = nil
+	a.mu.Unlock()
 }
 
 func (a *Agent) idleLoop(ctx context.Context) {
@@ -172,12 +260,17 @@ func (a *Agent) idleLoop(ctx context.Context) {
 
 func (a *Agent) handle(ctx context.Context, c net.Conn) {
 	defer c.Close()
-	if err := checkPeerUid(c); err != nil {
-		_ = WriteMessage(c, Response{OK: false, Error: "unauthorized"})
-		return
-	}
+	// Set the per-conn deadline FIRST so even rejected (unauthorized)
+	// clients can't hang the handler with a slow-read attack against
+	// our WriteMessage. Previously the deadline was only applied after
+	// the peer check, leaving the unauthorized-reply write unbounded
+	// (security #114).
 	if err := c.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = WriteMessage(c, Response{OK: false, Error: "set deadline: " + err.Error()})
+		return
+	}
+	if err := checkPeerUid(c); err != nil {
+		_ = WriteMessage(c, Response{OK: false, Error: "unauthorized"})
 		return
 	}
 

@@ -112,6 +112,30 @@ func Save(path string, c *Config) error {
 	return enc.Encode(c)
 }
 
+// isValidCommandName reports whether s is safe to interpolate into a
+// generated shell wrapper as a bare command-name token. Windows ships
+// a .ps1 wrapper per command (chpwd reconcile); any character active
+// in PowerShell, bash, or zsh would let a config-controlled command
+// name break out into executable syntax. Restrict to a portable set
+// that covers real-world binary basenames (npm, node, g++, foo.exe,
+// my_tool-v2) and rejects everything else.
+func isValidCommandName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == '+':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Validate performs structural checks not covered by TOML parsing.
 func (c *Config) Validate() error {
 	if c.Version != Version {
@@ -149,6 +173,9 @@ func (c *Config) Validate() error {
 			for j, cmd := range m.Commands {
 				if cmd == "" {
 					return fmt.Errorf("mapping[%d].commands[%d]: empty command name", i, j)
+				}
+				if !isValidCommandName(cmd) {
+					return fmt.Errorf("mapping[%d].commands[%d]: command name %q contains characters outside [A-Za-z0-9._+-]; reject so the PowerShell wrapper can't be tricked into executing config-controlled syntax", i, j, cmd)
 				}
 			}
 		}

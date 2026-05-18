@@ -1,11 +1,26 @@
 package crypto
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 
 	"golang.org/x/term"
 )
+
+// zeroPassphrase overwrites the bytes of a passphrase slice in place.
+// Used everywhere PromptPassphrase abandons a buffer (mismatched
+// confirm, empty-passphrase reject, read error after first input) so
+// the cleartext lifespan in the heap is bounded. Go strings are
+// immutable and unzeroable; the comparison path therefore uses
+// subtle.ConstantTimeCompare on the raw byte slices rather than
+// `string(pw) != string(pw2)`, which would spawn two unzeroable
+// string copies (security #126).
+func zeroPassphrase(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
 
 // PromptPassphrase reads a passphrase from the controlling terminal
 // without echo. The terminal is opened directly (rather than via
@@ -38,9 +53,12 @@ func PromptPassphrase(prompt string, confirm bool) ([]byte, error) {
 	if confirm {
 		pw2, err := read("Confirm: ")
 		if err != nil {
+			zeroPassphrase(pw)
 			return nil, err
 		}
-		if string(pw) != string(pw2) {
+		defer zeroPassphrase(pw2)
+		if subtle.ConstantTimeCompare(pw, pw2) != 1 {
+			zeroPassphrase(pw)
 			return nil, errors.New("passphrases do not match")
 		}
 	}

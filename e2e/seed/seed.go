@@ -196,11 +196,11 @@ func run(o runOpts) error {
 // expands the bag. fooVal/barVal let the caller produce distinguishable
 // fixtures (used by local-alt to differentiate before/after a reload).
 func applyLocal(cfg *config.Config, key []byte, scriptPath, fooVal, barVal string) error {
-	foo, err := crypto.EncryptField(key, fooVal)
+	foo, err := crypto.EncryptField(key, fooVal, config.SecretAAD("demo", "FOO"))
 	if err != nil {
 		return err
 	}
-	bar, err := crypto.EncryptField(key, barVal)
+	bar, err := crypto.EncryptField(key, barVal, config.SecretAAD("demo", "BAR"))
 	if err != nil {
 		return err
 	}
@@ -226,15 +226,15 @@ func applyLocal(cfg *config.Config, key []byte, scriptPath, fooVal, barVal strin
 // (instead of an exact Path) and a bag with three keys that all expand
 // via a single empty-Name VarRef.
 func applyLocalGlob(cfg *config.Config, key []byte, globPath string) error {
-	foo, err := crypto.EncryptField(key, "value-from-local-foo")
+	foo, err := crypto.EncryptField(key, "value-from-local-foo", config.SecretAAD("demo", "FOO"))
 	if err != nil {
 		return err
 	}
-	bar, err := crypto.EncryptField(key, "value-from-local-bar")
+	bar, err := crypto.EncryptField(key, "value-from-local-bar", config.SecretAAD("demo", "BAR"))
 	if err != nil {
 		return err
 	}
-	baz, err := crypto.EncryptField(key, "value-from-local-baz")
+	baz, err := crypto.EncryptField(key, "value-from-local-baz", config.SecretAAD("demo", "BAZ"))
 	if err != nil {
 		return err
 	}
@@ -260,11 +260,11 @@ func applyLocalGlob(cfg *config.Config, key []byte, globPath string) error {
 // matching cwdGlob (or any descendant). Used by the PowerShell hook
 // scenarios to drive the chpwd → wrapper → shim → agent flow.
 func applyLocalCwdGlob(cfg *config.Config, key []byte, cwdGlob string, commands []string) error {
-	foo, err := crypto.EncryptField(key, "value-from-local-foo")
+	foo, err := crypto.EncryptField(key, "value-from-local-foo", config.SecretAAD("demo", "FOO"))
 	if err != nil {
 		return err
 	}
-	bar, err := crypto.EncryptField(key, "value-from-local-bar")
+	bar, err := crypto.EncryptField(key, "value-from-local-bar", config.SecretAAD("demo", "BAR"))
 	if err != nil {
 		return err
 	}
@@ -303,11 +303,11 @@ func splitCommas(s string) []string {
 // endpoint. Static creds are used because LocalStack accepts any string.
 // We only fetch a single JSON key (FOO) to also exercise that path.
 func applyLocalstack(cfg *config.Config, key []byte, scriptPath, smARN, smEndpoint string) error {
-	akid, err := crypto.EncryptField(key, "test")
+	akid, err := crypto.EncryptField(key, "test", config.SourceParamAAD("awssm", "access_key_id"))
 	if err != nil {
 		return err
 	}
-	sak, err := crypto.EncryptField(key, "test")
+	sak, err := crypto.EncryptField(key, "test", config.SourceParamAAD("awssm", "secret_access_key"))
 	if err != nil {
 		return err
 	}
@@ -343,11 +343,11 @@ func applyLocalstack(cfg *config.Config, key []byte, scriptPath, smARN, smEndpoi
 // child's env. The v1 mount is created by the scenario via the Vault
 // HTTP API; the seed itself only writes config.toml.
 func applyVault(cfg *config.Config, key []byte, o runOpts) error {
-	tokV2, err := crypto.EncryptField(key, o.vaultToken)
+	tokV2, err := crypto.EncryptField(key, o.vaultToken, config.SourceParamAAD("vault-kv2", "token"))
 	if err != nil {
 		return err
 	}
-	tokV1, err := crypto.EncryptField(key, o.vaultToken)
+	tokV1, err := crypto.EncryptField(key, o.vaultToken, config.SourceParamAAD("vault-kv1", "token"))
 	if err != nil {
 		return err
 	}

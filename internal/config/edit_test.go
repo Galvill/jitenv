@@ -3,8 +3,65 @@ package config
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+// TestDeriveKeyFromMeta_RejectsWeakArgonParams is the regression for
+// security #111: the KDF parameters in [_meta] are stored unauthenticated
+// on disk. An attacker who can write to config.toml could otherwise drop
+// argon_time to 1 and argon_memory_kib to a few KiB so the next derive
+// (and any offline attempt against a leaked memory/swap dump) costs
+// almost nothing. Reject configs whose params are below documented
+// floors at derive time.
+func TestDeriveKeyFromMeta_RejectsWeakArgonParams(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2")
+	if err := InitNew(path, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// Sanity: default-init params must derive cleanly.
+	if _, err := DeriveKeyFromMeta(c, pw); err != nil {
+		t.Fatalf("default params should derive: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		mut  func(*Meta)
+		want string
+	}{
+		{"time too low", func(m *Meta) { m.ArgonTime = 1 }, "argon_time"},
+		{"memory too low", func(m *Meta) { m.ArgonMemoryKiB = 8 }, "argon_memory"},
+		{"threads zero would be replaced by default", nil, ""}, // sanity entry; threads=0 is preserved as default via nzU8
+	}
+	for _, tc := range cases {
+		if tc.mut == nil {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			// Reload fresh each iteration so previous mutations don't
+			// taint the next subtest.
+			c2, err := Load(path)
+			if err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			tc.mut(&c2.Meta)
+			_, err = DeriveKeyFromMeta(c2, pw)
+			if err == nil {
+				t.Fatalf("expected error for weak %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q missing expected mention of %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
 
 func TestInitAndDeriveKey(t *testing.T) {
 	dir := t.TempDir()

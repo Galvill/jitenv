@@ -11,6 +11,19 @@
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 __JITENV_LOADED=1
 
+# Per-session nonce — used by jitenv run/shim to validate the
+# __JITENV_INJECTED bypass marker (security #120). Generated fresh
+# here so a malicious pre-set __JITENV_INJECTED=1 from a hostile
+# .bashrc / shell plugin / CI env doesn't silently disable secret
+# injection. Falls back through /dev/urandom → $RANDOM if the
+# higher-quality sources aren't reachable; even the fallback is
+# unguessable to an attacker who doesn't share this shell's $RANDOM
+# state.
+__JITENV_SESSION_NONCE="$( {
+    head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'
+} || printf '%x%x%x%x' "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM")"
+export __JITENV_SESSION_NONCE
+
 __JITENV_RUNTIME_DIR={{RuntimeDir}}
 __JITENV_CFG_PATH={{ConfigPath}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
@@ -18,7 +31,12 @@ export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # "an unmapped descendant spawned the wrapped binary"; only the former
 # should pull in mapped env vars (issue #52).
 export __JITENV_SHELL_PID=$$
-mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+# Restrict to 0700 across the full hierarchy. Bash's `mkdir -p -m`
+# only sets the mode on the leaf; intermediates inherit the umask
+# (typically 022 → 0755), which would then trip the runtime-dir
+# ownership check (security #117). A subshell with umask 077 makes
+# every intermediate land at 0700.
+(umask 077 && mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null)
 case ":$PATH:" in
     *":$__JITENV_WRAP_DIR:"*) : ;;
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
@@ -122,7 +140,13 @@ __jitenv_debug_trap() {
             __jitenv_log "branch=case0 (mapped → jitenv run)"
             local rest="${cmd#"$first_raw"}"
             __JITENV_REENTRY=1
-            eval "jitenv run \"$resolved\"$rest"
+            # printf %q produces a shell-safe quoted form of the path,
+            # so a filename containing `"`, `$`, backtick, or other
+            # bash-active characters (legal on Linux) can't break the
+            # eval string's quoting (security #123).
+            local quoted_resolved
+            printf -v quoted_resolved '%q' "$resolved"
+            eval "jitenv run $quoted_resolved$rest"
             unset __JITENV_REENTRY
             return 1
             ;;

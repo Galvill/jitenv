@@ -1,8 +1,10 @@
 package vault
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,6 +108,50 @@ func TestNew_UnknownKVVersion(t *testing.T) {
 	}
 }
 
+// TestNew_TLSSkipVerify_LogsWarning is the regression for security #113:
+// enabling tls_skip_verify must produce a loud, structured warning at
+// New() time so the operator can spot a misconfigured Vault source in
+// the agent log. Without this signal, a stray dev-mode setting can
+// survive a promotion to production and MITM all Vault fetches via
+// HTTPS_PROXY.
+func TestNew_TLSSkipVerify_LogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if _, err := New(map[string]any{
+		"address":         "https://vault.example.com:8200",
+		"auth_method":     "token",
+		"token":           "x",
+		"tls_skip_verify": true,
+	}); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"level":"WARN"`) {
+		t.Errorf("expected a WARN-level log line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "tls_skip_verify") && !strings.Contains(out, "TLS verification disabled") {
+		t.Errorf("warning should mention TLS verification being disabled; got:\n%s", out)
+	}
+
+	// Reset the buffer; a source without the flag must NOT log a
+	// warning, otherwise every legitimate Vault setup spams the log.
+	buf.Reset()
+	if _, err := New(map[string]any{
+		"address":     "https://vault.example.com:8200",
+		"auth_method": "token",
+		"token":       "x",
+	}); err != nil {
+		t.Fatalf("New (clean): %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected warning when tls_skip_verify is unset:\n%s", buf.String())
+	}
+}
+
 func TestNew_DefaultsApplied(t *testing.T) {
 	s, err := New(map[string]any{
 		"address":     "http://127.0.0.1:1",
@@ -187,6 +233,46 @@ func TestReadPath_V1(t *testing.T) {
 	v := &vaultSource{mount: "kv", kvVersion: "v1"}
 	if got := v.readPath("myapp/prod"); got != "kv/myapp/prod" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// TestFetch_RejectsPathTraversal is the regression for security #119:
+// a VarRef.Ref containing ".." segments would otherwise let a user
+// who controls the config escape the configured mount and reach any
+// Vault path their token's policy permits (e.g. ../../sys/policies).
+// Fetch must reject such refs before issuing the HTTP request.
+func TestFetch_RejectsPathTraversal(t *testing.T) {
+	s, err := New(map[string]any{
+		"address":     "http://127.0.0.1:1",
+		"auth_method": "token",
+		"token":       "x",
+		"mount":       "secret",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cases := []string{
+		"../../sys/policies/acl/default",
+		"foo/../../etc",
+		"foo/..",
+		"..",
+		"./.././bar",
+	}
+	for _, name := range cases {
+		// Cancelled context proves we reject BEFORE the network: an
+		// implementation that defers validation would either return
+		// context.Canceled (network attempted) or block. Our reject
+		// returns a synchronous "traversal"-message error.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := s.Fetch(ctx, source.SecretRef{ID: name})
+		if err == nil {
+			t.Errorf("Fetch(%q) must reject path-traversal ref", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "traversal") {
+			t.Errorf("Fetch(%q) error %q should mention 'traversal' (rejection at validation, not network failure)", name, err)
+		}
 	}
 }
 
@@ -372,6 +458,49 @@ func TestFetch_AppRoleAuth_V2(t *testing.T) {
 	}
 }
 
+// TestFetch_AppRoleAuth_CachesToken is the regression for security
+// #133: two consecutive Fetches against the same source should reuse
+// the previous AppRole login rather than calling /auth/approle/login
+// every time. Re-auth-per-Fetch exhausts secret_id use-counts and
+// triples the wire footprint of secret_id over the network.
+func TestFetch_AppRoleAuth_CachesToken(t *testing.T) {
+	var loginCalls atomic.Int32
+	srv := stubServer(t, map[string]http.HandlerFunc{
+		"PUT /v1/auth/approle/login": func(w http.ResponseWriter, r *http.Request) {
+			loginCalls.Add(1)
+			writeJSON(w, 200, map[string]any{
+				"auth": map[string]any{
+					"client_token":   "issued-token",
+					"lease_duration": 3600, // 1h — well above the 60s safety margin
+				},
+			})
+		},
+		"GET /v1/secret/data/myapp/prod": func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, 200, map[string]any{
+				"data": map[string]any{"data": map[string]any{"FOO": "bar"}},
+			})
+		},
+	})
+
+	s, err := New(map[string]any{
+		"address":     srv.URL,
+		"auth_method": "approle",
+		"role_id":     "rid",
+		"secret_id":   "sid",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.Fetch(context.Background(), source.SecretRef{ID: "myapp/prod"}); err != nil {
+			t.Fatalf("Fetch #%d: %v", i, err)
+		}
+	}
+	if got := loginCalls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 AppRole login across 3 fetches; got %d", got)
+	}
+}
+
 func TestFetch_MissingSecret_V2(t *testing.T) {
 	srv := stubServer(t, map[string]http.HandlerFunc{
 		"GET /v1/secret/data/missing": func(w http.ResponseWriter, r *http.Request) {
@@ -455,16 +584,16 @@ func TestEnvelopeRoundTripIntoNew(t *testing.T) {
 		t.Fatalf("NewSalt: %v", err)
 	}
 	key := crypto.DeriveKey([]byte("correct horse battery staple"), salt, crypto.DefaultArgonParams())
-	tokenEnv, err := crypto.EncryptField(key, "real-token")
+	tokenEnv, err := crypto.EncryptField(key, "real-token", crypto.AAD("src", "vaultsrc", "token"))
 	if err != nil {
 		t.Fatalf("EncryptField: %v", err)
 	}
-	secretEnv, err := crypto.EncryptField(key, "real-secret-id")
+	secretEnv, err := crypto.EncryptField(key, "real-secret-id", crypto.AAD("src", "vaultsrc", "secret_id"))
 	if err != nil {
 		t.Fatalf("EncryptField: %v", err)
 	}
 	if !crypto.IsEnvelope(tokenEnv) || !crypto.IsEnvelope(secretEnv) {
-		t.Fatalf("envelopes not formed as enc:v1:")
+		t.Fatalf("envelopes not formed")
 	}
 
 	// Token-auth envelope round-trip.
@@ -473,7 +602,7 @@ func TestEnvelopeRoundTripIntoNew(t *testing.T) {
 		"auth_method": "token",
 		"token":       tokenEnv,
 	}
-	if err := crypto.DecryptStringsInPlace(key, params); err != nil {
+	if err := crypto.DecryptStringsInPlace(key, params, crypto.AAD("src", "vaultsrc")); err != nil {
 		t.Fatalf("DecryptStringsInPlace: %v", err)
 	}
 	if params["token"] != "real-token" {
@@ -490,7 +619,7 @@ func TestEnvelopeRoundTripIntoNew(t *testing.T) {
 		"role_id":     "rid",
 		"secret_id":   secretEnv,
 	}
-	if err := crypto.DecryptStringsInPlace(key, params2); err != nil {
+	if err := crypto.DecryptStringsInPlace(key, params2, crypto.AAD("src", "vaultsrc")); err != nil {
 		t.Fatalf("DecryptStringsInPlace: %v", err)
 	}
 	if params2["secret_id"] != "real-secret-id" {

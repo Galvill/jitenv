@@ -31,6 +31,12 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	if err != nil {
 		return err
 	}
+	// Both ends are closed on every early-return path; the success path
+	// explicitly closes pr after cmd.Start so the child holds the only
+	// reference, and pw after writing the key so the child's read EOFs.
+	// The defers are safety nets for the OpenFile/Executable error
+	// returns below — without them, pr would leak (security #115).
+	defer pr.Close()
 	defer pw.Close()
 
 	exe, err := os.Executable()
@@ -62,10 +68,12 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
-		pr.Close()
 		return err
 	}
-	pr.Close() // child holds its own copy
+	// Close eagerly so the child holds the only ref to the read end —
+	// the defer above would still fire on return, but eager close keeps
+	// the parent's fd table tight while the agent runs.
+	pr.Close()
 
 	if _, err := pw.Write(key); err != nil {
 		return fmt.Errorf("write key to child: %w", err)

@@ -10,13 +10,26 @@
 if [[ -n "${__JITENV_LOADED:-}" ]]; then return 0; fi
 __JITENV_LOADED=1
 
+# Per-session nonce — used by jitenv run/shim to validate the
+# __JITENV_INJECTED bypass marker (security #120). See bash.sh for
+# the full rationale.
+__JITENV_SESSION_NONCE="$( {
+    head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'
+} || printf '%x%x%x%x' "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM")"
+export __JITENV_SESSION_NONCE
+
 __JITENV_RUNTIME_DIR={{RuntimeDir}}
 __JITENV_CFG_PATH={{ConfigPath}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # See bash.sh — gates env injection in the shim so vars don't leak
 # into children of unmapped commands (issue #52).
 export __JITENV_SHELL_PID=$$
-mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null
+# Restrict to 0700 across the full hierarchy. `mkdir -p -m` only
+# sets the mode on the leaf; intermediates inherit the umask
+# (typically 022 → 0755), which would trip the runtime-dir
+# ownership check (security #117). A subshell with umask 077 makes
+# every intermediate land at 0700.
+(umask 077 && mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null)
 case ":$PATH:" in
     *":$__JITENV_WRAP_DIR:"*) : ;;
     *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
@@ -88,7 +101,11 @@ __jitenv_accept_line() {
                     # countdown when the agent is locked, so we just
                     # rewrite BUFFER and let it handle everything.
                     __jitenv_log "branch=case0 (mapped → jitenv run)"
-                    BUFFER="jitenv run \"$resolved\"$rest"
+                    # ${(q+)resolved} produces a zsh-safe quoted form,
+                    # so a filename containing `"`, `$`, backtick, or
+                    # other zsh-active characters (legal on Linux/macOS)
+                    # can't break BUFFER's quoting (security #123).
+                    BUFFER="jitenv run ${(q+)resolved}$rest"
                     ;;
                 *)
                     # rc=1 (not mapped) or rc=2 (config unreadable) →

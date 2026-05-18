@@ -32,11 +32,13 @@ func newAgentInternalCmd() *cobra.Command {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			scrubInheritedSecretEnv()
 			key, err := readKeyFromFlag(keyFlag)
 			if err != nil {
 				return fmt.Errorf("read key: %w", err)
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 			slog.Info("agent starting", "config", cfgArg, "idle", idle.String())
 
 			loadAndBuild := func() (agent.Resolver, error) {
@@ -69,7 +71,15 @@ func newAgentInternalCmd() *cobra.Command {
 			ctx, cancel := agent.AwaitSignal(context.Background())
 			defer cancel()
 			defer ag.Shutdown()
-			slog.Info("agent listening", "socket", paths.Socket, "sources", res.Sources())
+			// The startup line previously logged res.Sources() at INFO,
+			// which dumps the configured source names into agent.log.
+			// Source names ("aws-prod", "vault-staging", "kube-secrets-
+			// tier1") are operational metadata that constitute a useful
+			// leak to anyone who reads the log file (security #129).
+			// Keep the bare "listening" signal at INFO; the names are
+			// available via the `status` op for callers who want them.
+			slog.Info("agent listening", "socket", paths.Socket, "source_count", len(res.Sources()))
+			slog.Debug("agent sources", "sources", res.Sources())
 			err = ag.Serve(ctx)
 			slog.Info("agent stopped")
 			return err
