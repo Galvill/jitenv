@@ -109,11 +109,14 @@ func (a *Agent) currentResolver() Resolver {
 // platform-split implementations.
 func (a *Agent) Listen() error {
 	_ = GcOrphanShells(a.paths.ShellsDir)
-	// OS-level advisory lock on the pidfile. Held for the agent's
-	// lifetime; auto-released on process exit (even a crash) so we
-	// never get stuck on a stale lock the way a pure pidfile +
-	// PidAlive check can (security #130).
-	lock, err := acquirePidLock(a.paths.PidFile)
+	// OS-level advisory lock on a sibling `.lock` file (security #130).
+	// We use a separate file rather than locking the pidfile itself so
+	// the pidfile stays plain-readable/writable; on Windows, the
+	// no-share CreateFile we use for the lock would otherwise block
+	// WritePidFile's open of the same path with a sharing violation.
+	// Both Unix flock and Windows share-mode locks auto-release on
+	// process exit, so a crashed agent never leaves a stale lock.
+	lock, err := acquirePidLock(a.paths.PidFile + ".lock")
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			existing, _ := ReadPidFile(a.paths.PidFile)

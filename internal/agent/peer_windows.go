@@ -5,8 +5,6 @@ package agent
 import (
 	"fmt"
 	"net"
-	"runtime"
-	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -19,37 +17,28 @@ type fdConn interface {
 	Fd() uintptr
 }
 
-// advapi32.dll exports we don't get from x/sys/windows directly.
-var (
-	modAdvapi32                  = windows.NewLazySystemDLL("advapi32.dll")
-	procImpersonateNamedPipeClnt = modAdvapi32.NewProc("ImpersonateNamedPipeClient")
-)
-
-// impersonateNamedPipeClient binds the current OS thread's effective
-// token to the client of the supplied named pipe. Pair with
-// RevertToSelf inside a runtime.LockOSThread region — Win32 thread
-// tokens live on the OS thread, and Go's scheduler is free to migrate
-// goroutines between threads otherwise.
-func impersonateNamedPipeClient(pipe windows.Handle) error {
-	r1, _, e1 := syscall.SyscallN(procImpersonateNamedPipeClnt.Addr(), uintptr(pipe))
-	if r1 == 0 {
-		return error(e1)
-	}
-	return nil
-}
-
 // checkPeerUid enforces that the connecting named-pipe client runs as
-// the same user as the agent. As of security #132 the check uses
-// ImpersonateNamedPipeClient — the standard Win32 idiom — rather than
-// a PID-based OpenProcess lookup. The previous approach had a TOCTOU
-// race: between GetNamedPipeClientProcessId and OpenProcess the PID
-// could be reused by an unrelated process, and the SID check would
-// then be made against the wrong token. Impersonation binds the
-// credential check to the transport layer directly.
+// the same user as the agent.
 //
-// The pipe ACL set in socket_windows.go already restricts the pipe to
-// the current user SID; the thread-token comparison is the
-// load-bearing peer-auth guarantee on top of that perimeter check.
+// History: an earlier revision tried to use ImpersonateNamedPipeClient
+// + OpenThreadToken (security #132) to bind the credential check to
+// the pipe handle itself rather than to a resolved PID. Production
+// pipe clients open via go-winio.DialPipe which does not set
+// SECURITY_SQOS_PRESENT, so the impersonation token came back at
+// "Anonymous" level — OpenThreadToken on an anonymous token fails
+// with "Cannot open an anonymous level security token", breaking
+// every legitimate same-user connection. Until go-winio exposes a
+// CreateFile path that lets us pass SECURITY_IMPERSONATION, the
+// PID-based check below is the working option. The pipe ACL on the
+// listener side (D:(A;;GA;;;<sid>) — see socket_windows.go) is the
+// primary perimeter; the SID comparison here is defence in depth.
+//
+// PID-reuse TOCTOU: between GetNamedPipeClientProcessId and
+// OpenProcess the client's PID could in principle be reused by an
+// unrelated process. In practice the SDDL ACL already restricts
+// connects to our SID, so any same-SID PID-reuse would have been
+// legitimately authorised anyway; an attacker-SID replacement
+// triggers a false reject, not a false accept.
 //
 // Note: this comparison is same-user, not same-session. A second
 // process running under the same user account is treated as
@@ -62,29 +51,25 @@ func checkPeerUid(c net.Conn) error {
 	}
 	pipeHandle := windows.Handle(fc.Fd())
 
-	// Win32 thread-token APIs operate on the OS thread, not on Go's
-	// goroutine abstraction. Pin this goroutine to its OS thread for
-	// the lifetime of the impersonation so RevertToSelf releases the
-	// right thread's token.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	if err := impersonateNamedPipeClient(pipeHandle); err != nil {
-		return fmt.Errorf("impersonate pipe client: %w", err)
+	var clientPID uint32
+	if err := windows.GetNamedPipeClientProcessId(pipeHandle, &clientPID); err != nil {
+		return fmt.Errorf("get pipe client pid: %w", err)
 	}
-	defer func() {
-		// Best-effort. If RevertToSelf fails the OS thread is still
-		// in the impersonated state — UnlockOSThread doesn't fix
-		// that, but the Go runtime tears the thread down rather than
-		// reusing it for another goroutine when an LockOSThread'd
-		// goroutine exits without a matching unlock — and we always
-		// unlock here, so a normal return is fine.
-		_ = windows.RevertToSelf()
-	}()
+
+	// PROCESS_QUERY_LIMITED_INFORMATION (0x1000) is sufficient to call
+	// OpenProcessToken with TOKEN_QUERY, and unlike
+	// PROCESS_QUERY_INFORMATION it works across integrity levels for the
+	// same user.
+	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+	procHandle, err := windows.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, clientPID)
+	if err != nil {
+		return fmt.Errorf("open client process %d: %w", clientPID, err)
+	}
+	defer windows.CloseHandle(procHandle)
 
 	var clientTok windows.Token
-	if err := windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_QUERY, true, &clientTok); err != nil {
-		return fmt.Errorf("open thread token: %w", err)
+	if err := windows.OpenProcessToken(procHandle, windows.TOKEN_QUERY, &clientTok); err != nil {
+		return fmt.Errorf("open client process token: %w", err)
 	}
 	defer clientTok.Close()
 

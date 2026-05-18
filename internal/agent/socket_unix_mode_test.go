@@ -26,7 +26,10 @@ func TestListenSocketMode_AtomicallyZeroOther(t *testing.T) {
 	old := syscall.Umask(0)
 	defer syscall.Umask(old)
 
-	dir := t.TempDir()
+	// /tmp/jr-* (not t.TempDir) keeps the path well under macOS's
+	// 104-byte sun_path limit; t.TempDir + a long test name pushes
+	// /var/folders/... over.
+	dir := newTestAgentDir(t)
 	path := filepath.Join(dir, "agent.sock")
 	ln, err := listenSocket(path)
 	if err != nil {
