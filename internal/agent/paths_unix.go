@@ -31,8 +31,16 @@ func socketEndpoint(baseDir string) string {
 // existing directories regardless of who owns them; on the
 // /tmp/jitenv-<uid> fallback another user could pre-create the path
 // and later unlink the agent's socket or replace it. Refusing to
-// start when the directory's metadata is wrong is the standard
-// mitigation (gpg-agent, ssh-agent, OpenSSH all do this).
+// start when ownership is wrong is the standard mitigation
+// (gpg-agent, ssh-agent, OpenSSH all do this).
+//
+// Ownership is the load-bearing check. The mode bits are checked
+// second and self-repaired with a chmod(0700) when ownership is
+// correct: pre-#117 versions used `mkdir -p` with the user's umask
+// (typically 0022 → 0755), so an upgrade in place would otherwise
+// refuse to start until the user manually tightened the mode. We
+// own the dir, so only we (or someone already running as us) could
+// have created it that way — the chmod is safe and idempotent.
 func verifyRuntimeDir(dir string) error {
 	st, err := os.Lstat(dir)
 	if err != nil {
@@ -41,17 +49,14 @@ func verifyRuntimeDir(dir string) error {
 	if !st.IsDir() {
 		return fmt.Errorf("runtime path %s is not a directory", dir)
 	}
-	if mode := st.Mode().Perm(); mode != 0o700 {
-		return fmt.Errorf("runtime dir %s has mode %#o, want 0700 (security #117)", dir, mode)
-	}
 	sys, ok := st.Sys().(*syscall.Stat_t)
-	if !ok {
-		// Non-POSIX FS (rare). Mode check above already covers the
-		// high-risk case; don't block the user.
-		return nil
-	}
-	if int(sys.Uid) != os.Getuid() {
+	if ok && int(sys.Uid) != os.Getuid() {
 		return fmt.Errorf("runtime dir %s owned by uid %d, want %d", dir, sys.Uid, os.Getuid())
+	}
+	if mode := st.Mode().Perm(); mode != 0o700 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("runtime dir %s has mode %#o and chmod to 0700 failed: %w (security #117)", dir, mode, err)
+		}
 	}
 	return nil
 }

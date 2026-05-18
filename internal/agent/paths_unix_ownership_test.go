@@ -5,32 +5,37 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// TestDefaultPaths_RejectsWrongModeRuntimeDir is the regression for
-// security #117: when the /tmp fallback path is used (XDG_RUNTIME_DIR
-// unset) and a pre-existing dir at the expected location has been
-// created by some other process with too-permissive mode, DefaultPaths
-// must refuse rather than silently bind a 0600 socket inside an
-// attacker-owned directory.
-func TestDefaultPaths_RejectsWrongModeRuntimeDir(t *testing.T) {
+// TestDefaultPaths_RepairsWrongModeRuntimeDir is the regression for
+// the upgrade path: a pre-#117 install left the runtime dir at the
+// user's umask-default mode (typically 0755). Since we own the dir,
+// it's safe — and necessary for clean upgrades — to chmod(0700) it
+// in place rather than refuse to start. Ownership remains the
+// load-bearing check (TestDefaultPaths_RejectsWrongUidRuntimeDir
+// covers the actual attack scenario).
+func TestDefaultPaths_RepairsWrongModeRuntimeDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", tmp)
 
-	// Pre-create the jitenv subdir with mode 0755 — too permissive.
+	// Pre-create the jitenv subdir with mode 0755 — what a pre-#117
+	// install would leave behind on an upgrade.
 	jdir := filepath.Join(tmp, "jitenv")
 	if err := os.Mkdir(jdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := DefaultPaths()
-	if err == nil {
-		t.Fatal("DefaultPaths must refuse a runtime dir with mode 0755")
+	if _, err := DefaultPaths(); err != nil {
+		t.Fatalf("DefaultPaths must self-repair a 0755 dir owned by self: %v", err)
 	}
-	if !strings.Contains(err.Error(), "mode") && !strings.Contains(err.Error(), "perm") {
-		t.Errorf("error message should mention mode/permissions; got: %v", err)
+
+	st, err := os.Lstat(jdir)
+	if err != nil {
+		t.Fatalf("stat after repair: %v", err)
+	}
+	if mode := st.Mode().Perm(); mode != 0o700 {
+		t.Errorf("dir mode after repair: got %#o, want 0700", mode)
 	}
 }
 
