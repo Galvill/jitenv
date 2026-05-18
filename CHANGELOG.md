@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/Galvill/jitenv/compare/v0.6.0...v0.7.0) (2026-05-18)
+
+
+### Features
+
+* **agent:** hidden-console daemon spawn + key-handle handoff on Windows ([#87](https://github.com/Galvill/jitenv/issues/87)) ([#96](https://github.com/Galvill/jitenv/issues/96)) ([5b4909b](https://github.com/Galvill/jitenv/commit/5b4909bed75d8bea4dca1a9f63f93330637b64f5))
+* **agent:** named-pipe transport + token-SID peer auth for Windows ([#86](https://github.com/Galvill/jitenv/issues/86)) ([#93](https://github.com/Galvill/jitenv/issues/93)) ([6da2672](https://github.com/Galvill/jitenv/commit/6da2672756286140b1769562a1d536ebd7e767db))
+* **chpwd,shim:** .ps1 wrapper shims + Windows-aware chpwd reconcile ([#89](https://github.com/Galvill/jitenv/issues/89)) ([#99](https://github.com/Galvill/jitenv/issues/99)) ([7c3f603](https://github.com/Galvill/jitenv/commit/7c3f60398ea3e49fceda58edd83a827f4ac8d72d))
+* **powershell:** intercept path/glob commands via PSReadLine AcceptLine ([#103](https://github.com/Galvill/jitenv/issues/103)/[#104](https://github.com/Galvill/jitenv/issues/104)) ([#105](https://github.com/Galvill/jitenv/issues/105)) ([3c5f458](https://github.com/Galvill/jitenv/commit/3c5f458fc108fc4d3575504d4320a83479ec0362))
+* **run,shim:** spawn-and-wait Windows runtime for jitenv run + shim ([#88](https://github.com/Galvill/jitenv/issues/88)) ([#95](https://github.com/Galvill/jitenv/issues/95)) ([174fd7b](https://github.com/Galvill/jitenv/commit/174fd7bd19a9a9fb30a381268e7393aaf11d3bdb))
+* **windows:** PowerShell 7 hook + passphrase prompt over CONIN$/CONOUT$ ([#101](https://github.com/Galvill/jitenv/issues/101)) ([dda360f](https://github.com/Galvill/jitenv/commit/dda360f47957b2515742b2e102081773dba56ca4))
+* **windows:** release gate — %APPDATA% config, GoReleaser zip targets, docs ([#91](https://github.com/Galvill/jitenv/issues/91)) ([#102](https://github.com/Galvill/jitenv/issues/102)) ([9c17290](https://github.com/Galvill/jitenv/commit/9c17290f49909f23e0773266bedecda58d40f1a4))
+
+
+### Bug Fixes
+
+* **shim:** use PATHEXT lookup for .exe candidates on Windows ([#97](https://github.com/Galvill/jitenv/issues/97)) ([#98](https://github.com/Galvill/jitenv/issues/98)) ([7853496](https://github.com/Galvill/jitenv/commit/785349684c707c22fb93d87212e583b8a6e848fd))
+
 ## [0.6.0](https://github.com/Galvill/jitenv/compare/v0.5.0...v0.6.0) (2026-05-13)
 
 
