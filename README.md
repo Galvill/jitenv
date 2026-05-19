@@ -82,12 +82,25 @@ git clone https://github.com/gv/jitenv && cd jitenv && make install
 jitenv hook install
 ```
 
-### Homebrew
+### Homebrew (macOS and Linux)
 
-A formula is planned alongside the macOS port (see
-[#13](https://github.com/Galvill/jitenv/issues/13)). When it lands,
-the formula will print caveats with the same `jitenv hook install`
-command — Homebrew formulae do not modify a user's shell rc files.
+```sh
+brew install Galvill/jitenv/jitenv
+```
+
+Distributed as a Homebrew **cask** that downloads the goreleaser
+tarball for your arch. The cask strips the `com.apple.quarantine`
+xattr on install (jitenv is not yet Apple-notarized — tracked in
+[#13](https://github.com/Galvill/jitenv/issues/13)), so the binary
+runs from the terminal without a Gatekeeper override. After install
+activate the shell hook **once** as your normal user:
+
+```sh
+jitenv hook install
+exec $SHELL
+```
+
+Homebrew never modifies your shell rc files on its own.
 
 ## Commands
 

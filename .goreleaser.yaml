@@ -75,6 +75,53 @@ nfpms:
       postinstall: packaging/postinstall.sh
       preremove: packaging/preremove.sh
 
+# Homebrew tap (#13): goreleaser auto-generates a cask from the
+# macOS tarball artifacts and pushes it to a separate tap repo
+# (`Galvill/homebrew-jitenv`). End users then install with:
+#
+#     brew install Galvill/jitenv/jitenv
+#
+# Cask (not formula) because Homebrew now recommends casks for any
+# pre-built binary distribution and goreleaser is phasing out the
+# `brews:` block.
+#
+# Cross-repo pushes need a PAT scoped to the tap repo; the default
+# GITHUB_TOKEN can only write to the current repo. envOrDefault keeps
+# `goreleaser release --snapshot` working locally when the secret is
+# absent — combined with `skip_upload: auto` it just generates the
+# cask in dist/ without trying to push.
+#
+# Without notarization the cask sets `no_quarantine: true` so the
+# Gatekeeper hard-block doesn't fire on install. Users still see the
+# "downloaded from the internet" warning the first time they invoke
+# jitenv via Spotlight/Finder; running from the terminal is fine.
+homebrew_casks:
+  - name: jitenv
+    repository:
+      owner: Galvill
+      name: homebrew-jitenv
+      branch: main
+      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
+    directory: Casks
+    homepage: https://github.com/Galvill/jitenv
+    description: Just-in-time env-var injection from pluggable secret sources, scoped to per-command process trees
+    skip_upload: auto
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew cask update for jitenv {{ .Tag }}"
+    # Bypass Gatekeeper quarantine on install — jitenv isn't yet
+    # Apple-notarized so the default cask install would prompt the
+    # user to override in System Settings. Issue #13 follow-up will
+    # flip this back to default once notarization lands.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/jitenv"]
+          end
+
 checksum:
   name_template: SHA256SUMS
 
@@ -104,6 +151,13 @@ release:
     ## jitenv {{ .Tag }}
 
     Linux, macOS, and Windows artifacts for `amd64` and `arm64`.
+
+    macOS users can install via Homebrew:
+
+    ```sh
+    brew install Galvill/jitenv/jitenv
+    ```
+
     macOS binaries are **not** Apple-notarized — first run requires
     `xattr -d com.apple.quarantine ./jitenv` or a right-click → Open.
     Windows binaries are **not** Authenticode-signed — SmartScreen
