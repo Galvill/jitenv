@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gv/jitenv/internal/lockfile"
 )
 
 // maxConcurrentAgentConns caps how many in-flight connection handlers
@@ -116,7 +118,7 @@ func (a *Agent) Listen() error {
 	// WritePidFile's open of the same path with a sharing violation.
 	// Both Unix flock and Windows share-mode locks auto-release on
 	// process exit, so a crashed agent never leaves a stale lock.
-	lock, err := acquirePidLock(a.paths.PidFile + ".lock")
+	lock, err := lockfile.Acquire(a.paths.PidFile + ".lock")
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			existing, _ := ReadPidFile(a.paths.PidFile)
