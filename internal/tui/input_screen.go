@@ -110,15 +110,19 @@ func (s *inputScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			}
 			return s, nil
 		case "left":
+			// Only consume when actually moving button focus. When
+			// the text field is focused (btnFocus < 0) or already at
+			// the leftmost button, fall through to the textinput so
+			// the user can move the cursor inside the field (#106).
 			if s.btnFocus > 0 {
 				s.btnFocus--
+				return s, nil
 			}
-			return s, nil
 		case "right":
 			if s.btnFocus >= 0 && s.btnFocus < len(s.buttons)-1 {
 				s.btnFocus++
+				return s, nil
 			}
-			return s, nil
 		case "down":
 			if s.btnFocus < 0 {
 				s.btnFocus = 0

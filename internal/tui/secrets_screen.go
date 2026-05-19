@@ -490,15 +490,19 @@ func (s *kvEditScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			}
 			return s, nil
 		case "left":
+			// Only consume when actually moving button focus. When
+			// the key/value text inputs are focused or we're already
+			// at the leftmost button, fall through so the user can
+			// move the cursor inside the field (#106).
 			if s.btnFocus > 0 {
 				s.btnFocus--
+				return s, nil
 			}
-			return s, nil
 		case "right":
 			if s.btnFocus >= 0 && s.btnFocus < len(s.buttons)-1 {
 				s.btnFocus++
+				return s, nil
 			}
-			return s, nil
 		case "enter":
 			if s.btnFocus < 0 {
 				return s, s.commit()
