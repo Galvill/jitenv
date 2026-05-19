@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -94,21 +95,38 @@ func newUnlockCmd() *cobra.Command {
 }
 
 // warnIfHookMissing prints a yellow notice to w when the shell hook
-// isn't fully wired up. Two failure modes are flagged:
+// isn't fully wired up. Three failure modes are flagged:
+//   - the user is in an unsupported shell (fish / dash / ksh / …) so
+//     the hook will never load — issue #164;
 //   - the eval line is not in the user's interactive rc file at all;
-//   - the eval line is in ~/.bashrc but bash login shells don't end up
-//     sourcing ~/.bashrc, so the hook only fires in interactive shells
-//     (this is the situation that hides the agent-down warning when
-//     the user opens a new terminal as a login shell).
+//   - the eval line is in ~/.bashrc but bash login shells don't end
+//     up sourcing ~/.bashrc, so the hook only fires in interactive
+//     shells.
 func warnIfHookMissing(w interface {
 	Write(p []byte) (n int, err error)
 }) {
 	st, err := shell.CurrentStatus()
-	if err != nil || st.Shell == "" {
+	if err != nil {
 		return
 	}
 	const yellow = "\033[33m"
 	const reset = "\033[0m"
+
+	if st.Shell == "" {
+		// Truly-unknown shell ($SHELL unset) stays silent — nothing
+		// actionable to say. Unsupported shell with a name gets a
+		// dedicated warning so the user knows the agent is running
+		// but the hook will never auto-inject (#164).
+		if st.Unsupported != "" {
+			fmt.Fprintf(w,
+				"%snote:%s detected shell %q (from $SHELL=%q) is not supported by jitenv. "+
+					"Only %s have hooks; the agent is running, but path-mapped commands "+
+					"won't auto-inject env vars in this shell.\n",
+				yellow, reset, st.Unsupported, st.Source,
+				strings.Join(shell.SupportedShells(), ", "))
+		}
+		return
+	}
 	if !st.Installed {
 		fmt.Fprintf(w,
 			"%snote:%s shell hook not installed in %s — run `jitenv hook install` "+
