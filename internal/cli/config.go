@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
+	"github.com/gv/jitenv/internal/lockfile"
 	"github.com/gv/jitenv/internal/tui"
 )
 
@@ -107,6 +110,25 @@ func newConfigValidateCmd() *cobra.Command {
 }
 
 func runConfigTUI() error {
+	// Prevent two concurrent `jitenv config` TUI sessions from
+	// silently clobbering each other on save (#166). Each session
+	// loads cfg into memory, the user edits, AtomicSave rewrites
+	// the file — last writer wins with no detection. The lock is on
+	// a sibling `.tui.lock` file rather than the config itself so we
+	// don't interfere with reads from is-mapped, the agent, etc.
+	cfgPath, err := config.Resolve(configPath)
+	if err != nil {
+		return err
+	}
+	lock, lockErr := lockfile.Acquire(cfgPath + ".tui.lock")
+	if lockErr != nil {
+		if errors.Is(lockErr, os.ErrExist) {
+			return fmt.Errorf("another `jitenv config` session is already editing %s — close it before opening a second", cfgPath)
+		}
+		return fmt.Errorf("acquire TUI lock: %w", lockErr)
+	}
+	defer lock.Close()
+
 	return tui.Run(configPath)
 }
 

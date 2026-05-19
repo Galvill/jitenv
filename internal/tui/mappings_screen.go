@@ -137,9 +137,19 @@ func (m *mappingsListScreen) View() string {
 	}
 
 	for i, mp := range m.root.cfg.Mappings {
+		count, known := expandedVarCount(m.root.cfg, &mp)
+		suffix := "vars"
+		if !known {
+			// At least one expand-all reference points at a source
+			// whose bag we couldn't size synchronously (typically a
+			// remote source not pre-fetched). Render as a lower
+			// bound so the user sees N+ rather than a misleadingly
+			// precise number.
+			suffix = "vars+"
+		}
 		row := fmt.Sprintf("%-44s  %s",
 			truncate(mappingLabel(mp), 44),
-			dimText(fmt.Sprintf("(%d vars)", len(mp.Vars))))
+			dimText(fmt.Sprintf("(%d %s)", count, suffix)))
 		if i+1 == m.cursor {
 			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
 		} else {
@@ -147,6 +157,40 @@ func (m *mappingsListScreen) View() string {
 		}
 	}
 	return b.String()
+}
+
+// expandedVarCount returns the number of env vars `mp` will inject
+// on a match, expanding "whole bag" references (VarRef with empty
+// Name) by the source's bag size (#165). For local-source expand-all
+// refs the bag size is read directly from cfg.Secrets — no async
+// fetch needed. For remote-source expand-all refs we can't know the
+// size without an HTTP/SDK call we'd rather not run from the
+// mappings-list render path, so the count returns known=false and
+// the caller renders a lower-bound `N+`.
+func expandedVarCount(cfg *config.Config, mp *config.Mapping) (count int, known bool) {
+	if cfg == nil || mp == nil {
+		return 0, true
+	}
+	known = true
+	for _, v := range mp.Vars {
+		if v.Name != "" {
+			// Named ref → exactly one env var.
+			count++
+			continue
+		}
+		// Expand-all reference. Try the synchronous local-source
+		// shortcut first.
+		sc, srcOK := cfg.Sources[v.Source]
+		if srcOK && sc.Type == "local" {
+			count += len(cfg.Secrets[v.Ref])
+			continue
+		}
+		// Remote source or unknown — we'd need an async bag fetch
+		// to size this accurately. Surface the unknown via known=false
+		// and don't add anything to count.
+		known = false
+	}
+	return count, known
 }
 
 func mappingLabel(mp config.Mapping) string {
@@ -258,6 +302,43 @@ func (s *mappingFormScreen) isEmpty() bool {
 	return mp != nil && mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" && len(mp.Vars) == 0
 }
 
+// isPartial reports whether the in-progress mapping has been touched
+// but isn't yet complete enough to be saved. A complete mapping needs
+// (a) a target (Path / Glob / CwdGlob set), (b) at least one VarRef,
+// and (c) for cwd mappings, at least one entry in Commands. Anything
+// in between — target without vars, cwd_glob without commands, vars
+// without target — is a partial mapping and should prompt the user
+// before Esc silently saves it as cruft (#163).
+func (s *mappingFormScreen) isPartial() bool {
+	mp := s.mp()
+	if mp == nil {
+		return false
+	}
+	if mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" && len(mp.Vars) == 0 {
+		return false // fully empty — handled by isEmpty()
+	}
+	if mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" {
+		return true // vars without a target
+	}
+	if len(mp.Vars) == 0 {
+		return true // target without vars
+	}
+	if mp.CwdGlob != "" && len(mp.Commands) == 0 {
+		return true // cwd_glob without commands
+	}
+	return false
+}
+
+// discardMapping removes the in-progress mapping from the slice and
+// pops the form. Used by the Esc-on-empty fast path and by the
+// Discard branch of the resume/discard prompt.
+func (s *mappingFormScreen) discardMapping() tea.Cmd {
+	if s.idx >= 0 && s.idx < len(s.root.cfg.Mappings) {
+		s.root.cfg.Mappings = append(s.root.cfg.Mappings[:s.idx], s.root.cfg.Mappings[s.idx+1:]...)
+	}
+	return tea.Sequence(emit(popMsg{}), emit(mappingChangedMsg{}))
+}
+
 // maxCursor returns the highest valid cursor row. Cwd mappings get an
 // extra "commands" row above "variables".
 func (s *mappingFormScreen) maxCursor() int {
@@ -281,11 +362,25 @@ func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "enter":
 			return s, s.activate()
 		case "esc":
-			if s.creating && s.isEmpty() {
-				if s.idx >= 0 && s.idx < len(s.root.cfg.Mappings) {
-					s.root.cfg.Mappings = append(s.root.cfg.Mappings[:s.idx], s.root.cfg.Mappings[s.idx+1:]...)
+			if s.creating {
+				if s.isEmpty() {
+					return s, s.discardMapping()
 				}
-				return s, tea.Sequence(emit(popMsg{}), emit(mappingChangedMsg{}))
+				if s.isPartial() {
+					// Half-filled mapping — prompt rather than save
+					// inert cruft into the config (#163).
+					return s, emit(pushMsg{s: newConfirmScreen(
+						s.root,
+						"This mapping is incomplete (missing target, variables, or commands). Resume editing or discard?",
+						func(choice string) tea.Cmd {
+							if choice == "Discard" {
+								return tea.Sequence(emit(popMsg{}), s.discardMapping())
+							}
+							return emit(popMsg{}) // Resume: just close the confirm modal
+						},
+						"Resume", "Discard",
+					)})
+				}
 			}
 			return s, emit(popMsg{})
 		}
@@ -358,7 +453,12 @@ func (s *mappingFormScreen) openKindMenu() tea.Cmd {
 		return emit(popMsg{})
 	}
 	return emit(pushMsg{s: newPopupMenuScreen(s.root,
-		"Mapping kind", cb, "path", "glob", "cwd", "Back")})
+		"Mapping kind", cb, "path", "glob", "cwd", "Back").
+		withHints(map[string]string{
+			"path": "Match one exact filesystem path (e.g. /usr/local/bin/deploy.sh).",
+			"glob": "Match any file under a doublestar pattern (e.g. ~/work/**/*.sh).",
+			"cwd":  "Match when the shell's pwd is under a directory pattern; fires only for listed commands.",
+		})})
 }
 
 func (s *mappingFormScreen) openTargetInput() tea.Cmd {
