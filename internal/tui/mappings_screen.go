@@ -358,7 +358,12 @@ func (s *mappingFormScreen) openKindMenu() tea.Cmd {
 		return emit(popMsg{})
 	}
 	return emit(pushMsg{s: newPopupMenuScreen(s.root,
-		"Mapping kind", cb, "path", "glob", "cwd", "Back")})
+		"Mapping kind", cb, "path", "glob", "cwd", "Back").
+		withHints(map[string]string{
+			"path": "Match one exact filesystem path (e.g. /usr/local/bin/deploy.sh).",
+			"glob": "Match any file under a doublestar pattern (e.g. ~/work/**/*.sh).",
+			"cwd":  "Match when the shell's pwd is under a directory pattern; fires only for listed commands.",
+		})})
 }
 
 func (s *mappingFormScreen) openTargetInput() tea.Cmd {

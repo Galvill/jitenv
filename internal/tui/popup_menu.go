@@ -12,16 +12,31 @@ import (
 // "Back" choice is conventional and the screen treats it the same as
 // Esc — the caller can also include a literal "Back" entry to make
 // the affordance visible).
+//
+// Optional per-choice descriptions: callers can populate `hints` (label
+// → hint string) via withHints() to render a one-line description of
+// the currently-focused choice beneath the menu. Used by the
+// mapping-kind picker so first-time users see what path / glob / cwd
+// mean without having to open the form's `?` help (#108).
 type popupMenuScreen struct {
 	root     *rootModel
 	heading  string
 	choices  []string
+	hints    map[string]string
 	cursor   int
 	onChoose func(string) tea.Cmd
 }
 
 func newPopupMenuScreen(r *rootModel, heading string, fn func(string) tea.Cmd, choices ...string) *popupMenuScreen {
 	return &popupMenuScreen{root: r, heading: heading, choices: choices, onChoose: fn}
+}
+
+// withHints attaches a label → description map to the menu. Choices
+// not present in the map render with no hint. Returns the receiver
+// for chaining at construction.
+func (p *popupMenuScreen) withHints(hints map[string]string) *popupMenuScreen {
+	p.hints = hints
+	return p
 }
 
 func (p *popupMenuScreen) Title() string { return "menu" }
@@ -72,6 +87,14 @@ func (p *popupMenuScreen) View() string {
 			inner.WriteString(listItemFocusedStyle.Render(" "+c+" ") + "\n")
 		} else {
 			inner.WriteString(listItemStyle.Render(" "+c+" ") + "\n")
+		}
+	}
+	// Per-choice hint rendered inside the modal beneath the choices.
+	// Silent when no hint is registered for the focused choice — keeps
+	// back-compat with callers that don't use withHints.
+	if p.hints != nil && p.cursor >= 0 && p.cursor < len(p.choices) {
+		if hint, ok := p.hints[p.choices[p.cursor]]; ok && hint != "" {
+			inner.WriteString("\n" + dimText(hint))
 		}
 	}
 	modal := lipgloss.NewStyle().
