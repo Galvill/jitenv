@@ -300,6 +300,66 @@ func TestDetectShell(t *testing.T) {
 	}
 }
 
+// TestDetectShellDetailed is the regression for #164: DetectShell's "" is
+// the same for unsupported and unknown, but the new detailed variant
+// must distinguish the two so unlock can warn fish/dash/ksh users
+// while staying silent on truly-unknown shells.
+//
+// File is !windows-tagged; on Windows the function always reports
+// powershell from the GOOS branch.
+func TestDetectShellDetailed(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/bash")
+	if c, r, _ := DetectShellDetailed(); c != "bash" || r != "bash" {
+		t.Errorf("bash: got canonical=%q raw=%q, want both bash", c, r)
+	}
+
+	t.Setenv("SHELL", "/usr/bin/fish")
+	c, r, s := DetectShellDetailed()
+	if c != "" {
+		t.Errorf("fish canonical: got %q, want \"\"", c)
+	}
+	if r != "fish" {
+		t.Errorf("fish raw: got %q, want \"fish\"", r)
+	}
+	if s != "/usr/bin/fish" {
+		t.Errorf("fish source: got %q, want /usr/bin/fish", s)
+	}
+
+	t.Setenv("SHELL", "/bin/dash")
+	c, r, _ = DetectShellDetailed()
+	if c != "" || r != "dash" {
+		t.Errorf("dash: got canonical=%q raw=%q, want canonical=\"\" raw=dash", c, r)
+	}
+
+	t.Setenv("SHELL", "")
+	c, r, s = DetectShellDetailed()
+	if c != "" || r != "" || s != "" {
+		t.Errorf("empty SHELL: got canonical=%q raw=%q source=%q, want all empty", c, r, s)
+	}
+}
+
+// TestCurrentStatus_UnsupportedShell asserts that an unsupported
+// shell produces a Status with empty Shell + populated Unsupported
+// so warnIfHookMissing in cli/unlock can render the appropriate
+// notice (#164). File is !windows-tagged so the powershell branch
+// doesn't apply here.
+func TestCurrentStatus_UnsupportedShell(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/fish")
+	st, err := CurrentStatus()
+	if err != nil {
+		t.Fatalf("CurrentStatus: %v", err)
+	}
+	if st.Shell != "" {
+		t.Errorf("Shell: got %q, want empty for unsupported shell", st.Shell)
+	}
+	if st.Unsupported != "fish" {
+		t.Errorf("Unsupported: got %q, want fish", st.Unsupported)
+	}
+	if st.Source != "/usr/bin/fish" {
+		t.Errorf("Source: got %q, want /usr/bin/fish", st.Source)
+	}
+}
+
 // TestHookLinePowerShell pins the PowerShell activation line. The
 // `Invoke-Expression (& jitenv hook powershell | Out-String)` form is
 // load-bearing — pwsh has no `eval "$(...)"` equivalent.

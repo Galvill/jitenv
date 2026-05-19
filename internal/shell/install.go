@@ -10,25 +10,59 @@ import (
 	"strings"
 )
 
-// DetectShell returns "bash" / "zsh" / "powershell", or "" if the
-// current shell isn't supported. On Windows $SHELL is normally unset,
-// so we assume PowerShell 7+ (the only Windows shell jitenv supports —
-// see issue #39 for the cmd.exe / PowerShell 5.x decision).
+// SupportedShells lists the canonical names jitenv has hook snippets
+// for. Used by user-facing warnings so the wording stays in sync with
+// the actual matrix.
+func SupportedShells() []string {
+	return []string{"bash", "zsh", "powershell"}
+}
+
+// DetectShell returns "bash" / "zsh" / "powershell" when the current
+// shell is one jitenv supports, or "" otherwise. "" collapses both
+// "$SHELL unset / unreadable" and "named-but-unsupported" cases; call
+// DetectShellDetailed when those need to be distinguished (e.g. to
+// warn an unsupported-shell user that their hook will never load).
 func DetectShell() string {
+	canonical, _, _ := DetectShellDetailed()
+	return canonical
+}
+
+// DetectShellDetailed reports what jitenv knows about the calling
+// shell (#164):
+//
+//   - canonical: one of bash/zsh/powershell when supported, "" otherwise.
+//   - raw: the basename of $SHELL when present, "" when the env var
+//     is unset (or, on Windows, "" because no detection happened).
+//   - source: the full $SHELL value (or other origin token) used to
+//     derive raw; surfaced in user-facing warnings so the user can
+//     see what jitenv read.
+//
+// When canonical == "" and raw != "" the caller should treat this as
+// "unsupported shell" and warn the user — the agent will work, but
+// the hook won't load. When canonical == "" and raw == "" there's
+// nothing actionable to say and callers should stay silent.
+//
+// On Windows we keep the historical optimism of assuming pwsh 7+
+// (canonical = "powershell"). Detecting cmd.exe / Windows PowerShell
+// 5.x requires parent-process inspection and is tracked as a follow-
+// up; returning a non-empty raw would imply we'd looked at the
+// process — we haven't — so it stays empty.
+func DetectShellDetailed() (canonical, raw, source string) {
 	if runtime.GOOS == "windows" {
-		return "powershell"
+		return "powershell", "", "runtime.GOOS=windows"
 	}
 	sh := os.Getenv("SHELL")
 	if sh == "" {
-		return ""
+		return "", "", ""
 	}
-	switch filepath.Base(sh) {
+	base := filepath.Base(sh)
+	switch base {
 	case "bash":
-		return "bash"
+		return "bash", base, sh
 	case "zsh":
-		return "zsh"
+		return "zsh", base, sh
 	}
-	return ""
+	return "", base, sh
 }
 
 // RcPath returns the conventional rc file path for shell, or "" if we
@@ -124,22 +158,33 @@ type Status struct {
 	Installed    bool
 	LoginPath    string // login-shell startup file we'd touch (bash only)
 	LoginSources bool   // whether the login file already sources RcPath
+
+	// Unsupported is set to the raw basename of $SHELL (e.g. "fish",
+	// "dash") when the detected shell is one jitenv has no hook
+	// snippet for. Shell stays empty in that case. Unsupported is
+	// only populated when the user has SOMETHING set in $SHELL but
+	// it isn't bash/zsh — "$SHELL unset" stays silent (#164).
+	Unsupported string
+	// Source is the full $SHELL value (or detection origin) that
+	// produced Unsupported. Surfaced verbatim in the warning so the
+	// user can see what jitenv read.
+	Source string
 }
 
 // CurrentStatus returns the status for the user's current shell.
 func CurrentStatus() (Status, error) {
-	sh := DetectShell()
-	if sh == "" {
-		return Status{}, nil
+	canonical, raw, source := DetectShellDetailed()
+	if canonical == "" {
+		return Status{Unsupported: raw, Source: source}, nil
 	}
-	rc := RcPath(sh)
-	line := HookLine(sh)
+	rc := RcPath(canonical)
+	line := HookLine(canonical)
 	installed, err := IsInstalled(rc, line)
 	if err != nil {
 		return Status{}, err
 	}
-	st := Status{Shell: sh, RcPath: rc, Line: line, Installed: installed}
-	switch sh {
+	st := Status{Shell: canonical, RcPath: rc, Line: line, Installed: installed}
+	switch canonical {
 	case "bash":
 		st.LoginPath, st.LoginSources = inspectBashLogin()
 	default:
