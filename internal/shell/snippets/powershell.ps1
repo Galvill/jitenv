@@ -37,8 +37,19 @@
 # model would have those disable it. Normalise to the bash/zsh
 # contract: enabled iff set to something other than the empty
 # string / 0 / false / no / off (case-insensitive). #107
+#
+# We accept both `$env:JITENV_HOOK_DEBUG=1` (environment variable)
+# and `$JITENV_HOOK_DEBUG=1` / `$global:JITENV_HOOK_DEBUG=1` (shell
+# variable). Bash/zsh have no such distinction — the user just sets
+# JITENV_HOOK_DEBUG — so on PowerShell forgetting the `env:` prefix
+# is the obvious mistake, and silently failing to enable debug
+# wastes the user's time. Env var wins if both are set.
 function global:__jitenv_debug_on {
     $v = $env:JITENV_HOOK_DEBUG
+    if (-not $v) {
+        $gv = Get-Variable -Name JITENV_HOOK_DEBUG -Scope Global -ErrorAction SilentlyContinue
+        if ($gv) { $v = [string]$gv.Value }
+    }
     if (-not $v) { return $false }
     switch ($v.ToLowerInvariant()) {
         '0'     { return $false }

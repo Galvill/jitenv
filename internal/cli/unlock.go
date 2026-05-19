@@ -119,7 +119,7 @@ func warnIfHookMissing(w interface {
 		// but the hook will never auto-inject (#164).
 		if st.Unsupported != "" {
 			fmt.Fprintf(w,
-				"%snote:%s detected shell %q (from $SHELL=%q) is not supported by jitenv. "+
+				"%snote:%s detected shell %q (%s) is not supported by jitenv. "+
 					"Only %s have hooks; the agent is running, but path-mapped commands "+
 					"won't auto-inject env vars in this shell.\n",
 				yellow, reset, st.Unsupported, st.Source,
