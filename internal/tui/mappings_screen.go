@@ -258,6 +258,43 @@ func (s *mappingFormScreen) isEmpty() bool {
 	return mp != nil && mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" && len(mp.Vars) == 0
 }
 
+// isPartial reports whether the in-progress mapping has been touched
+// but isn't yet complete enough to be saved. A complete mapping needs
+// (a) a target (Path / Glob / CwdGlob set), (b) at least one VarRef,
+// and (c) for cwd mappings, at least one entry in Commands. Anything
+// in between — target without vars, cwd_glob without commands, vars
+// without target — is a partial mapping and should prompt the user
+// before Esc silently saves it as cruft (#163).
+func (s *mappingFormScreen) isPartial() bool {
+	mp := s.mp()
+	if mp == nil {
+		return false
+	}
+	if mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" && len(mp.Vars) == 0 {
+		return false // fully empty — handled by isEmpty()
+	}
+	if mp.Path == "" && mp.Glob == "" && mp.CwdGlob == "" {
+		return true // vars without a target
+	}
+	if len(mp.Vars) == 0 {
+		return true // target without vars
+	}
+	if mp.CwdGlob != "" && len(mp.Commands) == 0 {
+		return true // cwd_glob without commands
+	}
+	return false
+}
+
+// discardMapping removes the in-progress mapping from the slice and
+// pops the form. Used by the Esc-on-empty fast path and by the
+// Discard branch of the resume/discard prompt.
+func (s *mappingFormScreen) discardMapping() tea.Cmd {
+	if s.idx >= 0 && s.idx < len(s.root.cfg.Mappings) {
+		s.root.cfg.Mappings = append(s.root.cfg.Mappings[:s.idx], s.root.cfg.Mappings[s.idx+1:]...)
+	}
+	return tea.Sequence(emit(popMsg{}), emit(mappingChangedMsg{}))
+}
+
 // maxCursor returns the highest valid cursor row. Cwd mappings get an
 // extra "commands" row above "variables".
 func (s *mappingFormScreen) maxCursor() int {
@@ -281,11 +318,25 @@ func (s *mappingFormScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "enter":
 			return s, s.activate()
 		case "esc":
-			if s.creating && s.isEmpty() {
-				if s.idx >= 0 && s.idx < len(s.root.cfg.Mappings) {
-					s.root.cfg.Mappings = append(s.root.cfg.Mappings[:s.idx], s.root.cfg.Mappings[s.idx+1:]...)
+			if s.creating {
+				if s.isEmpty() {
+					return s, s.discardMapping()
 				}
-				return s, tea.Sequence(emit(popMsg{}), emit(mappingChangedMsg{}))
+				if s.isPartial() {
+					// Half-filled mapping — prompt rather than save
+					// inert cruft into the config (#163).
+					return s, emit(pushMsg{s: newConfirmScreen(
+						s.root,
+						"This mapping is incomplete (missing target, variables, or commands). Resume editing or discard?",
+						func(choice string) tea.Cmd {
+							if choice == "Discard" {
+								return tea.Sequence(emit(popMsg{}), s.discardMapping())
+							}
+							return emit(popMsg{}) // Resume: just close the confirm modal
+						},
+						"Resume", "Discard",
+					)})
+				}
 			}
 			return s, emit(popMsg{})
 		}
