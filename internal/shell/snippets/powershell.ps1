@@ -30,6 +30,40 @@ $__jitenv_nonceBytes = New-Object byte[] 16
 $env:__JITENV_SESSION_NONCE = -join ($__jitenv_nonceBytes | ForEach-Object { $_.ToString('x2') })
 Remove-Variable -Name '__jitenv_nonceBytes' -Scope Local -ErrorAction SilentlyContinue
 
+# JITENV_HOOK_DEBUG truthiness helper. PowerShell's bare
+# `if ($env:JITENV_HOOK_DEBUG)` treats any non-empty string as true,
+# so the obvious-looking "JITENV_HOOK_DEBUG=0" or "=false" in a
+# Windows env editor silently ENABLE debug — the user's mental model
+# would have those disable it. Normalise to the bash/zsh contract:
+# enabled iff set to something other than the empty string / 0 /
+# false / no / off (case-insensitive). #107
+function global:__jitenv_debug_on {
+    $v = $env:JITENV_HOOK_DEBUG
+    if (-not $v) { return $false }
+    switch ($v.ToLowerInvariant()) {
+        '0'     { return $false }
+        'false' { return $false }
+        'no'    { return $false }
+        'off'   { return $false }
+        ''      { return $false }
+    }
+    return $true
+}
+
+# __jitenv_log mirrors bash.sh / zsh.sh: a single chokepoint that
+# writes a `jitenv-hook: ...` line to stderr when debug is on, and
+# no-ops otherwise. Every decision branch in the hook should call
+# this so a user can see why a command did or did not get rewritten
+# (#107). Writes to stderr via [Console]::Error so it goes through
+# the same channel as native commands rather than PowerShell's
+# error stream (which would render as a red error blob).
+function global:__jitenv_log {
+    param([string]$msg)
+    if (__jitenv_debug_on) {
+        [Console]::Error.WriteLine("jitenv-hook: $msg")
+    }
+}
+
 $global:__JITENV_RUNTIME_DIR = {{RuntimeDir}}
 $global:__JITENV_CFG_PATH    = {{ConfigPath}}
 # Recorded so the shim can tell "this shell typed the command" from
@@ -83,6 +117,7 @@ $global:__JITENV_ORIG_PROMPT = $function:prompt
 
 function global:__jitenv_chpwd {
     $cur = (Get-Location).Path
+    __jitenv_log "chpwd: from=$__JITENV_LAST_PWD to=$cur"
     # No 2>$null on purpose: the chpwd subcommand is silent in normal
     # operation (it only writes to stderr when JITENV_HOOK_DEBUG is
     # set). Swallowing stderr here would hide debug diagnostics and a
@@ -91,9 +126,7 @@ function global:__jitenv_chpwd {
     try {
         & jitenv __chpwd "$PID" $__JITENV_LAST_PWD $cur | Out-Null
     } catch {
-        if ($env:JITENV_HOOK_DEBUG) {
-            Write-Error $_
-        }
+        __jitenv_log "chpwd: error: $_"
     }
     $global:__JITENV_LAST_PWD = $cur
 }
@@ -154,7 +187,10 @@ function global:__jitenv_resolve_path {
 # direct-call-with-stubbed-zle pattern in e2e/scenarios/.
 function global:__jitenv_rewrite_buffer {
     param([string]$buffer)
-    if (-not $buffer) { return $buffer }
+    if (-not $buffer) {
+        __jitenv_log "rewrite: empty buffer; no-op"
+        return $buffer
+    }
     # Split on the first run of ASCII whitespace. Simple shell-style
     # tokenisation matches what the user typed; full PSParser would be
     # overkill and would diverge from the zsh widget's behaviour.
@@ -168,21 +204,35 @@ function global:__jitenv_rewrite_buffer {
     }
     $first = __jitenv_unquote $first
     $resolved = __jitenv_resolve_path $first
-    if (-not $resolved) { return $buffer }
-    if (-not (Test-Path -PathType Leaf -LiteralPath $resolved)) { return $buffer }
+    if (-not $resolved) {
+        __jitenv_log "rewrite: first=$first not path-shaped; leaving buffer"
+        return $buffer
+    }
+    if (-not (Test-Path -PathType Leaf -LiteralPath $resolved)) {
+        __jitenv_log "rewrite: resolved=$resolved does not exist; leaving buffer"
+        return $buffer
+    }
     & jitenv is-mapped $resolved 2>$null | Out-Null
     $rc = $LASTEXITCODE
-    if ($env:JITENV_HOOK_DEBUG) {
-        [Console]::Error.WriteLine("jitenv-hook: candidate=$buffer resolved=$resolved is-mapped=$rc")
-    }
+    __jitenv_log "rewrite: candidate=$buffer resolved=$resolved is-mapped rc=$rc"
     # Exit code contract (see internal/cli/ismapped.go):
     #   0 → mapped, route through `jitenv run`
     #   1 → not mapped, leave the buffer alone
     #   2 → config unreadable, leave the buffer alone (matches bash hook)
-    if ($rc -eq 0) {
-        return ('jitenv run "{0}"{1}' -f $resolved, $rest)
+    switch ($rc) {
+        0 {
+            __jitenv_log "rewrite: branch=case0 (mapped → jitenv run)"
+            return ('jitenv run "{0}"{1}' -f $resolved, $rest)
+        }
+        2 {
+            __jitenv_log "rewrite: branch=case2 (config unreadable — letting command run)"
+            return $buffer
+        }
+        default {
+            __jitenv_log "rewrite: branch=case* (rc=$rc — unmapped, let it run)"
+            return $buffer
+        }
     }
-    return $buffer
 }
 
 # PSReadLine AcceptLine binding. Fires on Enter while the line editor
@@ -199,10 +249,18 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
         [string]$buffer = $null
         [int]$cursor = 0
         [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$buffer, [ref]$cursor)
+        __jitenv_log "accept-line: buffer=[$buffer]"
         $rewritten = __jitenv_rewrite_buffer $buffer
         if ($rewritten -ne $buffer) {
+            __jitenv_log "accept-line: applying rewrite → [$rewritten]"
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $buffer.Length, $rewritten)
         }
         [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
     }
+} else {
+    # No PSReadLine present (Remove-Module PSReadLine, constrained-
+    # language mode, stripped Windows images). Surface this once at
+    # hook load so a user wondering why path/glob mappings don't fire
+    # gets a clear signal under JITENV_HOOK_DEBUG=1.
+    __jitenv_log "accept-line: PSReadLine not available; path/glob interception disabled (cwd_glob still works)"
 }
