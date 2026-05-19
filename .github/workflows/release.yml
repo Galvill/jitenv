@@ -15,7 +15,11 @@ concurrency:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    # macOS runner is required: the `notarize:` block uses Apple's
+    # `codesign` + `notarytool`, both macOS-only. The Linux deb/rpm
+    # nfpms artifacts are still produced here — nfpm runs anywhere
+    # since it doesn't shell out to dpkg/rpm. Issue #13.
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,3 +44,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # macOS signing + notarization (#13). Goreleaser's
+          # `notarize:` block skips itself when MACOS_SIGN_P12 is
+          # empty, so unsigned releases keep working until the
+          # secrets are configured in repo settings.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
