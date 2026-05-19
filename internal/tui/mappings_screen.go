@@ -137,9 +137,19 @@ func (m *mappingsListScreen) View() string {
 	}
 
 	for i, mp := range m.root.cfg.Mappings {
+		count, known := expandedVarCount(m.root.cfg, &mp)
+		suffix := "vars"
+		if !known {
+			// At least one expand-all reference points at a source
+			// whose bag we couldn't size synchronously (typically a
+			// remote source not pre-fetched). Render as a lower
+			// bound so the user sees N+ rather than a misleadingly
+			// precise number.
+			suffix = "vars+"
+		}
 		row := fmt.Sprintf("%-44s  %s",
 			truncate(mappingLabel(mp), 44),
-			dimText(fmt.Sprintf("(%d vars)", len(mp.Vars))))
+			dimText(fmt.Sprintf("(%d %s)", count, suffix)))
 		if i+1 == m.cursor {
 			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
 		} else {
@@ -147,6 +157,40 @@ func (m *mappingsListScreen) View() string {
 		}
 	}
 	return b.String()
+}
+
+// expandedVarCount returns the number of env vars `mp` will inject
+// on a match, expanding "whole bag" references (VarRef with empty
+// Name) by the source's bag size (#165). For local-source expand-all
+// refs the bag size is read directly from cfg.Secrets — no async
+// fetch needed. For remote-source expand-all refs we can't know the
+// size without an HTTP/SDK call we'd rather not run from the
+// mappings-list render path, so the count returns known=false and
+// the caller renders a lower-bound `N+`.
+func expandedVarCount(cfg *config.Config, mp *config.Mapping) (count int, known bool) {
+	if cfg == nil || mp == nil {
+		return 0, true
+	}
+	known = true
+	for _, v := range mp.Vars {
+		if v.Name != "" {
+			// Named ref → exactly one env var.
+			count++
+			continue
+		}
+		// Expand-all reference. Try the synchronous local-source
+		// shortcut first.
+		sc, srcOK := cfg.Sources[v.Source]
+		if srcOK && sc.Type == "local" {
+			count += len(cfg.Secrets[v.Ref])
+			continue
+		}
+		// Remote source or unknown — we'd need an async bag fetch
+		// to size this accurately. Surface the unknown via known=false
+		// and don't add anything to count.
+		known = false
+	}
+	return count, known
 }
 
 func mappingLabel(mp config.Mapping) string {
