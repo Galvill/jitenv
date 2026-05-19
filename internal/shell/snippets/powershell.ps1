@@ -16,27 +16,27 @@
 #
 # The runtime-dir + config-path values below are baked in by
 # `jitenv hook powershell` at print time. See internal/shell/render.go.
+#
+# Structure: function definitions and the PSReadLine binding live
+# ABOVE the __JITENV_LOADED guard so re-sourcing this snippet (e.g.
+# after upgrading the jitenv binary in the same pwsh session) picks
+# up the new code. Only the one-shot session setup — nonce, paths,
+# wrap dir, PATH prepend, original-prompt capture, and the initial
+# chpwd kick — sits below the guard.
 
-if ($global:__JITENV_LOADED) { return }
-$global:__JITENV_LOADED = $true
-
-# Per-session nonce — used by jitenv run/shim to validate the
-# __JITENV_INJECTED bypass marker (security #120). Generated from
-# the platform CSPRNG so a malicious pre-set __JITENV_INJECTED=1
-# from a hostile profile / CI env doesn't silently disable secret
-# injection.
-$__jitenv_nonceBytes = New-Object byte[] 16
-[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($__jitenv_nonceBytes)
-$env:__JITENV_SESSION_NONCE = -join ($__jitenv_nonceBytes | ForEach-Object { $_.ToString('x2') })
-Remove-Variable -Name '__jitenv_nonceBytes' -Scope Local -ErrorAction SilentlyContinue
+# -----------------------------------------------------------------
+# Always-installed helpers. `function global:` redefines on each
+# source, so these stay current after an upgrade-in-place even
+# though the one-shot section below is guarded. (#107 follow-up)
+# -----------------------------------------------------------------
 
 # JITENV_HOOK_DEBUG truthiness helper. PowerShell's bare
 # `if ($env:JITENV_HOOK_DEBUG)` treats any non-empty string as true,
 # so the obvious-looking "JITENV_HOOK_DEBUG=0" or "=false" in a
-# Windows env editor silently ENABLE debug — the user's mental model
-# would have those disable it. Normalise to the bash/zsh contract:
-# enabled iff set to something other than the empty string / 0 /
-# false / no / off (case-insensitive). #107
+# Windows env editor silently ENABLE debug — the user's mental
+# model would have those disable it. Normalise to the bash/zsh
+# contract: enabled iff set to something other than the empty
+# string / 0 / false / no / off (case-insensitive). #107
 function global:__jitenv_debug_on {
     $v = $env:JITENV_HOOK_DEBUG
     if (-not $v) { return $false }
@@ -64,42 +64,11 @@ function global:__jitenv_log {
     }
 }
 
-$global:__JITENV_RUNTIME_DIR = {{RuntimeDir}}
-$global:__JITENV_CFG_PATH    = {{ConfigPath}}
-# Recorded so the shim can tell "this shell typed the command" from
-# "an unmapped descendant spawned the wrapped binary"; only the former
-# should pull in mapped env vars (issue #52).
-$global:__JITENV_SHELL_PID   = $PID
-$global:__JITENV_WRAP_DIR    = Join-Path $__JITENV_RUNTIME_DIR (Join-Path 'shells' (Join-Path "$PID" 'bin'))
-$global:__JITENV_LAST_PWD    = ''
-$env:__JITENV_SHELL_PID      = "$PID"
-$env:__JITENV_WRAP_DIR       = $__JITENV_WRAP_DIR
-
-# Create the wrap dir up-front so the PATH prepend has a real target
-# even before the first prompt fires. New-Item -Force is idempotent.
-New-Item -ItemType Directory -Force -Path $__JITENV_WRAP_DIR | Out-Null
-
-# Prepend, once per shell. PATHEXT must include .PS1 for the wrappers
-# to resolve when the user types `npm` (default on pwsh 7).
-#
-# Use $env:PATH (upper-case) rather than $env:Path. On Windows pwsh
-# env-var lookups are case-insensitive and either form works; on Linux
-# pwsh they are case-sensitive and the env var is named PATH — the
-# mixed-case form returns an empty string, which silently breaks both
-# the contains-check and the assignment. Same applies elsewhere in
-# this script.
-$__jitenv_pathSeparator = [System.IO.Path]::PathSeparator
-$__jitenv_existing = $env:PATH -split [regex]::Escape($__jitenv_pathSeparator)
-if (-not ($__jitenv_existing -contains $__JITENV_WRAP_DIR)) {
-    $env:PATH = $__JITENV_WRAP_DIR + $__jitenv_pathSeparator + $env:PATH
-}
-Remove-Variable __jitenv_pathSeparator, __jitenv_existing -ErrorAction SilentlyContinue
-
 # Tiny per-shell $JITENV_CONFIG override so users can re-point one
 # shell at a different config without re-sourcing the hook. The
-# baked-in default (see __JITENV_CFG_PATH above) is what `jitenv`
-# itself resolves; this function only exists so callers can query the
-# effective config path from inside the shell.
+# baked-in default (see __JITENV_CFG_PATH below) is what `jitenv`
+# itself resolves; this function only exists so callers can query
+# the effective config path from inside the shell.
 function global:__jitenv_cfg_path {
     if ($env:JITENV_CONFIG) {
         return $env:JITENV_CONFIG
@@ -109,20 +78,19 @@ function global:__jitenv_cfg_path {
 
 # chpwd: pwsh has no native chpwd event, so we drive `jitenv __chpwd`
 # from the prompt function (the only hook that runs once per
-# interactive submission). The Go side compares pwd and the config-file
-# mtime against per-shell sidecar state and short-circuits when nothing
-# changed. Keeping the state in Go means re-sourcing the hook doesn't
-# cause a spurious reconcile.
-$global:__JITENV_ORIG_PROMPT = $function:prompt
-
+# interactive submission). The Go side compares pwd and the
+# config-file mtime against per-shell sidecar state and short-
+# circuits when nothing changed. Keeping the state in Go means re-
+# sourcing the hook doesn't cause a spurious reconcile.
 function global:__jitenv_chpwd {
     $cur = (Get-Location).Path
     __jitenv_log "chpwd: from=$__JITENV_LAST_PWD to=$cur"
-    # No 2>$null on purpose: the chpwd subcommand is silent in normal
-    # operation (it only writes to stderr when JITENV_HOOK_DEBUG is
-    # set). Swallowing stderr here would hide debug diagnostics and a
-    # "jitenv: command not found" if the binary ever falls off PATH
-    # mid-session. Errors are still trapped so the prompt never breaks.
+    # No 2>$null on purpose: the chpwd subcommand is silent in
+    # normal operation (it only writes to stderr when
+    # JITENV_HOOK_DEBUG is set). Swallowing stderr here would hide
+    # debug diagnostics and a "jitenv: command not found" if the
+    # binary ever falls off PATH mid-session. Errors are still
+    # trapped so the prompt never breaks.
     try {
         & jitenv __chpwd "$PID" $__JITENV_LAST_PWD $cur | Out-Null
     } catch {
@@ -131,25 +99,9 @@ function global:__jitenv_chpwd {
     $global:__JITENV_LAST_PWD = $cur
 }
 
-function global:prompt {
-    __jitenv_chpwd
-    if ($__JITENV_ORIG_PROMPT) {
-        & $__JITENV_ORIG_PROMPT
-    } else {
-        "PS $((Get-Location).Path)> "
-    }
-}
-
-# Run once at hook-load so the wrap dir is populated before the first
-# command in this shell (matches bash/zsh behaviour).
-__jitenv_chpwd
-
-# The agent-down "Press Enter to skip, Ctrl+C to abort" countdown is
-# implemented in Go (internal/agentwarn/agentwarn.go) and rendered by
-# the cwd_glob shim and `jitenv run`. Nothing here needs to paint it.
-
-# Strip one matching pair of surrounding quotes ('foo' / "foo"). Used
-# by the AcceptLine rewrite to mirror the zsh widget's case-handling.
+# Strip one matching pair of surrounding quotes ('foo' / "foo").
+# Used by the AcceptLine rewrite to mirror the zsh widget's case-
+# handling.
 function global:__jitenv_unquote {
     param([string]$s)
     if (-not $s -or $s.Length -lt 2) { return $s }
@@ -162,12 +114,12 @@ function global:__jitenv_unquote {
     return $s
 }
 
-# Resolve a typed first token to an absolute filesystem path, or $null
-# when it isn't path-shaped. Only ./..-relative and rooted paths are
-# treated as commands the hook should intercept; bare names fall
-# through to the existing $PATH/cwd_glob flow unchanged (issue #52).
-# IsPathRooted handles both Unix `/foo` and Windows `C:\foo` /
-# `C:/foo` forms.
+# Resolve a typed first token to an absolute filesystem path, or
+# $null when it isn't path-shaped. Only ./..-relative and rooted
+# paths are treated as commands the hook should intercept; bare
+# names fall through to the existing $PATH/cwd_glob flow unchanged
+# (issue #52). IsPathRooted handles both Unix `/foo` and Windows
+# `C:\foo` / `C:/foo` forms.
 function global:__jitenv_resolve_path {
     param([string]$first)
     if (-not $first) { return $null }
@@ -180,11 +132,11 @@ function global:__jitenv_resolve_path {
 }
 
 # Pure rewrite function: given a typed command buffer, return the
-# rewritten buffer (`jitenv run "<path>"<rest>`) when the first token
-# resolves to a mapped file, otherwise return the buffer unchanged.
-# Factored out of the AcceptLine handler so it can be unit-tested
-# without instantiating PSReadLine — mirrors the zsh widget's
-# direct-call-with-stubbed-zle pattern in e2e/scenarios/.
+# rewritten buffer (`jitenv run "<path>"<rest>`) when the first
+# token resolves to a mapped file, otherwise return the buffer
+# unchanged. Factored out of the AcceptLine handler so it can be
+# unit-tested without instantiating PSReadLine — mirrors the zsh
+# widget's direct-call-with-stubbed-zle pattern in e2e/scenarios/.
 function global:__jitenv_rewrite_buffer {
     param([string]$buffer)
     if (-not $buffer) {
@@ -192,8 +144,8 @@ function global:__jitenv_rewrite_buffer {
         return $buffer
     }
     # Split on the first run of ASCII whitespace. Simple shell-style
-    # tokenisation matches what the user typed; full PSParser would be
-    # overkill and would diverge from the zsh widget's behaviour.
+    # tokenisation matches what the user typed; full PSParser would
+    # be overkill and would diverge from the zsh widget's behaviour.
     $i = $buffer.IndexOfAny([char[]]@([char]32, [char]9))
     if ($i -lt 0) {
         $first = $buffer
@@ -235,14 +187,18 @@ function global:__jitenv_rewrite_buffer {
     }
 }
 
-# PSReadLine AcceptLine binding. Fires on Enter while the line editor
-# is active; non-interactive `pwsh -Command` invocations never hit it,
-# so jitenv-driven scripts continue to run unchanged.
+# PSReadLine AcceptLine binding. Fires on Enter while the line
+# editor is active; non-interactive `pwsh -Command` invocations
+# never hit it, so jitenv-driven scripts continue to run unchanged.
 #
 # Guarded by Get-Command so the snippet is safe in PSReadLine-less
-# environments (Remove-Module PSReadLine, constrained-language mode,
-# very stripped Windows images). When PSReadLine is absent, only the
-# cwd_glob flow remains — same as the v1 cutoff.
+# environments (Remove-Module PSReadLine, constrained-language
+# mode, very stripped Windows images). When PSReadLine is absent,
+# only the cwd_glob flow remains.
+#
+# Set-PSReadLineKeyHandler is idempotent — re-registering replaces
+# the previous binding — so this line is safe to run on every
+# re-source.
 if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
     Set-PSReadLineKeyHandler -Chord Enter -BriefDescription 'jitenv-accept-line' -LongDescription 'Route mapped paths through `jitenv run` before submitting.' -ScriptBlock {
         param($key, $arg)
@@ -259,8 +215,91 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
     }
 } else {
     # No PSReadLine present (Remove-Module PSReadLine, constrained-
-    # language mode, stripped Windows images). Surface this once at
-    # hook load so a user wondering why path/glob mappings don't fire
-    # gets a clear signal under JITENV_HOOK_DEBUG=1.
+    # language mode, stripped Windows images). Surface this at
+    # hook-load so a user wondering why path/glob mappings don't
+    # fire gets a clear signal under JITENV_HOOK_DEBUG=1.
     __jitenv_log "accept-line: PSReadLine not available; path/glob interception disabled (cwd_glob still works)"
 }
+
+# A loud one-line confirmation that the hook (re-)loaded. Helps the
+# user verify their JITENV_HOOK_DEBUG=1 setup is wired up correctly:
+# even before the first `cd` or Enter, sourcing the hook prints this
+# line when debug is on.
+__jitenv_log "hook (re-)loaded; functions installed"
+
+# -----------------------------------------------------------------
+# One-shot session setup. Re-running this snippet in the same pwsh
+# session must NOT re-mint the nonce, re-prepend the wrap dir to
+# PATH, or recapture the original prompt (which by then is *our*
+# prompt). Guarded by __JITENV_LOADED.
+# -----------------------------------------------------------------
+
+if ($global:__JITENV_LOADED) { return }
+$global:__JITENV_LOADED = $true
+
+# Per-session nonce — used by jitenv run/shim to validate the
+# __JITENV_INJECTED bypass marker (security #120). Generated from
+# the platform CSPRNG so a malicious pre-set __JITENV_INJECTED=1
+# from a hostile profile / CI env doesn't silently disable secret
+# injection.
+$__jitenv_nonceBytes = New-Object byte[] 16
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($__jitenv_nonceBytes)
+$env:__JITENV_SESSION_NONCE = -join ($__jitenv_nonceBytes | ForEach-Object { $_.ToString('x2') })
+Remove-Variable -Name '__jitenv_nonceBytes' -Scope Local -ErrorAction SilentlyContinue
+
+$global:__JITENV_RUNTIME_DIR = {{RuntimeDir}}
+$global:__JITENV_CFG_PATH    = {{ConfigPath}}
+# Recorded so the shim can tell "this shell typed the command" from
+# "an unmapped descendant spawned the wrapped binary"; only the
+# former should pull in mapped env vars (issue #52).
+$global:__JITENV_SHELL_PID   = $PID
+$global:__JITENV_WRAP_DIR    = Join-Path $__JITENV_RUNTIME_DIR (Join-Path 'shells' (Join-Path "$PID" 'bin'))
+$global:__JITENV_LAST_PWD    = ''
+$env:__JITENV_SHELL_PID      = "$PID"
+$env:__JITENV_WRAP_DIR       = $__JITENV_WRAP_DIR
+
+# Create the wrap dir up-front so the PATH prepend has a real target
+# even before the first prompt fires. New-Item -Force is idempotent.
+New-Item -ItemType Directory -Force -Path $__JITENV_WRAP_DIR | Out-Null
+
+# Prepend, once per shell. PATHEXT must include .PS1 for the
+# wrappers to resolve when the user types `npm` (default on pwsh 7).
+#
+# Use $env:PATH (upper-case) rather than $env:Path. On Windows pwsh
+# env-var lookups are case-insensitive and either form works; on
+# Linux pwsh they are case-sensitive and the env var is named PATH
+# — the mixed-case form returns an empty string, which silently
+# breaks both the contains-check and the assignment. Same applies
+# elsewhere in this script.
+$__jitenv_pathSeparator = [System.IO.Path]::PathSeparator
+$__jitenv_existing = $env:PATH -split [regex]::Escape($__jitenv_pathSeparator)
+if (-not ($__jitenv_existing -contains $__JITENV_WRAP_DIR)) {
+    $env:PATH = $__JITENV_WRAP_DIR + $__jitenv_pathSeparator + $env:PATH
+}
+Remove-Variable __jitenv_pathSeparator, __jitenv_existing -ErrorAction SilentlyContinue
+
+# Capture the user's original prompt BEFORE installing our wrapper.
+# Re-running the snippet in the same session would otherwise capture
+# our own prompt — which is why this lives below the __JITENV_LOADED
+# guard. The wrapper `prompt` function below is similarly one-shot;
+# updated chpwd / log code reaches the prompt via the always-
+# installed __jitenv_chpwd helper above the guard.
+$global:__JITENV_ORIG_PROMPT = $function:prompt
+
+function global:prompt {
+    __jitenv_chpwd
+    if ($__JITENV_ORIG_PROMPT) {
+        & $__JITENV_ORIG_PROMPT
+    } else {
+        "PS $((Get-Location).Path)> "
+    }
+}
+
+# Run once at hook-load so the wrap dir is populated before the
+# first command in this shell (matches bash/zsh behaviour).
+__jitenv_chpwd
+
+# The agent-down "Press Enter to skip, Ctrl+C to abort" countdown
+# is implemented in Go (internal/agentwarn/agentwarn.go) and
+# rendered by the cwd_glob shim and `jitenv run`. Nothing here
+# needs to paint it.

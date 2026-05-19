@@ -31,11 +31,19 @@ func DetectShell() string {
 // shell (#164):
 //
 //   - canonical: one of bash/zsh/powershell when supported, "" otherwise.
-//   - raw: the basename of $SHELL when present, "" when the env var
-//     is unset (or, on Windows, "" because no detection happened).
-//   - source: the full $SHELL value (or other origin token) used to
-//     derive raw; surfaced in user-facing warnings so the user can
-//     see what jitenv read.
+//   - raw: the basename of the detected shell when present, "" when
+//     nothing was detectable.
+//   - source: the origin token (parent-process path / $SHELL value)
+//     used to derive raw; surfaced in user-facing warnings so the
+//     user can see what jitenv read.
+//
+// Detection order on Unix:
+//  1. Parent process name (Linux /proc/<ppid>/comm, macOS sysctl).
+//     This is the actually-running shell — `fish -c 'jitenv unlock'`
+//     reports "fish" here even when $SHELL says bash. The $SHELL-
+//     only path missed that reproducer; #164 follow-up.
+//  2. $SHELL fallback for non-Linux/Darwin Unixes and when the
+//     parent-process check returns empty.
 //
 // When canonical == "" and raw != "" the caller should treat this as
 // "unsupported shell" and warn the user — the agent will work, but
@@ -43,13 +51,30 @@ func DetectShell() string {
 // nothing actionable to say and callers should stay silent.
 //
 // On Windows we keep the historical optimism of assuming pwsh 7+
-// (canonical = "powershell"). Detecting cmd.exe / Windows PowerShell
-// 5.x requires parent-process inspection and is tracked as a follow-
-// up; returning a non-empty raw would imply we'd looked at the
-// process — we haven't — so it stays empty.
+// (canonical = "powershell"); detecting cmd.exe / Windows PowerShell
+// 5.x requires a different code path and is tracked separately.
 func DetectShellDetailed() (canonical, raw, source string) {
 	if runtime.GOOS == "windows" {
 		return "powershell", "", "runtime.GOOS=windows"
+	}
+	// Prefer parent-process inspection: $SHELL names the user's
+	// login shell, not the shell that actually invoked jitenv.
+	// Without this step `fish -c 'jitenv unlock'` from a bash login
+	// session sees $SHELL=/bin/bash and skips the warning.
+	if pp := parentProcessName(); pp != "" {
+		base := filepath.Base(pp)
+		switch base {
+		case "bash":
+			return "bash", base, "ppid comm=" + base
+		case "zsh":
+			return "zsh", base, "ppid comm=" + base
+		case "fish", "dash", "ksh", "tcsh", "ash", "sh", "nu", "xonsh", "yash", "elvish":
+			return "", base, "ppid comm=" + base
+		}
+		// Parent name didn't match any known shell — could be a
+		// script runner (make, npm, etc.). Fall through to $SHELL
+		// so we keep emitting the per-shell warnings when a known
+		// shell IS the login default.
 	}
 	sh := os.Getenv("SHELL")
 	if sh == "" {
