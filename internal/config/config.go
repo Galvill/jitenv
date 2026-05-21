@@ -38,6 +38,11 @@ type AgentConfig struct {
 	// default-on behaviour exposed by PreRunNoticeEnabled. Read access
 	// should always go through that helper.
 	PreRunNotice *bool `toml:"pre_run_notice,omitempty"`
+	// VersionCheck gates the daily background check against
+	// api.github.com/repos/Galvill/jitenv/releases/latest fired by
+	// the shell hook (#136). Same *bool / default-on pattern as
+	// PreRunNotice. Read access through VersionCheckEnabled.
+	VersionCheck *bool `toml:"version_check,omitempty"`
 }
 
 // PreRunNoticeEnabled reports whether the "jitenv: injected N
@@ -49,6 +54,18 @@ func (a AgentConfig) PreRunNoticeEnabled() bool {
 		return true
 	}
 	return *a.PreRunNotice
+}
+
+// VersionCheckEnabled reports whether the shell hook should run the
+// daily background check for a newer jitenv release. On by default;
+// users who don't want an outbound HTTP call from a secrets tool
+// can flip it off in config.toml (or via JITENV_NO_VERSION_CHECK=1
+// for a per-shell opt-out).
+func (a AgentConfig) VersionCheckEnabled() bool {
+	if a.VersionCheck == nil {
+		return true
+	}
+	return *a.VersionCheck
 }
 
 type SourceConfig struct {

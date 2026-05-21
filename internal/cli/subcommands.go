@@ -18,5 +18,7 @@ func subcommands() []*cobra.Command {
 		newAgentInternalCmd(),
 		newChpwdInternalCmd(),
 		newShimInternalCmd(),
+		newVersionCheckInternalCmd(),
+		newVersionNoticeInternalCmd(),
 	}
 }

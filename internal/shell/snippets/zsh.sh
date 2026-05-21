@@ -64,6 +64,21 @@ precmd_functions+=(__jitenv_chpwd)
 # Populate once at hook-load.
 __jitenv_chpwd
 
+# Version-check (#136): fire-and-forget background HTTP fetch
+# refreshes a 24h-cached sidecar; the foreground __version_notice
+# reads that cache and prints a one-line yellow notice if a newer
+# release is known. Both are guarded server-side by
+# JITENV_NO_VERSION_CHECK / CI / config / version!="dev"; the shell
+# predicate below is a fork-saver.
+#
+# `2>&1 >/dev/null` on the notice (NOT `>/dev/null 2>&1`) silences
+# stdout while keeping stderr on the terminal so the notice is
+# visible. The background fetch silences both.
+if [[ -t 2 && -z "${JITENV_NO_VERSION_CHECK:-}" && -z "${CI:-}" ]]; then
+    ( jitenv __version_check & ) >/dev/null 2>&1
+    jitenv __version_notice 2>&1 >/dev/null
+fi
+
 # The agent-down "Press Enter to skip, Ctrl+C to abort" countdown is
 # implemented in Go (internal/agentwarn/agentwarn.go) and rendered by
 # `jitenv run` / the shim. Nothing in the shell hook needs to paint
