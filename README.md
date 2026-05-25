@@ -122,6 +122,25 @@ jitenv hook install              Append the activation line to your rc file
 jitenv hook status               Show whether the hook is wired up
 ```
 
+## Version check
+
+On hook load each shell tab spawns a fire-and-forget background
+fetch of `api.github.com/repos/Galvill/jitenv/releases/latest`,
+caches the tag at `$XDG_CACHE_HOME/jitenv/version_check.json`
+(Linux/macOS) or `%LOCALAPPDATA%\jitenv\version_check.json`
+(Windows), and prints a one-line stderr notice the next time you
+open a shell if a newer release is available. The fetch is rate-
+limited to once every 24 hours per user, no telemetry headers are
+sent, and only `tag_name` is read from the response. Opt out via:
+
+- `JITENV_NO_VERSION_CHECK=1` for a single shell session,
+- `[agent] version_check = false` in `config.toml` for the user,
+- the `CI` env var (auto-skip — matches every mainstream CI), or
+- a non-TTY stderr (piped output, log capture).
+
+Dev builds (`go install` / plain `go build` with no ldflags) skip
+the check entirely — there is no upgrade story for snapshots.
+
 ## Limitations
 
 - Supported platforms: Linux, macOS, and Windows (PowerShell 7+).

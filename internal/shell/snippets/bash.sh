@@ -75,6 +75,23 @@ __jitenv_chpwd() {
 __jitenv_chpwd
 PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 
+# Version-check (#136): fire-and-forget background HTTP fetch
+# refreshes a 24h-cached sidecar at $XDG_CACHE_HOME/jitenv/
+# version_check.json; the foreground __version_notice reads that
+# cache and prints a one-line yellow notice if a newer release is
+# known. Both are guarded server-side by JITENV_NO_VERSION_CHECK /
+# CI / config / version!="dev" — the shell predicate below is a
+# fork-saver, not the source of truth.
+#
+# `2>&1 >/dev/null` on the notice (NOT `>/dev/null 2>&1`) silences
+# stdout while keeping stderr on the terminal so the notice is
+# visible. The background fetch silences both because nothing it
+# writes is for the user.
+if [[ -t 2 && -z "${JITENV_NO_VERSION_CHECK:-}" && -z "${CI:-}" ]]; then
+    ( jitenv __version_check & ) >/dev/null 2>&1
+    jitenv __version_notice 2>&1 >/dev/null
+fi
+
 shopt -s extdebug
 
 # The agent-down "Press Enter to skip, Ctrl+C to abort" countdown is
