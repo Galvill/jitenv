@@ -187,7 +187,7 @@ func run(invokedAs string, args []string) error {
 			// per-chain checks if needed. Best-effort: a write failure
 			// just degrades to the old behaviour (double notice under
 			// env stripping).
-			_ = writeMarkerFile(selfDir, nonce)
+			_ = writeMarkerFile(selfDir)
 		}
 	}
 
@@ -361,33 +361,54 @@ func findWrapDirInPath() string {
 	return ""
 }
 
-// markerFileSays reports whether a per-shell injection marker exists
-// at <shellDir>/<markerFilename>. Used as the env-stripping fallback
-// for the in-chain bypass check (#182): when an intermediate process
-// (turbo strict env mode, firejail, sandboxer) drops the marker env
-// vars, the file is the surviving signal.
+// markerFileSays reports whether the shim should bypass injection
+// based on the on-disk marker (#182 env-stripping fallback).
 //
-// Returns false on any error (file missing, permission denied,
-// shellDir unresolvable) — the caller falls through to a fresh
-// inject, which is the same behaviour as today when env stripping
-// happens.
+// The marker's content is the process-group id (pgid) of the first
+// shim hop in a command chain. The current shim only treats the
+// marker as a bypass signal when its own pgid matches the file's
+// content — that scopes the bypass to ONE command-chain identity:
+//
+//   - Workers descended from the first shim share its pgid through
+//     fork+execve (kernel inheritance; no explicit setpgrp call),
+//     so they see "match" and bypass cleanly.
+//   - A different command in the same shell (the user's next `npm
+//     run dev` after the previous one ended; or a `git push` running
+//     between two `npm` invocations) gets a fresh pgid from bash's
+//     job-control setpgid(2) call, so it sees "mismatch" → re-inject.
+//
+// Without the pgid match, a stale marker from a previous chain would
+// silently suppress injection — which is the bug the user filed:
+// "after one time the injected file marker is not cleaned and no
+// more injections happen."
+//
+// Returns false on any error (file missing, malformed content,
+// shellDir unresolvable). The caller falls through to a fresh inject.
 func markerFileSays(wrapDir string) bool {
 	shellDir := shellDirFromWrap(wrapDir)
 	if shellDir == "" {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(shellDir, markerFilename))
-	return err == nil
+	b, err := os.ReadFile(filepath.Join(shellDir, markerFilename))
+	if err != nil {
+		return false
+	}
+	want, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || want <= 0 {
+		return false
+	}
+	return currentPgid() == want
 }
 
-// writeMarkerFile drops <shellDir>/<markerFilename> as a one-time
-// signal that the first shim hop in this shell has done its
-// injection. Content is the per-chain nonce so a future tool can
-// scope checks per-chain; today only file presence is consulted.
+// writeMarkerFile drops <shellDir>/<markerFilename> with the caller's
+// process-group id as the file's content. The pgid is what
+// markerFileSays compares against — see that function's doc for the
+// chain-scoping rationale.
+//
 // Mode 0600; owner-only (the shell dir is already 0700 owned by the
 // user). Best-effort — callers ignore errors so a marker-file write
 // failure just falls back to today's behaviour.
-func writeMarkerFile(wrapDir, nonce string) error {
+func writeMarkerFile(wrapDir string) error {
 	shellDir := shellDirFromWrap(wrapDir)
 	if shellDir == "" {
 		return errors.New("cannot derive per-shell dir from wrap dir")
@@ -396,8 +417,8 @@ func writeMarkerFile(wrapDir, nonce string) error {
 		return err
 	}
 	path := filepath.Join(shellDir, markerFilename)
-	// Atomic-via-tempfile: a partially-written marker on power loss
-	// shouldn't cause a confused half-bypass.
+	// Atomic-via-tempfile: a partially-written marker shouldn't
+	// cause a confused half-bypass under a concurrent reader.
 	tmp, err := os.CreateTemp(shellDir, "."+markerFilename+".*.tmp")
 	if err != nil {
 		return err
@@ -408,7 +429,7 @@ func writeMarkerFile(wrapDir, nonce string) error {
 		tmp.Close()
 		return err
 	}
-	if _, err := tmp.WriteString(nonce); err != nil {
+	if _, err := fmt.Fprintf(tmp, "%d", currentPgid()); err != nil {
 		tmp.Close()
 		return err
 	}
