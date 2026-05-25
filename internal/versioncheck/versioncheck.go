@@ -182,7 +182,10 @@ func GitHubLatest(repo, userAgent string) Fetcher {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			io.Copy(io.Discard, resp.Body)
+			// Drain so the keep-alive can reuse the connection; the
+			// copy error doesn't matter here because we're about to
+			// close the body anyway.
+			_, _ = io.Copy(io.Discard, resp.Body)
 			return "", fmt.Errorf("github releases/latest: status %d", resp.StatusCode)
 		}
 		var body struct {

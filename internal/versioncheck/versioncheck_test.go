@@ -123,7 +123,9 @@ func TestGitHubLatest(t *testing.T) {
 			t.Errorf("User-Agent missing or default: got %q", ua)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v0.6.0"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"tag_name": "v0.6.0"}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
