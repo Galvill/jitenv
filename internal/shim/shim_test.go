@@ -227,6 +227,99 @@ func TestShimSuppressesInjectionWithMarker(t *testing.T) {
 	}
 }
 
+// TestShimRecoversWrapDirFromPath is the regression for the second
+// half of #182: when turbo's strict env mode strips __JITENV_WRAP_DIR
+// AND the wrapper is invoked via execvp-by-name (argv[0]="npm", not
+// the full path), the shim's old fallback `filepath.Dir(argv[0])`
+// produces "." — which broke both the PATH-exclusion (infinite
+// re-exec loop) and the marker-file bypass added by the first
+// half of the fix. Recovery scans PATH for an entry strictly under
+// the agent's runtime dir <runtime>/shells/<pid>/bin.
+//
+// Simulates the turbo-worker environment by:
+//   - placing the wrapper under a runtime / shells/<pid>/ bin layout
+//     (so the recovery scan recognises the shape);
+//   - setting XDG_RUNTIME_DIR so agent.DefaultPaths().ShellsDir
+//     resolves to the test's runtime tree;
+//   - dropping the injection marker file in <shellDir>/injected;
+//   - launching the wrapper with argv[0]="fakecmd" (basename only —
+//     mirrors how execvp("npm", argv) passes argv[0]) and env
+//     stripped of __JITENV_WRAP_DIR.
+//
+// The shim must recover the wrap dir via the PATH scan, find the
+// marker, and short-circuit.
+func TestShimRecoversWrapDirFromPath(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realCmd := filepath.Join(fakeBin, "fakecmd")
+	if err := os.WriteFile(realCmd, []byte("#!/bin/sh\necho RAN\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// XDG_RUNTIME_DIR is the root agent.DefaultPaths() resolves
+	// against; the recovery scan walks PATH for entries strictly
+	// under <runtimeDir>/jitenv/shells/, so build the per-shell
+	// tree at that location.
+	runtimeDir := filepath.Join(dir, "runtime")
+	shellsDir := filepath.Join(runtimeDir, "jitenv", "shells")
+	shellDir := filepath.Join(shellsDir, "12345") // synthetic pid
+	wrapDir := filepath.Join(shellDir, "bin")
+	if err := os.MkdirAll(wrapDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(wrapDir, "fakecmd")
+	if err := os.Symlink(bin, wrapper); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte("any-nonce"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// PATH: wrap dir first (so PATH-lookup of "fakecmd" finds the
+	// wrapper), then the real-cmd dir (so lookPathExcluding finds
+	// the real one once the wrap dir is correctly excluded).
+	pathEnv := wrapDir + string(os.PathListSeparator) + fakeBin
+
+	env := []string{
+		"PATH=" + pathEnv,
+		"XDG_RUNTIME_DIR=" + runtimeDir,
+		"JITENV_HOOK_DELAY=0",
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, "HOME="+home)
+	}
+
+	// argv[0]="fakecmd" (basename, not wrapper path) — mirrors how
+	// execvp("npm", argv) leaves argv[0] in a turbo-spawned worker.
+	cmd := exec.Command(wrapper)
+	cmd.Args = []string{"fakecmd"}
+	cmd.Env = env
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v\noutput=%s", err, buf.String())
+	}
+	out := buf.String()
+
+	if strings.Contains(out, "agent is not loaded") {
+		t.Errorf("warning fired despite recoverable wrap dir + marker file; output=%s", out)
+	}
+	if strings.Contains(out, "jitenv: injected") {
+		t.Errorf("notice fired despite recoverable wrap dir + marker file; output=%s", out)
+	}
+	if !strings.Contains(out, "RAN") {
+		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
+	}
+}
+
 // TestShimSuppressesInjectionViaMarkerFile is the regression test for
 // the env-stripping branch of issue #182: turbo strict env mode (and
 // firejail / bwrap / sandboxer variants) strips __JITENV_INJECTED

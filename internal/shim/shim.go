@@ -92,6 +92,24 @@ func run(invokedAs string, args []string) error {
 	if selfDir == "" {
 		selfDir = filepath.Dir(firstArg())
 	}
+	// Env-stripping recovery (#182): when an intermediate process
+	// (turbo strict env mode is the canonical case; firejail / bwrap
+	// / sandboxer variants behave the same) drops __JITENV_WRAP_DIR
+	// before exec, and argv[0] is the bare basename ("npm") because
+	// the caller used execvp-by-name, both lookups above land at "."
+	// — which then breaks both the PATH-exclusion (infinite re-exec
+	// loop) AND the marker-file check (the double-injection symptom
+	// in turbo workers). Recover by scanning PATH for an entry that
+	// lives under the agent's per-user runtime dir and matches the
+	// <runtime>/shells/<pid>/bin shape. The agent verifies that
+	// runtime dir is 0700 owned by the current user (security #117),
+	// so trusting a PATH entry rooted there is no weaker than
+	// reading the agent's socket from the same dir.
+	if !isWrapDirShape(selfDir) {
+		if recovered := findWrapDirInPath(); recovered != "" {
+			selfDir = recovered
+		}
+	}
 	realPath, err := lookPathExcluding(invokedAs, selfDir)
 	if err != nil {
 		return err
@@ -268,6 +286,79 @@ func shellDirFromWrap(wrapDir string) string {
 		return ""
 	}
 	return filepath.Dir(clean)
+}
+
+// isWrapDirShape reports whether p has the structural form of a
+// jitenv per-shell wrapper bin dir: ends in `/bin`, whose parent's
+// basename is a positive integer (the shell pid). Used to detect
+// when the env / argv-derived selfDir is bogus (".", "/usr/bin", a
+// repo subdir, …) and we need to fall back to a PATH scan (#182).
+func isWrapDirShape(p string) bool {
+	if p == "" {
+		return false
+	}
+	clean := filepath.Clean(p)
+	if filepath.Base(clean) != "bin" {
+		return false
+	}
+	pidPart := filepath.Base(filepath.Dir(clean))
+	if pidPart == "." || pidPart == "/" || pidPart == "" {
+		return false
+	}
+	// Must parse as a positive int; the agent only ever creates
+	// dirs named with the shell's pid (decimal).
+	pid, err := strconv.Atoi(pidPart)
+	return err == nil && pid > 0
+}
+
+// findWrapDirInPath scans $PATH for the first entry that matches
+// the wrap-dir shape (<runtime>/shells/<pid>/bin) AND is rooted in
+// the agent's per-user runtime dir. Used as the env-stripping
+// recovery path (#182) — without it, a turbo / firejail / sandboxer
+// worker can't locate its wrap dir and the bypass machinery fails.
+//
+// Constraining to "rooted in the agent runtime dir" closes a
+// hypothetical PATH-prepended-by-attacker downgrade: an attacker
+// who can write /tmp/shells/<pid>/bin and drop a forged "injected"
+// marker file would otherwise be able to suppress env injection.
+// Tying the recovery to the agent's runtime dir (already 0700
+// owned by the user, verified at agent startup per security #117)
+// means a successful recovery is no weaker than reading the
+// agent's own socket from the same dir.
+func findWrapDirInPath() string {
+	paths, err := agent.DefaultPaths()
+	if err != nil {
+		return ""
+	}
+	shellsAbs, err := filepath.Abs(paths.ShellsDir)
+	if err != nil {
+		return ""
+	}
+	sep := string(os.PathSeparator)
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		// abs must sit STRICTLY under <runtime>/shells/ — equal or
+		// outside is rejected. The trailing separator on the prefix
+		// prevents a sibling like <runtime>/shells-evil from sneaking
+		// in.
+		if !strings.HasPrefix(abs+sep, shellsAbs+sep) || abs == shellsAbs {
+			continue
+		}
+		if !isWrapDirShape(abs) {
+			continue
+		}
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			continue
+		}
+		return abs
+	}
+	return ""
 }
 
 // markerFileSays reports whether a per-shell injection marker exists
