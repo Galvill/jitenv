@@ -96,10 +96,17 @@ func (m Mapping) Kind() string {
 
 type VarRef struct {
 	Name   string            `toml:"name"`
-	Source string            `toml:"source"`
+	Source string            `toml:"source,omitempty"`
 	Ref    string            `toml:"ref,omitempty"`
 	Key    string            `toml:"key,omitempty"`
 	Extra  map[string]string `toml:"extra,omitempty"`
+	// Value is a literal env-var value that bypasses source lookup.
+	// Used by `jitenv clone` (#179) to wire GIT_ASKPASS to a stable
+	// per-user askpass shim path that doesn't live in any bag. When
+	// Value is set, Source/Ref/Key/Extra must be empty (Validate
+	// enforces this); when Value is empty, the VarRef resolves via
+	// the source machinery as before.
+	Value string `toml:"value,omitempty"`
 }
 
 // Load reads and parses a config file. It does not decrypt envelopes.
@@ -200,8 +207,22 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("mapping[%d]: at least one var is required", i)
 		}
 		for j, v := range m.Vars {
+			if v.Value != "" {
+				// Literal-value VarRef. Source/Ref/Key/Extra must all be
+				// empty: a value AND a source would mean two different
+				// places to look for the same env var, which is just
+				// confusing config. Name is required so we know what env
+				// var to set.
+				if v.Source != "" || v.Ref != "" || v.Key != "" || len(v.Extra) > 0 {
+					return fmt.Errorf("mapping[%d].vars[%d]: value is exclusive with source/ref/key/extra", i, j)
+				}
+				if v.Name == "" {
+					return fmt.Errorf("mapping[%d].vars[%d]: name is required for a literal-value var", i, j)
+				}
+				continue
+			}
 			if v.Source == "" {
-				return fmt.Errorf("mapping[%d].vars[%d]: source is required", i, j)
+				return fmt.Errorf("mapping[%d].vars[%d]: source is required (or set value for a literal)", i, j)
 			}
 			if v.Name == "" && v.Key != "" {
 				return fmt.Errorf("mapping[%d].vars[%d]: name is required when key is set", i, j)
