@@ -226,3 +226,87 @@ func TestShimSuppressesInjectionWithMarker(t *testing.T) {
 		t.Errorf("expected __JITENV_INJECTED=%s to propagate to child env;\noutput=%s", nonce, out)
 	}
 }
+
+// TestShimSuppressesInjectionViaMarkerFile is the regression test for
+// the env-stripping branch of issue #182: turbo strict env mode (and
+// firejail / bwrap / sandboxer variants) strips __JITENV_INJECTED
+// and __JITENV_SESSION_NONCE before spawning children, so the env-
+// based bypass in TestShimSuppressesInjectionWithMarker can't fire.
+// The fallback is an on-disk marker file at <wrap-dir>/../injected.
+// This test simulates that case directly: drop the marker file by
+// hand (no first-pass run to create it — we want to exercise the
+// file-only branch), then invoke the shim with NO env markers set
+// and confirm the bypass still fires.
+func TestShimSuppressesInjectionViaMarkerFile(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realCmd := filepath.Join(fakeBin, "fakecmd")
+	if err := os.WriteFile(realCmd, []byte("#!/bin/sh\necho RAN\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrap-dir layout MUST be <shellDir>/bin (the shim's
+	// shellDirFromWrap derives shellDir as filepath.Dir(wrapDir) and
+	// rejects wrap-dirs whose basename isn't "bin").
+	shellDir := filepath.Join(dir, "shell-xxx")
+	wrapDir := filepath.Join(shellDir, "bin")
+	if err := os.MkdirAll(wrapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(wrapDir, "fakecmd")
+	if err := os.Symlink(bin, wrapper); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drop the marker file. The shim only checks file presence; the
+	// content can be anything (today the nonce, future tools may
+	// switch to per-chain matching).
+	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte("any-nonce"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeDir := filepath.Join(dir, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pathEnv := fakeBin + string(os.PathListSeparator) + os.Getenv("PATH")
+
+	// Crucially: NO __JITENV_INJECTED, NO __JITENV_SESSION_NONCE, NO
+	// __JITENV_SHELL_PID — simulates turbo's strict-env stripping of
+	// jitenv-namespaced vars. __JITENV_WRAP_DIR is also dropped; the
+	// shim's fallback resolves the wrap dir from argv[0].
+	env := []string{
+		"PATH=" + pathEnv,
+		"XDG_RUNTIME_DIR=" + runtimeDir,
+		"JITENV_HOOK_DELAY=0",
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, "HOME="+home)
+	}
+
+	cmd := exec.Command(wrapper)
+	cmd.Env = env
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v\noutput=%s", err, buf.String())
+	}
+	out := buf.String()
+
+	if strings.Contains(out, "agent is not loaded") {
+		t.Errorf("warning fired despite marker file; output=%s", out)
+	}
+	if strings.Contains(out, "jitenv: injected") {
+		t.Errorf("notice fired despite marker file; output=%s", out)
+	}
+	if !strings.Contains(out, "RAN") {
+		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
+	}
+}

@@ -105,7 +105,17 @@ func run(invokedAs string, args []string) error {
 	// See injectedMarker doc and issue #77. Bypass requires the marker
 	// to match the per-session nonce (security #120) so a stale value
 	// can't silently disable injection.
-	if injectionAlreadyApplied() {
+	//
+	// Two-channel check (#182): the env-marker check above can fail
+	// when an intermediate process strips env vars before spawning a
+	// child — turbo 2.x's Strict Environment Mode is the canonical
+	// case. As a fallback, look for an on-disk marker file under the
+	// per-shell wrap-dir parent (which we can recover from PATH/argv
+	// even when env vars are stripped, because the wrapper had to be
+	// found via PATH to invoke us). The file lives inside the agent's
+	// runtime dir (0700, owner-only); reading it is no weaker than
+	// reading the agent's own socket from the same dir.
+	if injectionAlreadyApplied() || markerFileSays(selfDir) {
 		return execReal(realPath, argv, os.Environ())
 	}
 
@@ -150,6 +160,16 @@ func run(invokedAs string, args []string) error {
 				env = append(env, sessionNonce+"="+nonce)
 			}
 			env = append(env, injectedMarker+"="+nonce)
+			// Drop a per-shell marker file as the env-stripping fallback
+			// (#182). Subsequent shim invocations that have lost the env
+			// marker (turbo strict env mode, firejail, bwrap, …) can
+			// still detect "already injected" by reading this file. The
+			// file's existence — not its contents — is what gates the
+			// bypass; we still write the nonce so a future tool can do
+			// per-chain checks if needed. Best-effort: a write failure
+			// just degrades to the old behaviour (double notice under
+			// env stripping).
+			_ = writeMarkerFile(selfDir, nonce)
 		}
 	}
 
@@ -227,6 +247,84 @@ func firstArg() string {
 		return os.Args[0]
 	}
 	return ""
+}
+
+// markerFilename is the basename of the on-disk "already injected"
+// marker (#182). Lives under the per-shell runtime dir
+// (<runtime>/shells/<shell-pid>/), next to the wrapper bin/.
+// Garbage-collected by agent.GcOrphanShells when the shell exits.
+const markerFilename = "injected"
+
+// shellDirFromWrap returns the per-shell directory derived from a
+// wrap-dir path. The wrap-dir layout is <runtime>/shells/<pid>/bin,
+// so the per-shell dir is one level up. Returns "" when wrapDir is
+// empty or unparseable.
+func shellDirFromWrap(wrapDir string) string {
+	if wrapDir == "" {
+		return ""
+	}
+	clean := filepath.Clean(wrapDir)
+	if filepath.Base(clean) != "bin" {
+		return ""
+	}
+	return filepath.Dir(clean)
+}
+
+// markerFileSays reports whether a per-shell injection marker exists
+// at <shellDir>/<markerFilename>. Used as the env-stripping fallback
+// for the in-chain bypass check (#182): when an intermediate process
+// (turbo strict env mode, firejail, sandboxer) drops the marker env
+// vars, the file is the surviving signal.
+//
+// Returns false on any error (file missing, permission denied,
+// shellDir unresolvable) — the caller falls through to a fresh
+// inject, which is the same behaviour as today when env stripping
+// happens.
+func markerFileSays(wrapDir string) bool {
+	shellDir := shellDirFromWrap(wrapDir)
+	if shellDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(shellDir, markerFilename))
+	return err == nil
+}
+
+// writeMarkerFile drops <shellDir>/<markerFilename> as a one-time
+// signal that the first shim hop in this shell has done its
+// injection. Content is the per-chain nonce so a future tool can
+// scope checks per-chain; today only file presence is consulted.
+// Mode 0600; owner-only (the shell dir is already 0700 owned by the
+// user). Best-effort — callers ignore errors so a marker-file write
+// failure just falls back to today's behaviour.
+func writeMarkerFile(wrapDir, nonce string) error {
+	shellDir := shellDirFromWrap(wrapDir)
+	if shellDir == "" {
+		return errors.New("cannot derive per-shell dir from wrap dir")
+	}
+	if err := os.MkdirAll(shellDir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(shellDir, markerFilename)
+	// Atomic-via-tempfile: a partially-written marker on power loss
+	// shouldn't cause a confused half-bypass.
+	tmp, err := os.CreateTemp(shellDir, "."+markerFilename+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(nonce); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // lookPathExcluding searches $PATH for `name`, skipping any entry that
