@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/Galvill/jitenv/compare/v0.8.0...v0.8.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **release:** use index .Env for homebrew cask token ([#188](https://github.com/Galvill/jitenv/issues/188)) ([42b25e1](https://github.com/Galvill/jitenv/commit/42b25e19693540f23194f97351f4a2f4007ae976))
+
 ## [0.8.0](https://github.com/Galvill/jitenv/compare/v0.7.0...v0.8.0) (2026-05-26)
 
 
