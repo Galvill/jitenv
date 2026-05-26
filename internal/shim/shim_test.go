@@ -406,3 +406,88 @@ func TestShimSuppressesInjectionViaMarkerFile(t *testing.T) {
 		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
 	}
 }
+
+// TestShimWarnPathWritesMarkerFile covers the second symptom of
+// #182: when the agent is locked, the first shim in a command tree
+// hits the warn path (agent-down countdown), the user dismisses it,
+// and the command runs without env injection. Without the on-disk
+// marker, turbo workers strip __JITENV_AGENT_WARNED and re-prompt
+// the countdown per worker (real user bug). This test asserts the
+// shim drops the marker file on the warn path too, so downstream
+// shim hops bypass via markerFileSays() even when env is stripped.
+//
+// We can't drive the interactive countdown from a test, so we
+// detach stdin from a TTY (cmd.Stdin = nil — the agentwarn.WarnAndWait
+// non-TTY fast path runs and returns immediately). That path is the
+// CI / non-interactive flow but exercises the same warn-marker
+// write code below it.
+func TestShimWarnPathWritesMarkerFile(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realCmd := filepath.Join(fakeBin, "fakecmd")
+	if err := os.WriteFile(realCmd, []byte("#!/bin/sh\necho RAN\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// <shellDir>/bin layout so shellDirFromWrap accepts it.
+	shellDir := filepath.Join(dir, "shell-xxx")
+	wrapDir := filepath.Join(shellDir, "bin")
+	if err := os.MkdirAll(wrapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(wrapDir, "fakecmd")
+	if err := os.Symlink(bin, wrapper); err != nil {
+		t.Fatal(err)
+	}
+	// Empty runtime dir → no agent socket → shim hits the warn path.
+	runtimeDir := filepath.Join(dir, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pathEnv := fakeBin + string(os.PathListSeparator) + os.Getenv("PATH")
+	shellPID := strconv.Itoa(os.Getpid())
+
+	env := []string{
+		"PATH=" + pathEnv,
+		"XDG_RUNTIME_DIR=" + runtimeDir,
+		"__JITENV_WRAP_DIR=" + wrapDir,
+		"__JITENV_SHELL_PID=" + shellPID,
+		"JITENV_HOOK_DELAY=0",
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, "HOME="+home)
+	}
+
+	cmd := exec.Command(wrapper)
+	cmd.Env = env
+	// Non-TTY stdin = agentwarn's fast path returns immediately
+	// (it prints the warn and continues without the countdown).
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v\noutput=%s", err, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "agent is not loaded") {
+		t.Errorf("expected agent-down warning;\noutput=%s", out)
+	}
+	if !strings.Contains(out, "RAN") {
+		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
+	}
+
+	// The fix: marker file is present after a warn-path traversal so
+	// downstream re-wrapped commands (turbo workers) bypass instead of
+	// re-prompting the countdown.
+	markerPath := filepath.Join(shellDir, "injected")
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("expected marker file at %s after warn-path; stat err=%v;\noutput=%s",
+			markerPath, err, out)
+	}
+}

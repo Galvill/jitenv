@@ -154,6 +154,15 @@ func run(invokedAs string, args []string) error {
 			// so chained shim entries (e.g. npm → node via shebang)
 			// don't re-prompt.
 			env = append(env, warnedMarker+"=1")
+			// Also drop the on-disk marker (#182 env-stripping
+			// fallback). Without this, turbo-style strict-env workers
+			// strip __JITENV_AGENT_WARNED and re-prompt the user with
+			// the agent-down countdown per worker. Reusing the same
+			// "injected" file is intentional — its semantics are
+			// "this command tree has already done its first-hop
+			// jitenv work (either injected or warn-and-continued)"
+			// and either way descendants should pass through.
+			_ = writeMarkerFile(selfDir)
 		case fetchErr != nil:
 			// Other error (config parse, fetch failure). Surface to
 			// stderr but don't block — the user explicitly invoked the
