@@ -1,0 +1,102 @@
+name: release-rc
+
+# Manual RC tagger. Computes `v<base>-rc.<n>`, creates an annotated tag
+# on the chosen ref, and pushes it. The existing release.yml workflow
+# (triggered on `v*` tags) does the build/sign/upload. goreleaser's
+# `prerelease: auto` + cask `skip_upload: auto` already DTRT for any
+# tag containing `-rc.`: GitHub release is marked pre-release and the
+# Homebrew cask is NOT pushed to the tap.
+#
+# Tags must be pushed under a PAT, not GITHUB_TOKEN — GitHub's
+# recursion guard suppresses workflow triggers for tags authored by
+# GITHUB_TOKEN, which would mean release.yml never fires. Reuses
+# RELEASE_PLEASE_TOKEN (same scope: contents:write on this repo).
+#
+# All workflow_dispatch inputs are routed through `env:` rather than
+# interpolated directly into shell — `workflow_dispatch` requires repo
+# write access to trigger, but the env-var indirection still defeats
+# accidental injection from a maintainer pasting shell metacharacters
+# into a field.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: "Base version without v-prefix or rc suffix, e.g. 0.9.0"
+        required: true
+        type: string
+      rc_number:
+        description: "RC number (positive integer)"
+        required: true
+        type: string
+        default: "1"
+      ref:
+        description: "Ref (branch/SHA) to tag. Defaults to main."
+        required: false
+        type: string
+        default: "main"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-rc
+  cancel-in-progress: false
+
+jobs:
+  tag-rc:
+    runs-on: ubuntu-latest
+    env:
+      BASE_VERSION: ${{ inputs.base_version }}
+      RC_NUMBER: ${{ inputs.rc_number }}
+      SOURCE_REF: ${{ inputs.ref }}
+      ACTOR: ${{ github.actor }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Validate inputs
+        run: |
+          if ! [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::base_version must be MAJOR.MINOR.PATCH (no v-prefix, no suffix)"
+            exit 1
+          fi
+          if ! [[ "$RC_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::rc_number must be a positive integer"
+            exit 1
+          fi
+          echo "TAG=v${BASE_VERSION}-rc.${RC_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Checkout ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          # PAT so the subsequent `git push` of the tag triggers
+          # release.yml. With the default GITHUB_TOKEN, downstream
+          # workflows would be suppressed.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Verify tag does not already exist
+        run: |
+          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::tag ${TAG} already exists locally"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
+            echo "::error::tag ${TAG} already exists on origin"
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push annotated tag
+        run: |
+          sha=$(git rev-parse HEAD)
+          msg=$(printf 'Release candidate %s\n\nSource ref:   %s\nSource SHA:   %s\nTriggered by: %s\nWorkflow run: %s\n' \
+            "$TAG" "$SOURCE_REF" "$sha" "$ACTOR" "$RUN_URL")
+          git tag -a "$TAG" -m "$msg"
+          git push origin "$TAG"
+          echo "Pushed $TAG -> $sha"
+          echo "release.yml will now build and publish the pre-release."
