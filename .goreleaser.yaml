@@ -123,10 +123,10 @@ nfpms:
 # `brews:` block.
 #
 # Cross-repo pushes need a PAT scoped to the tap repo; the default
-# GITHUB_TOKEN can only write to the current repo. envOrDefault keeps
-# `goreleaser release --snapshot` working locally when the secret is
-# absent — combined with `skip_upload: auto` it just generates the
-# cask in dist/ without trying to push.
+# GITHUB_TOKEN can only write to the current repo. `index .Env "..."`
+# returns "" when the secret is absent, so `goreleaser release
+# --snapshot` keeps working locally — combined with `skip_upload:
+# auto` it just generates the cask in dist/ without trying to push.
 #
 # Without notarization the cask sets `no_quarantine: true` so the
 # Gatekeeper hard-block doesn't fire on install. Users still see the
@@ -138,7 +138,7 @@ homebrew_casks:
       owner: Galvill
       name: homebrew-jitenv
       branch: main
-      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
+      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
     directory: Casks
     homepage: https://github.com/Galvill/jitenv
     description: Just-in-time env-var injection from pluggable secret sources, scoped to per-command process trees
