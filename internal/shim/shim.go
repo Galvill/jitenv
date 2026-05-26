@@ -364,46 +364,39 @@ func findWrapDirInPath() string {
 // markerFileSays reports whether the shim should bypass injection
 // based on the on-disk marker (#182 env-stripping fallback).
 //
-// The marker's content is the process-group id (pgid) of the first
-// shim hop in a command chain. The current shim only treats the
-// marker as a bypass signal when its own pgid matches the file's
-// content — that scopes the bypass to ONE command-chain identity:
+// Bypass on file presence alone. The marker's lifetime is scoped to
+// "one user command" by the shell hook's PROMPT_COMMAND-driven
+// __chpwd, which unlinks the file between every prompt (see
+// internal/chpwd.Run). So inside a running command tree the file
+// exists → workers bypass; between two prompts the file is gone →
+// the next command re-injects.
 //
-//   - Workers descended from the first shim share its pgid through
-//     fork+execve (kernel inheritance; no explicit setpgrp call),
-//     so they see "match" and bypass cleanly.
-//   - A different command in the same shell (the user's next `npm
-//     run dev` after the previous one ended; or a `git push` running
-//     between two `npm` invocations) gets a fresh pgid from bash's
-//     job-control setpgid(2) call, so it sees "mismatch" → re-inject.
+// Earlier iterations of this fix scoped the bypass by writing the
+// caller's pgid into the file and matching it on read. That broke
+// when intermediate tools (turbo's task runner being the canonical
+// example) put each worker in its own process group via setpgid(2)
+// for signal isolation — the workers' pgid didn't match the top-
+// level shim's, so they re-injected and the notice fired per
+// worker. The chpwd-driven cleanup is independent of whether
+// downstream tools fork into new pgrps, so it survives both cases.
 //
-// Without the pgid match, a stale marker from a previous chain would
-// silently suppress injection — which is the bug the user filed:
-// "after one time the injected file marker is not cleaned and no
-// more injections happen."
-//
-// Returns false on any error (file missing, malformed content,
-// shellDir unresolvable). The caller falls through to a fresh inject.
+// Returns false on any error (file missing, shellDir unresolvable).
+// The caller falls through to a fresh inject.
 func markerFileSays(wrapDir string) bool {
 	shellDir := shellDirFromWrap(wrapDir)
 	if shellDir == "" {
 		return false
 	}
-	b, err := os.ReadFile(filepath.Join(shellDir, markerFilename))
-	if err != nil {
-		return false
-	}
-	want, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || want <= 0 {
-		return false
-	}
-	return currentPgid() == want
+	_, err := os.Stat(filepath.Join(shellDir, markerFilename))
+	return err == nil
 }
 
-// writeMarkerFile drops <shellDir>/<markerFilename> with the caller's
-// process-group id as the file's content. The pgid is what
-// markerFileSays compares against — see that function's doc for the
-// chain-scoping rationale.
+// writeMarkerFile drops <shellDir>/<markerFilename> as a one-shot
+// signal that the first shim hop in this command chain has done its
+// injection. Content is informational only — markerFileSays gates
+// on existence. Writing the pgid keeps the file useful for ad-hoc
+// debugging ("which pgrp dropped this?") and is a stable identifier
+// of the first shim that injected.
 //
 // Mode 0600; owner-only (the shell dir is already 0700 owned by the
 // user). Best-effort — callers ignore errors so a marker-file write

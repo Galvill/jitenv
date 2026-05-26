@@ -4,29 +4,13 @@ package shim_test
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
-
-// pgidForChild returns the process-group id a freshly exec.Command-
-// spawned child will inherit from this test process. Used by the
-// marker-file tests (#182) — the marker's content is compared to
-// the child's pgid, so the file we drop has to record the exact
-// number the child will read.
-func pgidForChild(t *testing.T) int {
-	t.Helper()
-	pgid, err := syscall.Getpgid(os.Getpid())
-	if err != nil {
-		t.Fatalf("Getpgid: %v", err)
-	}
-	return pgid
-}
 
 // buildBinary compiles the jitenv binary into the test's temp dir so
 // we can drop wrapper symlinks pointing at it. Mirrors the helper in
@@ -297,7 +281,7 @@ func TestShimRecoversWrapDirFromPath(t *testing.T) {
 	// Marker content must be the child's pgid for markerFileSays to
 	// honour it (pgid-based scoping fixes the "stale marker bypasses
 	// next command" bug from #182).
-	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte(fmt.Sprintf("%d", pgidForChild(t))), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte("any-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -379,7 +363,7 @@ func TestShimSuppressesInjectionViaMarkerFile(t *testing.T) {
 	// Marker content is the chain's process-group id. Children
 	// spawned by exec.Command inherit this test's pgid, so writing
 	// our pgid here makes the bypass fire under the child.
-	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte(fmt.Sprintf("%d", pgidForChild(t))), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte("any-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -421,97 +405,4 @@ func TestShimSuppressesInjectionViaMarkerFile(t *testing.T) {
 	if !strings.Contains(out, "RAN") {
 		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
 	}
-}
-
-// TestShimMarkerFromForeignPgidDoesNotBypass is the regression for
-// the user-reported follow-up on #182: after one foreground command
-// chain wrote the marker file, the user's next `npm run dev` in the
-// same shell found the marker still on disk and short-circuited —
-// no notice, no injection.
-//
-// Fix: the marker's content is the first shim's process-group id;
-// bypass only fires when the current process's pgid matches. A new
-// command from bash starts in a fresh pgid (job-control setpgid) so
-// the stale marker mismatches → fresh inject.
-//
-// This test drops a marker file with a deliberately-wrong pgid
-// (1 — the init process; guaranteed not to be this test's pgrp)
-// and expects the shim to re-inject (notice prints, real binary
-// runs).
-func TestShimMarkerFromForeignPgidDoesNotBypass(t *testing.T) {
-	bin := buildBinary(t)
-
-	dir := t.TempDir()
-
-	fakeBin := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	realCmd := filepath.Join(fakeBin, "fakecmd")
-	if err := os.WriteFile(realCmd, []byte("#!/bin/sh\necho RAN\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Layout for shellDirFromWrap to accept: <shellDir>/bin.
-	shellDir := filepath.Join(dir, "shell-xxx")
-	wrapDir := filepath.Join(shellDir, "bin")
-	if err := os.MkdirAll(wrapDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	wrapper := filepath.Join(wrapDir, "fakecmd")
-	if err := os.Symlink(bin, wrapper); err != nil {
-		t.Fatal(err)
-	}
-
-	// Foreign pgid in marker. Child's actual pgid (inherited from
-	// this test process) is guaranteed != 1 unless the test is
-	// running as PID 1, which doesn't happen under `go test`.
-	if err := os.WriteFile(filepath.Join(shellDir, "injected"), []byte("1"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	runtimeDir := filepath.Join(dir, "runtime")
-	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	pathEnv := fakeBin + string(os.PathListSeparator) + os.Getenv("PATH")
-	// __JITENV_SHELL_PID present and matching so shouldInject() takes
-	// the inject branch when the marker correctly fails to bypass.
-	shellPID := strconv.Itoa(os.Getpid())
-
-	env := []string{
-		"PATH=" + pathEnv,
-		"XDG_RUNTIME_DIR=" + runtimeDir,
-		"__JITENV_WRAP_DIR=" + wrapDir,
-		"__JITENV_SHELL_PID=" + shellPID,
-		"JITENV_HOOK_DELAY=0",
-	}
-	if home := os.Getenv("HOME"); home != "" {
-		env = append(env, "HOME="+home)
-	}
-
-	cmd := exec.Command(wrapper)
-	cmd.Env = env
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run: %v\noutput=%s", err, buf.String())
-	}
-	out := buf.String()
-
-	// The shim should re-inject (agent is down here so the warning
-	// fires instead of the notice; either way the bypass MUST NOT
-	// have suppressed both).
-	if !strings.Contains(out, "agent is not loaded") {
-		t.Errorf("expected agent-down warning (proves no bypass);\noutput=%s", out)
-	}
-	if !strings.Contains(out, "RAN") {
-		t.Errorf("expected fakecmd to exec ('RAN');\noutput=%s", out)
-	}
-
-	// The agent-down branch doesn't rewrite the marker (the rewrite
-	// only happens when fetch succeeds), so we don't assert on the
-	// marker content here. The "no bypass" semantics — proven by the
-	// warning firing above — are what this test guards.
 }
