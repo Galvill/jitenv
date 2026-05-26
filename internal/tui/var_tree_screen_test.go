@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/gv/jitenv/internal/config"
@@ -146,6 +148,81 @@ func TestVarTree_TickBagClearsIndividualKeys(t *testing.T) {
 		if k.sel {
 			t.Fatalf("individual key sel should be cleared when bag goes 'all'")
 		}
+	}
+}
+
+// manyKeysFixture builds a config with a single local bag holding n
+// keys (KEY00, KEY01, …) so the flattened tree (1 header + n keys)
+// comfortably exceeds a short terminal — the #194 repro.
+func manyKeysFixture(n int) *config.Config {
+	keys := map[string]string{}
+	for i := 0; i < n; i++ {
+		keys[fmt.Sprintf("KEY%02d", i)] = "v"
+	}
+	return &config.Config{
+		Sources:  map[string]config.SourceConfig{"local": {Type: "local"}},
+		Secrets:  map[string]map[string]string{"big": keys},
+		Mappings: []config.Mapping{{Path: "/x.sh"}},
+	}
+}
+
+// renderPanelBody drives the full root render path (panel + status +
+// footer, including renderApp's bottom clamp) for one screen at a
+// fixed terminal size, then strips the trailing status + footer lines
+// so assertions on body content aren't confused by the status bar's
+// own "↑/↓: move" help text. This is what catches #194: View() alone
+// emits every row, so the bug only surfaces once renderApp clips the
+// body to the terminal height.
+func renderPanelBody(r *rootModel, s screen, w, h int) string {
+	r.width, r.height = w, h
+	r.stack = []screen{s}
+	lines := strings.Split(r.View(), "\n")
+	if len(lines) > 2 { // drop status + footer
+		lines = lines[:len(lines)-2]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestVarTree_ScrollKeepsCursorVisible is the #194 regression: with a
+// tree taller than the terminal, moving the cursor to the last row must
+// still render that row (and its focus marker) inside the clamped body,
+// with an "↑ more" affordance showing the list scrolled.
+func TestVarTree_ScrollKeepsCursorVisible(t *testing.T) {
+	r := makeRoot(manyKeysFixture(30))
+	scr := newVarTreeScreen(r, 0).(*varTreeScreen)
+
+	rows := scr.flatRows()
+	scr.cursor = len(rows) - 1 // last key
+
+	out := renderPanelBody(r, scr, 80, 15) // short terminal
+	if !strings.Contains(out, "▶") {
+		t.Fatalf("focus marker missing when scrolled to bottom:\n%s", out)
+	}
+	if !strings.Contains(out, "KEY29") {
+		t.Fatalf("focused last row KEY29 not in clamped body:\n%s", out)
+	}
+	if !strings.Contains(out, "↑") {
+		t.Fatalf("expected up-scroll affordance at bottom:\n%s", out)
+	}
+	// The bag header (row 0) must have scrolled out of the window.
+	if strings.Contains(out, "(30 keys)") {
+		t.Fatalf("bag header should have scrolled off:\n%s", out)
+	}
+}
+
+// TestVarTree_ScrollAffordanceAtTop confirms the inverse: at the top of
+// a too-tall tree there's a "↓ more" affordance but no "↑ more".
+func TestVarTree_ScrollAffordanceAtTop(t *testing.T) {
+	r := makeRoot(manyKeysFixture(30))
+	scr := newVarTreeScreen(r, 0).(*varTreeScreen)
+	scr.cursor = 0
+
+	out := renderPanelBody(r, scr, 80, 15)
+	if strings.Contains(out, "↑") {
+		t.Errorf("no up affordance expected at top:\n%s", out)
+	}
+	if !strings.Contains(out, "↓") {
+		t.Errorf("expected down affordance at top:\n%s", out)
 	}
 }
 
