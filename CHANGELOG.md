@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/Galvill/jitenv/compare/v0.8.1...v0.9.0) (2026-05-26)
+
+
+### Features
+
+* **release:** add manual RC tagger workflow ([#192](https://github.com/Galvill/jitenv/issues/192)) ([910a898](https://github.com/Galvill/jitenv/commit/910a898a33093bd34d6a6b4d3f31ace12f79046c))
+
+
+### Bug Fixes
+
+* **cli:** mkdir config parent before TUI lockfile acquire ([#190](https://github.com/Galvill/jitenv/issues/190)) ([#191](https://github.com/Galvill/jitenv/issues/191)) ([e23465f](https://github.com/Galvill/jitenv/commit/e23465f969ad50274c684ee42be8d0cada4799e5))
+
 ## [0.8.1](https://github.com/Galvill/jitenv/compare/v0.8.0...v0.8.1) (2026-05-26)
 
 
