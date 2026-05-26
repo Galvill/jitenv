@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -22,10 +23,17 @@ func TestRunConfigTUICreatesConfigDirOnFreshInstall(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses %LOCALAPPDATA% pathing + a different no-op binary; covered by manual repro")
 	}
+	// Locate `true` portably: macOS runners ship it at /usr/bin/true,
+	// most Linux distros at /bin/true (some at both). exec.LookPath
+	// hits PATH, which is reliable across both.
+	noop, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("no `true` binary on PATH: %v", err)
+	}
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("JITENV_CONFIG", "")
-	t.Setenv("JITENV_TUI_BIN", "/bin/true")
+	t.Setenv("JITENV_TUI_BIN", noop)
 
 	saved := configPath
 	configPath = ""
