@@ -121,6 +121,15 @@ func runConfigTUI() error {
 	if err != nil {
 		return err
 	}
+	// Fresh installs hit this before the TUI's loadOrInit flow has a
+	// chance to mkdir the parent (#190 regression from #166). The
+	// lockfile open uses O_CREATE but not MkdirAll, so without the
+	// parent dir we fail with ENOENT before the "no config — create a
+	// new one?" prompt can run. Mode 0700 matches what config.InitNew
+	// uses, so we're not introducing a new permission surface.
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
 	lock, lockErr := lockfile.Acquire(cfgPath + ".tui.lock")
 	if lockErr != nil {
 		if errors.Is(lockErr, os.ErrExist) {
