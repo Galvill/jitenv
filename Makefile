@@ -17,17 +17,19 @@ LDFLAGS := -s -w \
 
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/jitenv
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN)-tui ./cmd/jitenv-tui
 
-# Cross-compile the Windows binary. Stage 1 (#80) made the codebase
-# compile for GOOS=windows; the runtime port lands in #86-91. Useful
-# for reviewers verifying a Windows-touching PR really produces an
-# executable — `go build ./...` is a compile-check only and does not
-# emit a .exe.
+# Cross-compile the Windows binaries. The TUI ships as a separate
+# binary (#182 bug B): the main jitenv binary stays free of
+# Bubble Tea / Lip Gloss imports so it doesn't query the terminal
+# on every invocation.
 build-windows:
 	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN).exe ./cmd/jitenv
+	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN)-tui.exe ./cmd/jitenv-tui
 
 install: build
 	install -Dm0755 bin/$(BIN) $(PREFIX)/bin/$(BIN)
+	install -Dm0755 bin/$(BIN)-tui $(PREFIX)/bin/$(BIN)-tui
 
 test:
 	$(GO) test ./...

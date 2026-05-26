@@ -92,6 +92,24 @@ func run(invokedAs string, args []string) error {
 	if selfDir == "" {
 		selfDir = filepath.Dir(firstArg())
 	}
+	// Env-stripping recovery (#182): when an intermediate process
+	// (turbo strict env mode is the canonical case; firejail / bwrap
+	// / sandboxer variants behave the same) drops __JITENV_WRAP_DIR
+	// before exec, and argv[0] is the bare basename ("npm") because
+	// the caller used execvp-by-name, both lookups above land at "."
+	// — which then breaks both the PATH-exclusion (infinite re-exec
+	// loop) AND the marker-file check (the double-injection symptom
+	// in turbo workers). Recover by scanning PATH for an entry that
+	// lives under the agent's per-user runtime dir and matches the
+	// <runtime>/shells/<pid>/bin shape. The agent verifies that
+	// runtime dir is 0700 owned by the current user (security #117),
+	// so trusting a PATH entry rooted there is no weaker than
+	// reading the agent's socket from the same dir.
+	if !isWrapDirShape(selfDir) {
+		if recovered := findWrapDirInPath(); recovered != "" {
+			selfDir = recovered
+		}
+	}
 	realPath, err := lookPathExcluding(invokedAs, selfDir)
 	if err != nil {
 		return err
@@ -105,7 +123,17 @@ func run(invokedAs string, args []string) error {
 	// See injectedMarker doc and issue #77. Bypass requires the marker
 	// to match the per-session nonce (security #120) so a stale value
 	// can't silently disable injection.
-	if injectionAlreadyApplied() {
+	//
+	// Two-channel check (#182): the env-marker check above can fail
+	// when an intermediate process strips env vars before spawning a
+	// child — turbo 2.x's Strict Environment Mode is the canonical
+	// case. As a fallback, look for an on-disk marker file under the
+	// per-shell wrap-dir parent (which we can recover from PATH/argv
+	// even when env vars are stripped, because the wrapper had to be
+	// found via PATH to invoke us). The file lives inside the agent's
+	// runtime dir (0700, owner-only); reading it is no weaker than
+	// reading the agent's own socket from the same dir.
+	if injectionAlreadyApplied() || markerFileSays(selfDir) {
 		return execReal(realPath, argv, os.Environ())
 	}
 
@@ -126,6 +154,15 @@ func run(invokedAs string, args []string) error {
 			// so chained shim entries (e.g. npm → node via shebang)
 			// don't re-prompt.
 			env = append(env, warnedMarker+"=1")
+			// Also drop the on-disk marker (#182 env-stripping
+			// fallback). Without this, turbo-style strict-env workers
+			// strip __JITENV_AGENT_WARNED and re-prompt the user with
+			// the agent-down countdown per worker. Reusing the same
+			// "injected" file is intentional — its semantics are
+			// "this command tree has already done its first-hop
+			// jitenv work (either injected or warn-and-continued)"
+			// and either way descendants should pass through.
+			_ = writeMarkerFile(selfDir)
 		case fetchErr != nil:
 			// Other error (config parse, fetch failure). Surface to
 			// stderr but don't block — the user explicitly invoked the
@@ -150,6 +187,16 @@ func run(invokedAs string, args []string) error {
 				env = append(env, sessionNonce+"="+nonce)
 			}
 			env = append(env, injectedMarker+"="+nonce)
+			// Drop a per-shell marker file as the env-stripping fallback
+			// (#182). Subsequent shim invocations that have lost the env
+			// marker (turbo strict env mode, firejail, bwrap, …) can
+			// still detect "already injected" by reading this file. The
+			// file's existence — not its contents — is what gates the
+			// bypass; we still write the nonce so a future tool can do
+			// per-chain checks if needed. Best-effort: a write failure
+			// just degrades to the old behaviour (double notice under
+			// env stripping).
+			_ = writeMarkerFile(selfDir)
 		}
 	}
 
@@ -227,6 +274,171 @@ func firstArg() string {
 		return os.Args[0]
 	}
 	return ""
+}
+
+// markerFilename is the basename of the on-disk "already injected"
+// marker (#182). Lives under the per-shell runtime dir
+// (<runtime>/shells/<shell-pid>/), next to the wrapper bin/.
+// Garbage-collected by agent.GcOrphanShells when the shell exits.
+const markerFilename = "injected"
+
+// shellDirFromWrap returns the per-shell directory derived from a
+// wrap-dir path. The wrap-dir layout is <runtime>/shells/<pid>/bin,
+// so the per-shell dir is one level up. Returns "" when wrapDir is
+// empty or unparseable.
+func shellDirFromWrap(wrapDir string) string {
+	if wrapDir == "" {
+		return ""
+	}
+	clean := filepath.Clean(wrapDir)
+	if filepath.Base(clean) != "bin" {
+		return ""
+	}
+	return filepath.Dir(clean)
+}
+
+// isWrapDirShape reports whether p has the structural form of a
+// jitenv per-shell wrapper bin dir: ends in `/bin`, whose parent's
+// basename is a positive integer (the shell pid). Used to detect
+// when the env / argv-derived selfDir is bogus (".", "/usr/bin", a
+// repo subdir, …) and we need to fall back to a PATH scan (#182).
+func isWrapDirShape(p string) bool {
+	if p == "" {
+		return false
+	}
+	clean := filepath.Clean(p)
+	if filepath.Base(clean) != "bin" {
+		return false
+	}
+	pidPart := filepath.Base(filepath.Dir(clean))
+	if pidPart == "." || pidPart == "/" || pidPart == "" {
+		return false
+	}
+	// Must parse as a positive int; the agent only ever creates
+	// dirs named with the shell's pid (decimal).
+	pid, err := strconv.Atoi(pidPart)
+	return err == nil && pid > 0
+}
+
+// findWrapDirInPath scans $PATH for the first entry that matches
+// the wrap-dir shape (<runtime>/shells/<pid>/bin) AND is rooted in
+// the agent's per-user runtime dir. Used as the env-stripping
+// recovery path (#182) — without it, a turbo / firejail / sandboxer
+// worker can't locate its wrap dir and the bypass machinery fails.
+//
+// Constraining to "rooted in the agent runtime dir" closes a
+// hypothetical PATH-prepended-by-attacker downgrade: an attacker
+// who can write /tmp/shells/<pid>/bin and drop a forged "injected"
+// marker file would otherwise be able to suppress env injection.
+// Tying the recovery to the agent's runtime dir (already 0700
+// owned by the user, verified at agent startup per security #117)
+// means a successful recovery is no weaker than reading the
+// agent's own socket from the same dir.
+func findWrapDirInPath() string {
+	paths, err := agent.DefaultPaths()
+	if err != nil {
+		return ""
+	}
+	shellsAbs, err := filepath.Abs(paths.ShellsDir)
+	if err != nil {
+		return ""
+	}
+	sep := string(os.PathSeparator)
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		// abs must sit STRICTLY under <runtime>/shells/ — equal or
+		// outside is rejected. The trailing separator on the prefix
+		// prevents a sibling like <runtime>/shells-evil from sneaking
+		// in.
+		if !strings.HasPrefix(abs+sep, shellsAbs+sep) || abs == shellsAbs {
+			continue
+		}
+		if !isWrapDirShape(abs) {
+			continue
+		}
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			continue
+		}
+		return abs
+	}
+	return ""
+}
+
+// markerFileSays reports whether the shim should bypass injection
+// based on the on-disk marker (#182 env-stripping fallback).
+//
+// Bypass on file presence alone. The marker's lifetime is scoped to
+// "one user command" by the shell hook's PROMPT_COMMAND-driven
+// __chpwd, which unlinks the file between every prompt (see
+// internal/chpwd.Run). So inside a running command tree the file
+// exists → workers bypass; between two prompts the file is gone →
+// the next command re-injects.
+//
+// Earlier iterations of this fix scoped the bypass by writing the
+// caller's pgid into the file and matching it on read. That broke
+// when intermediate tools (turbo's task runner being the canonical
+// example) put each worker in its own process group via setpgid(2)
+// for signal isolation — the workers' pgid didn't match the top-
+// level shim's, so they re-injected and the notice fired per
+// worker. The chpwd-driven cleanup is independent of whether
+// downstream tools fork into new pgrps, so it survives both cases.
+//
+// Returns false on any error (file missing, shellDir unresolvable).
+// The caller falls through to a fresh inject.
+func markerFileSays(wrapDir string) bool {
+	shellDir := shellDirFromWrap(wrapDir)
+	if shellDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(shellDir, markerFilename))
+	return err == nil
+}
+
+// writeMarkerFile drops <shellDir>/<markerFilename> as a one-shot
+// signal that the first shim hop in this command chain has done its
+// injection. Content is informational only — markerFileSays gates
+// on existence. Writing the pgid keeps the file useful for ad-hoc
+// debugging ("which pgrp dropped this?") and is a stable identifier
+// of the first shim that injected.
+//
+// Mode 0600; owner-only (the shell dir is already 0700 owned by the
+// user). Best-effort — callers ignore errors so a marker-file write
+// failure just falls back to today's behaviour.
+func writeMarkerFile(wrapDir string) error {
+	shellDir := shellDirFromWrap(wrapDir)
+	if shellDir == "" {
+		return errors.New("cannot derive per-shell dir from wrap dir")
+	}
+	if err := os.MkdirAll(shellDir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(shellDir, markerFilename)
+	// Atomic-via-tempfile: a partially-written marker shouldn't
+	// cause a confused half-bypass under a concurrent reader.
+	tmp, err := os.CreateTemp(shellDir, "."+markerFilename+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := fmt.Fprintf(tmp, "%d", currentPgid()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // lookPathExcluding searches $PATH for `name`, skipping any entry that
