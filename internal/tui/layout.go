@@ -52,6 +52,39 @@ func renderApp(w, h int, body, status string) string {
 	return panel + "\n" + statusLine + "\n" + footerLine
 }
 
+// scrollOffset adjusts a list's scroll offset so the cursor stays
+// inside the visible window [off, off+visible), moving the window by
+// the minimal amount needed (so the list doesn't jump on every move).
+// total is the number of rows, visible the number that fit on screen.
+// The returned offset is clamped to a valid range, and is 0 whenever
+// everything fits. Screens hold the offset as state and re-derive it
+// each render; renderApp's bottom clamp already protects against
+// overflow, so callers only need to keep the focused row inside the
+// slice they emit.
+//
+// Lives here (not in a single screen) so the mappings / secrets /
+// sources list screens can adopt the same windowing — see #194.
+func scrollOffset(off, cursor, total, visible int) int {
+	if visible < 1 {
+		visible = 1
+	}
+	if visible >= total {
+		return 0
+	}
+	if cursor < off {
+		off = cursor
+	} else if cursor >= off+visible {
+		off = cursor - visible + 1
+	}
+	if maxOff := total - visible; off > maxOff {
+		off = maxOff
+	}
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
 var copyrightStyle = lipgloss.NewStyle().
 	Foreground(colorMuted).
 	Faint(true).

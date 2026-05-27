@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -12,7 +14,6 @@ import (
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/lockfile"
-	"github.com/gv/jitenv/internal/tui"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -120,6 +121,15 @@ func runConfigTUI() error {
 	if err != nil {
 		return err
 	}
+	// Fresh installs hit this before the TUI's loadOrInit flow has a
+	// chance to mkdir the parent (#190 regression from #166). The
+	// lockfile open uses O_CREATE but not MkdirAll, so without the
+	// parent dir we fail with ENOENT before the "no config — create a
+	// new one?" prompt can run. Mode 0700 matches what config.InitNew
+	// uses, so we're not introducing a new permission surface.
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
 	lock, lockErr := lockfile.Acquire(cfgPath + ".tui.lock")
 	if lockErr != nil {
 		if errors.Is(lockErr, os.ErrExist) {
@@ -129,7 +139,68 @@ func runConfigTUI() error {
 	}
 	defer lock.Close()
 
-	return tui.Run(configPath)
+	return execJitenvTUI("run", configPath)
+}
+
+// execJitenvTUI re-execs the separate jitenv-tui binary, replacing
+// the current process's stdio with the child's so the TUI renders
+// directly to the user's terminal. The split exists to keep the
+// main `jitenv` binary's import graph free of Bubble Tea / Lip Gloss
+// / termenv — those libs send OSC 11 + CPR queries to the tty at
+// package-init time, and the responses leak into captured output of
+// every jitenv subcommand on terminals that don't manage the
+// responses cleanly (turbo strict-env pty, #182 bug B).
+//
+// Resolution order for the binary:
+//  1. JITENV_TUI_BIN env var (test / dev override).
+//  2. Sibling to the running jitenv executable (typical packaging
+//     case: both binaries live in /usr/local/bin or the Homebrew
+//     cellar bin/).
+//  3. PATH lookup.
+//
+// On error 127 ("not found") the user gets a clear message pointing
+// at the install — common cause is upgrading jitenv without picking
+// up the new sibling binary.
+func execJitenvTUI(args ...string) error {
+	binPath, err := resolveJitenvTUIPath()
+	if err != nil {
+		return err
+	}
+	c := exec.Command(binPath, args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Env = os.Environ()
+	if err := c.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.ExitCode())
+		}
+		return fmt.Errorf("jitenv-tui: %w", err)
+	}
+	return nil
+}
+
+func resolveJitenvTUIPath() (string, error) {
+	if override := os.Getenv("JITENV_TUI_BIN"); override != "" {
+		return override, nil
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		dir := filepath.Dir(exe)
+		candidate := filepath.Join(dir, jitenvTUIBinName())
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	if p, err := exec.LookPath(jitenvTUIBinName()); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf(
+		"jitenv-tui not found (looked next to jitenv and on $PATH). "+
+			"The interactive TUI ships as a separate binary; if you upgraded jitenv "+
+			"manually, ensure %s is installed alongside.",
+		jitenvTUIBinName(),
+	)
 }
 
 func zeroBytes(b []byte) {

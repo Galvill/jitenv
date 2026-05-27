@@ -69,6 +69,28 @@ func Run(args []string) error {
 	wrapDir := paths.ShellWrapDir(pid)
 	mtimePath := lastMtimePath(paths, pid)
 
+	// Scope the shim's on-disk injection marker (#182) to "one user
+	// command" by unlinking it on every prompt fire. The marker
+	// lives at <shellsDir>/<pid>/injected; the shim creates it after
+	// a successful first-hop inject so descendants (turbo workers,
+	// chained interpreters) bypass instead of double-fetching. Once
+	// the user's command tree has exited and bash/zsh fires
+	// PROMPT_COMMAND → __chpwd, we delete the file so the NEXT
+	// command starts clean and gets a fresh injection + notice.
+	//
+	// Best-effort: a stat/unlink failure (file missing — first
+	// prompt of the session, or already cleaned up) is fine. Run
+	// BEFORE the short-circuit-on-unchanged-state below: the marker
+	// must be cleaned even when pwd + cfg mtime didn't change, which
+	// is the common case for a foreground `npm run dev` that
+	// completes in the same dir.
+	markerPath := filepath.Join(filepath.Dir(wrapDir), "injected")
+	if err := os.Remove(markerPath); err == nil {
+		debugLog("removed injection marker %s", markerPath)
+	} else if !os.IsNotExist(err) {
+		debugLog("remove injection marker %s: %v", markerPath, err)
+	}
+
 	cfgPath, cfgErr := config.Resolve(os.Getenv("JITENV_CONFIG"))
 	curMtime := statMtime(cfgPath)
 	lastMtime := readLastMtime(mtimePath)
