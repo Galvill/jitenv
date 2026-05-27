@@ -20,5 +20,7 @@ func subcommands() []*cobra.Command {
 		newShimInternalCmd(),
 		newVersionCheckInternalCmd(),
 		newVersionNoticeInternalCmd(),
+		newCloneCmd(),
+		newGitAskpassInternalCmd(),
 	}
 }

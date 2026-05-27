@@ -114,6 +114,14 @@ func (r *resolver) CwdCommands(pwd string) []string {
 func (r *resolver) fetchVars(ctx context.Context, vars []config.VarRef) (map[string]string, error) {
 	out := map[string]string{}
 	for _, v := range vars {
+		if v.Value != "" {
+			// Literal-value VarRef (#179). No source lookup needed —
+			// the value is right here in the config. Validate already
+			// rejected the "value AND source" ambiguity, so we just
+			// assign and move on.
+			out[v.Name] = v.Value
+			continue
+		}
 		s, ok := r.sources[v.Source]
 		if !ok {
 			return nil, fmt.Errorf("var %s: source %q not configured", v.Name, v.Source)
