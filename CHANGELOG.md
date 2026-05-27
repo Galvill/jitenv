@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/Galvill/jitenv/compare/v0.9.0...v0.9.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **tui:** scroll the var-selection tree to keep the cursor visible ([#194](https://github.com/Galvill/jitenv/issues/194)) ([#195](https://github.com/Galvill/jitenv/issues/195)) ([bb3e98e](https://github.com/Galvill/jitenv/commit/bb3e98e8918bf3991d54e505ee5d170e4fb18a99))
+
 ## [0.9.0](https://github.com/Galvill/jitenv/compare/v0.8.1...v0.9.0) (2026-05-26)
 
 
