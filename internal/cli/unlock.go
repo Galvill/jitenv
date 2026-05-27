@@ -30,7 +30,7 @@ func newUnlockCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pw, err := crypto.PromptPassphrase("Passphrase: ", false)
+			pw, err := crypto.PromptPassphrase("jitenv unlock passphrase: ", false)
 			if err != nil {
 				return err
 			}

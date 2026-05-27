@@ -41,7 +41,7 @@ func newConfigInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pw, err := crypto.PromptPassphrase("New passphrase: ", true)
+			pw, err := crypto.PromptPassphrase("jitenv config: new passphrase: ", true)
 			if err != nil {
 				return err
 			}
@@ -69,7 +69,7 @@ func newConfigShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pw, err := crypto.PromptPassphrase("Passphrase: ", false)
+			pw, err := crypto.PromptPassphrase("jitenv config show passphrase: ", false)
 			if err != nil {
 				return err
 			}

@@ -124,7 +124,7 @@ func loadOrInit(cfgPath string) (*config.Config, []byte, error) {
 		default:
 			return nil, nil, errors.New("aborted")
 		}
-		pw, err := crypto.PromptPassphrase("New passphrase: ", true)
+		pw, err := crypto.PromptPassphrase("jitenv config: new passphrase: ", true)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -135,7 +135,7 @@ func loadOrInit(cfgPath string) (*config.Config, []byte, error) {
 		fmt.Fprintf(os.Stderr, "Created %s\n", cfgPath)
 	}
 
-	pw, err := crypto.PromptPassphrase("Passphrase: ", false)
+	pw, err := crypto.PromptPassphrase("jitenv config passphrase: ", false)
 	if err != nil {
 		return nil, nil, err
 	}
