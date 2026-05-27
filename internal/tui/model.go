@@ -32,6 +32,11 @@ type rootModel struct {
 	flash    string // transient overlay: temporary message in the title bar
 	flashErr bool
 
+	// footerHint is a one-line context label rendered in the
+	// footer when non-empty. Used by RunWithMappingTemplate (#179)
+	// to remind the user the TUI was opened by `jitenv clone`.
+	footerHint string
+
 	err    error // fatal error returned from prog.Run
 	width  int
 	height int
@@ -136,6 +141,11 @@ func (r *rootModel) View() string {
 		status = flashStyle.Render("» "+r.flash) + "    " + dimText(status) + "    " + dirtyTag
 	} else {
 		status = status + "    " + dirtyTag
+	}
+	// Prepend the one-shot footerHint set by RunWithMappingTemplate
+	// so users see why the TUI opened on a Create-New screen (#179).
+	if r.footerHint != "" {
+		status = dimText(r.footerHint) + "    " + status
 	}
 
 	return renderApp(r.width, r.height, r.top().View(), status)
