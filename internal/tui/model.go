@@ -29,6 +29,12 @@ type rootModel struct {
 	savedSinceLastReload bool
 	hookChecked          bool // true once we've prompted to install the shell hook this session
 
+	// quitAfterHookPrompt is set by the Save & quit flow (menu.go) so
+	// the next savedMsg surfaces the hook prompt and then quits once the
+	// user answers, instead of quitting before the prompt can render
+	// (#205). The normal Ctrl+S path leaves it false.
+	quitAfterHookPrompt bool
+
 	flash    string // transient overlay: temporary message in the title bar
 	flashErr bool
 
@@ -107,11 +113,19 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r.savedSinceLastReload = true
 		r.flash = "saved"
 		r.flashErr = false
+		quitAfter := r.quitAfterHookPrompt
+		r.quitAfterHookPrompt = false
 		if !r.hookChecked {
 			r.hookChecked = true
-			if cmd := maybePromptInstallHook(r); cmd != nil {
+			if cmd := maybePromptInstallHook(r, quitAfter); cmd != nil {
 				return r, cmd
 			}
+		}
+		// Save & quit with no prompt to show (hook already installed,
+		// unsupported shell, or already prompted this session): quit
+		// now rather than leaving the user stuck in the TUI (#205).
+		if quitAfter {
+			return r, tea.Quit
 		}
 		return r, nil
 	}

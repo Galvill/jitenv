@@ -152,7 +152,13 @@ func (m *menuScreen) quitFlow() tea.Cmd {
 	cb := func(choice string) tea.Cmd {
 		switch choice {
 		case "Save & quit":
-			return tea.Sequence(saveCmd(m.root), emit(popMsg{}), tea.Quit)
+			// Don't tea.Quit here: that would terminate before the
+			// post-save hook prompt can render. Set the intent flag and
+			// let the savedMsg handler surface the prompt (if any) and
+			// quit once the user answers — or quit immediately when
+			// there's no prompt to show (#205).
+			m.root.quitAfterHookPrompt = true
+			return tea.Sequence(emit(popMsg{}), saveCmd(m.root))
 		case "Discard":
 			return tea.Sequence(emit(popMsg{}), tea.Quit)
 		default:
