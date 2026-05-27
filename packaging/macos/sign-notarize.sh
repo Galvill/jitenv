@@ -71,11 +71,19 @@ zip="$workdir/$(basename "$BIN").zip"
 # notarytool accepts.
 ditto -c -k "$BIN" "$zip"
 
+# --wait blocks until Apple finishes. Notarization time is variable —
+# usually a few minutes, but Apple's service routinely exceeds 20m
+# during backlogs (a 20m cap timed out a real v0.10.0 release with the
+# submission still "In Progress"). 45m comfortably covers slow periods
+# while staying well under the GitHub job timeout; the build hooks run
+# concurrently so wall-clock is ~the slowest single submission, not the
+# sum. A timeout here fails the release loudly rather than shipping an
+# un-notarized binary.
 xcrun notarytool submit "$zip" \
   --key "$MACOS_NOTARY_KEY_FILE" \
   --key-id "$MACOS_NOTARY_KEY_ID" \
   --issuer "$MACOS_NOTARY_ISSUER_ID" \
   --wait \
-  --timeout 20m
+  --timeout 45m
 
 echo "sign-notarize: done $BIN"
