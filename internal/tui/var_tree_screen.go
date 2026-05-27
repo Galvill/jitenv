@@ -36,6 +36,7 @@ type varTreeScreen struct {
 	mappingIdx int
 	bags       []treeBag
 	cursor     int
+	offset     int  // first visible flat-row index; kept in sync with cursor in View (#194)
 	noBags     bool // true when neither a local source nor any Bagger source has anything to show
 }
 
@@ -424,7 +425,29 @@ func (s *varTreeScreen) View() string {
 	}
 
 	rows := s.flatRows()
-	for i, r := range rows {
+
+	// Window the tree so the focused row is always on screen (#194).
+	// renderApp hands the body innerH = height-6 lines; we spend 2 on
+	// the heading ("Select variables" + blank) and 2 on the trailing
+	// tip block, and reserve up to 2 more for the "↑/↓ more" scroll
+	// affordances. visibleRows accounts for the affordance lines being
+	// drawn so the focused row never collides with them.
+	visible := s.root.height - 6 - 2 - 2 - 2
+	if visible < 1 {
+		visible = 1
+	}
+	s.offset = scrollOffset(s.offset, s.cursor, len(rows), visible)
+	start := s.offset
+	end := start + visible
+	if end > len(rows) {
+		end = len(rows)
+	}
+
+	if start > 0 {
+		b.WriteString(dimText(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		r := rows[i]
 		focused := i == s.cursor
 		marker := "  "
 		if focused {
@@ -436,6 +459,9 @@ func (s *varTreeScreen) View() string {
 		} else {
 			b.WriteString(marker + " " + listItemStyle.Render(line) + "\n")
 		}
+	}
+	if end < len(rows) {
+		b.WriteString(dimText(fmt.Sprintf("  ↓ %d more", len(rows)-end)) + "\n")
 	}
 	b.WriteString("\n" + dimText("Tip: ticking a bag includes every key (including future ones).") + "\n")
 	return b.String()
