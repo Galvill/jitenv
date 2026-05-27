@@ -68,6 +68,17 @@ __jitenv_chpwd() {
     # hide debug diagnostics + a "jitenv: command not found"
     # if the binary ever falls off $PATH mid-session.
     jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    # Exit 10 means a wrapper was added or removed. Clear bash's
+    # command-hash table so the change takes effect immediately: bash
+    # caches command→path lookups, so a wrapper added for a command that
+    # was already run keeps resolving to the original binary (secrets
+    # silently not injected), and a wrapper just removed leaves a dead
+    # hash entry that fails with "No such file or directory" (checkhash
+    # is off by default). `hash -r` is cheap — the next lookup re-scans
+    # $PATH. Capture $? first; the trailing assignment resets it to 0 so
+    # we don't leak a non-zero status into the user's prompt.
+    local rc=$?
+    [[ $rc -eq 10 ]] && hash -r 2>/dev/null
     __JITENV_LAST_PWD="$PWD"
 }
 # Run once at hook-load time so the wrapper dir is populated before

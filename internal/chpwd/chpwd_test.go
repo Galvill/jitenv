@@ -55,11 +55,11 @@ func TestRunShortCircuitsOnNoChange(t *testing.T) {
 	wrapDir := paths.ShellWrapDir(pid)
 
 	// First call from outside projectDir: nothing wanted, dir stays empty.
-	if err := Run([]string{strconv.Itoa(pid), "", tmp}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), "", tmp}); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	// Second call entering projectDir: firstcmd symlink appears.
-	if err := Run([]string{strconv.Itoa(pid), tmp, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), tmp, projectDir}); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(wrapDir, "firstcmd")); err != nil {
@@ -71,7 +71,7 @@ func TestRunShortCircuitsOnNoChange(t *testing.T) {
 	if err := os.Remove(filepath.Join(wrapDir, "firstcmd")); err != nil {
 		t.Fatalf("remove symlink: %v", err)
 	}
-	if err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
 		t.Fatalf("third Run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(wrapDir, "firstcmd")); err == nil {
@@ -83,7 +83,7 @@ func TestRunShortCircuitsOnNoChange(t *testing.T) {
 	if err := os.Chtimes(cfgPath, future, future); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
 		t.Fatalf("fourth Run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(wrapDir, "firstcmd")); err != nil {
@@ -149,7 +149,7 @@ func TestRunUnlinksInjectionMarker(t *testing.T) {
 
 	// Same pwd both sides — exercises the cleanup BEFORE the
 	// short-circuit. The marker must be gone afterwards regardless.
-	if err := Run([]string{strconv.Itoa(pid), tmp, tmp}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), tmp, tmp}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
