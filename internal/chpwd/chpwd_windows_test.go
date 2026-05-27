@@ -61,7 +61,7 @@ func TestReconcileCreatesPs1Wrappers(t *testing.T) {
 	paths, _ := agent.DefaultPaths()
 	wrapDir := paths.ShellWrapDir(pid)
 
-	if err := Run([]string{strconv.Itoa(pid), "", projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), "", projectDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestReconcileIsNoopOnRepeat(t *testing.T) {
 	paths, _ := agent.DefaultPaths()
 	wrapDir := paths.ShellWrapDir(pid)
 
-	if err := Run([]string{strconv.Itoa(pid), "", projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), "", projectDir}); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	wrap := filepath.Join(wrapDir, "npm.ps1")
@@ -136,7 +136,7 @@ func TestReconcileIsNoopOnRepeat(t *testing.T) {
 	if err := os.Chtimes(cfgPath, future, future); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	st2, err := os.Stat(wrap)
@@ -180,7 +180,7 @@ func TestReconcileRemovesUnmappedWrapper(t *testing.T) {
 	wrapDir := paths.ShellWrapDir(pid)
 
 	// First call inside the mapped dir: npm.ps1 is created.
-	if err := Run([]string{strconv.Itoa(pid), "", projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), "", projectDir}); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(wrapDir, "npm.ps1")); err != nil {
@@ -193,7 +193,7 @@ func TestReconcileRemovesUnmappedWrapper(t *testing.T) {
 	if err := os.Chtimes(cfgPath, future, future); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{strconv.Itoa(pid), projectDir, otherDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), projectDir, otherDir}); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(wrapDir, "npm.ps1")); err == nil {

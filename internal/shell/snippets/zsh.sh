@@ -57,6 +57,14 @@ __jitenv_cfg_path() {
 __jitenv_chpwd() {
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
     jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    # Exit 10 means a wrapper was added or removed → rebuild zsh's
+    # command hash table so the change takes effect immediately. Without
+    # it, a wrapper added for an already-run command stays masked by the
+    # cached path, and a just-removed wrapper leaves a dead hash entry.
+    # See bash.sh for the full rationale. Capture $? first; the trailing
+    # assignment resets it so we don't leak a non-zero status.
+    local rc=$?
+    [[ $rc -eq 10 ]] && rehash
     __JITENV_LAST_PWD="$PWD"
 }
 typeset -ga precmd_functions
