@@ -72,6 +72,9 @@ func newUnlockCmd() *cobra.Command {
 				}
 				ag := agent.NewAgent(paths, idle, res)
 				ag.SetReload(loadAndBuild)
+				// Pick up out-of-band edits to the config without a
+				// lock/unlock cycle (#202).
+				ag.SetConfigPath(cfgPath)
 				if err := ag.Listen(); err != nil {
 					return err
 				}

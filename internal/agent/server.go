@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -54,8 +55,20 @@ type Agent struct {
 	mu       sync.RWMutex
 	resolver Resolver
 	// reload, if set, rebuilds a Resolver from the current config on disk.
-	// Called from the OpReload handler. Nil-safe.
+	// Called from the OpReload handler and from the on-disk-change
+	// auto-reload (maybeReload). Nil-safe.
 	reload func() (Resolver, error)
+
+	// configPath + cfgMtime drive the auto-reload-on-change path (#202).
+	// When configPath is set, data ops stat the file and reload via
+	// `reload` when its mtime has advanced past cfgMtime — so an edit
+	// made outside the TUI (a hand-edit, or another tool) is picked up
+	// without an explicit reload op. reloadMu serialises the reload so
+	// concurrent fetches don't rebuild the resolver more than once per
+	// change.
+	configPath string
+	cfgMtime   atomic.Int64
+	reloadMu   sync.Mutex
 }
 
 // Resolver is the agent-internal hook to resolve mapping + fetch env vars.
@@ -89,6 +102,72 @@ func (a *Agent) SetReload(fn func() (Resolver, error)) {
 	a.mu.Lock()
 	a.reload = fn
 	a.mu.Unlock()
+}
+
+// SetConfigPath enables auto-reload-on-change (#202): once set, the
+// agent stats path before serving data ops and transparently reloads
+// (via the SetReload callback) when its mtime has advanced — so a
+// config edited outside the TUI (a hand-edit, or any external tool) is
+// picked up without an explicit reload op or a lock/unlock cycle. The
+// current mtime is recorded now so only edits made after this call
+// trigger a reload. No-op when path is empty.
+func (a *Agent) SetConfigPath(path string) {
+	a.configPath = path
+	a.cfgMtime.Store(configMtime(path))
+}
+
+// maybeReload reloads the resolver when the on-disk config changed since
+// the last load. Cheap in the common case — a single stat whose result
+// matches the cached mtime returns immediately. On a genuine change
+// exactly one caller performs the reload (others observe the updated
+// mtime under reloadMu and skip). A failed reload leaves the previous
+// resolver in place and is retried on the next call (cfgMtime is not
+// advanced), so a transient half-written file doesn't wedge the agent on
+// a stale-but-working config.
+func (a *Agent) maybeReload() {
+	if a.configPath == "" {
+		return
+	}
+	m := configMtime(a.configPath)
+	if m == 0 || m == a.cfgMtime.Load() {
+		return
+	}
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	if m == a.cfgMtime.Load() {
+		return // another goroutine already reloaded for this mtime
+	}
+	a.mu.RLock()
+	fn := a.reload
+	a.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	next, err := fn()
+	if err != nil {
+		slog.Warn("agent: config changed on disk but reload failed; serving previous config", "err", err)
+		return
+	}
+	a.mu.Lock()
+	a.resolver = next
+	a.mu.Unlock()
+	a.cfgMtime.Store(m)
+	slog.Info("agent: reloaded config after on-disk change")
+}
+
+// configMtime returns path's mtime in Unix nanoseconds, or 0 if it's
+// missing/unreadable. Nanosecond precision detects rewrites within the
+// same wall-clock second (config.AtomicSave is a write-then-rename, so
+// the renamed file carries a fresh mtime).
+func configMtime(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return st.ModTime().UnixNano()
 }
 
 func (a *Agent) currentResolver() Resolver {
@@ -297,6 +376,14 @@ func (a *Agent) handle(ctx context.Context, c net.Conn) {
 }
 
 func (a *Agent) dispatch(ctx context.Context, req Request) Response {
+	// Data ops must reflect the current on-disk config: pick up any
+	// out-of-band edit (hand-edit / external tool) before serving (#202).
+	// No-op unless SetConfigPath was called and the mtime actually moved.
+	switch req.Op {
+	case OpIsMapped, OpFetchEnv, OpFetchEnvCwd, OpCwdCommands:
+		a.maybeReload()
+	}
+
 	switch req.Op {
 	case OpStatus:
 		r := a.currentResolver()

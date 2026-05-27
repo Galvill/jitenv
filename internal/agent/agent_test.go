@@ -167,6 +167,67 @@ func TestAgentReload(t *testing.T) {
 	}
 }
 
+// TestAgentAutoReloadsOnConfigMtimeChange covers #202: once SetConfigPath
+// is set, a data op picks up an out-of-band edit to the config (mtime
+// advanced) without an explicit reload op. The reload is mtime-gated, so
+// it fires exactly once per change — not on every fetch.
+func TestAgentAutoReloadsOnConfigMtimeChange(t *testing.T) {
+	first := &fakeResolver{env: map[string]map[string]string{"/a": {"K": "v1"}}}
+	second := &fakeResolver{env: map[string]map[string]string{"/a": {"K": "v2"}}}
+
+	cfgFile := filepath.Join(newTestAgentDir(t), "config.toml")
+	if err := os.WriteFile(cfgFile, []byte("# v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var reloadCalls int
+	a, p := newTestAgent(t, first)
+	a.SetReload(func() (Resolver, error) {
+		reloadCalls++
+		return second, nil
+	})
+	a.SetConfigPath(cfgFile)
+
+	go a.Serve(context.Background()) //nolint:errcheck // goroutine: error surfaced via Shutdown/Listen pair
+	cli := NewClient(p.Socket)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := cli.Status(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// No edit yet → first resolver, no reload.
+	if env, _ := cli.FetchEnv(context.Background(), "/a"); env["K"] != "v1" {
+		t.Fatalf("pre-edit K=%q (want v1)", env["K"])
+	}
+	if reloadCalls != 0 {
+		t.Fatalf("pre-edit reloadCalls=%d (want 0)", reloadCalls)
+	}
+
+	// Edit the file and bump its mtime past the recorded baseline.
+	if err := os.WriteFile(cfgFile, []byte("# v2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(cfgFile, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	// Next fetch auto-reloads → second resolver.
+	if env, _ := cli.FetchEnv(context.Background(), "/a"); env["K"] != "v2" {
+		t.Fatalf("post-edit K=%q (want v2 — auto-reload didn't fire)", env["K"])
+	}
+	// A further fetch with no new edit must NOT reload again (mtime-gated).
+	if env, _ := cli.FetchEnv(context.Background(), "/a"); env["K"] != "v2" {
+		t.Fatalf("steady-state K=%q (want v2)", env["K"])
+	}
+	if reloadCalls != 1 {
+		t.Fatalf("reloadCalls=%d (want exactly 1 — reload should be mtime-gated)", reloadCalls)
+	}
+}
+
 func TestAgentReloadUnsupported(t *testing.T) {
 	a, p := newTestAgent(t, nil)
 	go a.Serve(context.Background()) //nolint:errcheck // goroutine: error surfaced via Shutdown/Listen pair
