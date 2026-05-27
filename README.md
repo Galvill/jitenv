@@ -89,11 +89,10 @@ brew install Galvill/jitenv/jitenv
 ```
 
 Distributed as a Homebrew **cask** that downloads the goreleaser
-tarball for your arch. The cask strips the `com.apple.quarantine`
-xattr on install (jitenv is not yet Apple-notarized — tracked in
-[#13](https://github.com/Galvill/jitenv/issues/13)), so the binary
-runs from the terminal without a Gatekeeper override. After install
-activate the shell hook **once** as your normal user:
+tarball for your arch. macOS binaries are Developer ID code-signed
+and notarized, so Gatekeeper accepts them without a quarantine
+override. After install, activate the shell hook **once** as your
+normal user:
 
 ```sh
 jitenv hook install
@@ -221,9 +220,7 @@ the check entirely — there is no upgrade story for snapshots.
     reconciled by the `prompt` override. PSReadLine is the default
     module in pwsh 7+; without it, `path`/`glob` interception silently
     no-ops and `cwd_glob` still works.
-- macOS release binaries are not Apple-notarized; first run requires
-  `xattr -d com.apple.quarantine ./jitenv` or right-click → Open.
-  Windows release binaries are not Authenticode-signed; SmartScreen
+- Windows release binaries are not Authenticode-signed; SmartScreen
   may warn on first run.
 - The shell hook only intercepts commands whose first token is an
   absolute or `./`-relative path — not bare PATH lookups (those are
