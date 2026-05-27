@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.0](https://github.com/Galvill/jitenv/compare/v0.9.1...v0.10.0) (2026-05-27)
+
+
+### Features
+
+* **clone:** jitenv clone &lt;url&gt; — encrypted bag + GIT_ASKPASS injection ([#179](https://github.com/Galvill/jitenv/issues/179)) ([#181](https://github.com/Galvill/jitenv/issues/181)) ([7b72d8f](https://github.com/Galvill/jitenv/commit/7b72d8ff2a02cf0aa33811d4cd0cafa6e96b182a))
+* **release:** Apple Developer ID code-sign + notarize macOS binaries ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#176](https://github.com/Galvill/jitenv/issues/176)) ([6927ebb](https://github.com/Galvill/jitenv/commit/6927ebb22d4f408b5b80257a4087c4209ec49b02))
+* **release:** Chocolatey package for Windows installs ([#180](https://github.com/Galvill/jitenv/issues/180)) ([#197](https://github.com/Galvill/jitenv/issues/197)) ([2c157ec](https://github.com/Galvill/jitenv/commit/2c157ececf68c7fa4915eca71d1e9cd43f7583bd))
+
+
+### Bug Fixes
+
+* **agent/windows:** authenticate pipe peer via impersonation, not PID ([#132](https://github.com/Galvill/jitenv/issues/132)) ([#200](https://github.com/Galvill/jitenv/issues/200)) ([42e1358](https://github.com/Galvill/jitenv/commit/42e1358f84624c1a55548a861d0ac2bccb27df13))
+* **chpwd:** rehash shell command table when the cwd_glob wrapper set changes ([#201](https://github.com/Galvill/jitenv/issues/201)) ([adb6dbb](https://github.com/Galvill/jitenv/commit/adb6dbb0318a479cf66700414db219d6c76de810))
+
 ## [0.9.1](https://github.com/Galvill/jitenv/compare/v0.9.0...v0.9.1) (2026-05-27)
 
 
