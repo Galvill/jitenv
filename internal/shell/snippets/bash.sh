@@ -68,12 +68,40 @@ __jitenv_chpwd() {
     # hide debug diagnostics + a "jitenv: command not found"
     # if the binary ever falls off $PATH mid-session.
     jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    # Exit 10 means a wrapper was added or removed. Clear bash's
+    # command-hash table so the change takes effect immediately: bash
+    # caches command→path lookups, so a wrapper added for a command that
+    # was already run keeps resolving to the original binary (secrets
+    # silently not injected), and a wrapper just removed leaves a dead
+    # hash entry that fails with "No such file or directory" (checkhash
+    # is off by default). `hash -r` is cheap — the next lookup re-scans
+    # $PATH. Capture $? first; the trailing assignment resets it to 0 so
+    # we don't leak a non-zero status into the user's prompt.
+    local rc=$?
+    [[ $rc -eq 10 ]] && hash -r 2>/dev/null
     __JITENV_LAST_PWD="$PWD"
 }
 # Run once at hook-load time so the wrapper dir is populated before
 # the first command in this shell.
 __jitenv_chpwd
 PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+
+# Version-check (#136): fire-and-forget background HTTP fetch
+# refreshes a 24h-cached sidecar at $XDG_CACHE_HOME/jitenv/
+# version_check.json; the foreground __version_notice reads that
+# cache and prints a one-line yellow notice if a newer release is
+# known. Both are guarded server-side by JITENV_NO_VERSION_CHECK /
+# CI / config / version!="dev" — the shell predicate below is a
+# fork-saver, not the source of truth.
+#
+# `2>&1 >/dev/null` on the notice (NOT `>/dev/null 2>&1`) silences
+# stdout while keeping stderr on the terminal so the notice is
+# visible. The background fetch silences both because nothing it
+# writes is for the user.
+if [[ -t 2 && -z "${JITENV_NO_VERSION_CHECK:-}" && -z "${CI:-}" ]]; then
+    ( jitenv __version_check & ) >/dev/null 2>&1
+    jitenv __version_notice 2>&1 >/dev/null
+fi
 
 shopt -s extdebug
 

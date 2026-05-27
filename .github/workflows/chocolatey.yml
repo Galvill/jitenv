@@ -1,0 +1,156 @@
+name: chocolatey
+
+# Windows counterpart to the Homebrew cask (#180). Runs on
+# windows-latest because goreleaser's chocolatey packer (and `choco`
+# itself) only exist on Windows, whereas release.yml runs on ubuntu.
+# Fires once a GitHub release is published — by then release.yml has
+# uploaded the windows-amd64 .zip and the SHA256SUMS asset, which this
+# job downloads + checksum-pins into the package before pushing.
+#
+# Pre-releases (the `-rc.N` tags cut by release-rc.yml) are skipped so
+# the chocolatey.org moderation queue isn't flooded with RCs.
+#
+# Until CHOCOLATEY_API_KEY is configured (repo Settings → Secrets and
+# variables → Actions), the job still packs the .nupkg and uploads it
+# as a build artifact for inspection — it just skips the push.
+#
+# Injection hygiene: every release-supplied value (the tag, and the
+# version/url/checksum derived from it) is routed through `env:` and
+# read as `$env:VAR` inside run blocks rather than inlined as
+# `${{ ... }}`, matching release-rc.yml.
+
+on:
+  release:
+    types: [published]
+  # Manual re-run path: pack (and push, if the key is set) for an
+  # already-published tag without re-cutting the release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package, e.g. v0.9.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chocolatey-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Skip pre-releases on the automatic trigger; workflow_dispatch is
+    # always allowed (the operator chose the tag deliberately).
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      CHOCO_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version, archive URL, and checksum
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = $env:TAG
+          if (-not $tag) { throw "no release tag available" }
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$') {
+            throw "tag '$tag' is not a recognised vMAJOR.MINOR.PATCH[-rc.N] release tag"
+          }
+          $version = $tag.TrimStart('v')
+          $zip = "jitenv_${version}_windows_amd64.zip"
+          $base = "https://github.com/Galvill/jitenv/releases/download/$tag"
+          $url = "$base/$zip"
+
+          # goreleaser creates the release as non-draft, so `published`
+          # can fire while assets are still uploading. Retry the
+          # SHA256SUMS fetch (it's uploaded after the archives, so its
+          # presence implies the zip is up too) with backoff before
+          # giving up.
+          $sums = $null
+          foreach ($attempt in 1..10) {
+            try {
+              $sums = (Invoke-WebRequest -Uri "$base/SHA256SUMS" -UseBasicParsing).Content
+              break
+            } catch {
+              Write-Host "SHA256SUMS not ready (attempt $attempt): $($_.Exception.Message)"
+              Start-Sleep -Seconds (5 * $attempt)
+            }
+          }
+          if (-not $sums) { throw "SHA256SUMS asset never became available for $tag" }
+
+          $line = ($sums -split "`n") |
+            Where-Object { $_ -match [regex]::Escape($zip) } |
+            Select-Object -First 1
+          if (-not $line) { throw "checksum for $zip not found in SHA256SUMS" }
+          $checksum = ($line -split '\s+')[0]
+          if ($checksum -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "parsed checksum '$checksum' is not a SHA256 hex digest"
+          }
+
+          "version=$version"   >> $env:GITHUB_OUTPUT
+          "zip=$zip"           >> $env:GITHUB_OUTPUT
+          "url=$url"           >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+          Write-Host "Packaging jitenv $version from $url (sha256 $checksum)"
+
+      - name: Render package tokens
+        shell: pwsh
+        env:
+          PKG_VERSION: ${{ steps.meta.outputs.version }}
+          PKG_URL: ${{ steps.meta.outputs.url }}
+          PKG_CHECKSUM: ${{ steps.meta.outputs.checksum }}
+          PKG_ZIP: ${{ steps.meta.outputs.zip }}
+        run: |
+          # Refresh LICENSE.txt from the repo LICENSE so the committed
+          # copy can never drift, then substitute the pack-time tokens.
+          Copy-Item LICENSE packaging/chocolatey/tools/LICENSE.txt -Force
+          $files = @(
+            'packaging/chocolatey/jitenv.nuspec',
+            'packaging/chocolatey/tools/chocolateyInstall.ps1',
+            'packaging/chocolatey/tools/chocolateyUninstall.ps1',
+            'packaging/chocolatey/tools/VERIFICATION.txt'
+          )
+          foreach ($f in $files) {
+            (Get-Content -Raw $f).
+              Replace('__VERSION__',    $env:PKG_VERSION).
+              Replace('__URL64__',      $env:PKG_URL).
+              Replace('__CHECKSUM64__', $env:PKG_CHECKSUM).
+              Replace('__ZIPNAME__',    $env:PKG_ZIP) |
+              Set-Content -NoNewline $f
+          }
+
+      - name: choco pack
+        shell: pwsh
+        env:
+          PKG_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-choco | Out-Null
+          choco pack packaging/chocolatey/jitenv.nuspec --version $env:PKG_VERSION --outputdirectory dist-choco
+          if ($LASTEXITCODE -ne 0) { throw "choco pack failed ($LASTEXITCODE)" }
+
+      - name: Upload nupkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-nupkg
+          path: dist-choco/*.nupkg
+          if-no-files-found: error
+
+      - name: choco push
+        if: ${{ env.CHOCO_KEY != '' }}
+        shell: pwsh
+        env:
+          PKG_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          choco push "dist-choco/jitenv.${env:PKG_VERSION}.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCO_KEY
+          if ($LASTEXITCODE -ne 0) { throw "choco push failed ($LASTEXITCODE)" }
+          Write-Host "Pushed jitenv ${env:PKG_VERSION} to chocolatey.org (pending moderation)."
+
+      - name: Note when key absent
+        if: ${{ env.CHOCO_KEY == '' }}
+        shell: pwsh
+        run: |
+          Write-Host '::warning::CHOCOLATEY_API_KEY is not set — packed the .nupkg (uploaded as an artifact) but did not push. Configure the secret to publish to chocolatey.org.'

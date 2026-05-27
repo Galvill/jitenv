@@ -6,7 +6,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gv/jitenv/internal/config"
-	"github.com/gv/jitenv/internal/crypto"
 )
 
 // saveCmd takes a snapshot of the in-memory config, re-encrypts every
@@ -83,49 +82,10 @@ func cloneForSave(c *config.Config) *config.Config {
 	return &out
 }
 
-// encryptForSave walks the config and re-encrypts every value that
-// must not be on disk in plaintext. It assumes c was decrypted on
-// load: every sensitive param is currently a plaintext string.
-//
-// Encrypt-by-default: every non-envelope string param is encrypted,
-// regardless of whether the source's schema flagged it Sensitive
-// (security #112). A schema-only gate silently leaked params for
-// sources without a registered schema and for fields a source author
-// forgot to flag. The schema's `Sensitive` bit is still meaningful
-// — the TUI uses it to mask the field in the editor — but it no
-// longer controls disk encryption.
+// encryptForSave delegates to config.EncryptInPlace. Kept as a thin
+// wrapper so the saveCmd above reads as before; the shared
+// implementation lets `jitenv clone` (#179) use the same logic
+// without importing the TUI.
 func encryptForSave(c *config.Config, key []byte) error {
-	for name, sc := range c.Sources {
-		if sc.Params == nil {
-			continue
-		}
-		for k, v := range sc.Params {
-			s, ok := v.(string)
-			if !ok || s == "" {
-				continue
-			}
-			if crypto.IsEnvelope(s) {
-				// Already encrypted (e.g. unchanged on this save).
-				continue
-			}
-			env, err := crypto.EncryptField(key, s, config.SourceParamAAD(name, k))
-			if err != nil {
-				return fmt.Errorf("source %q.%s: %w", name, k, err)
-			}
-			sc.Params[k] = env
-		}
-	}
-	for bag, kv := range c.Secrets {
-		for k, v := range kv {
-			if v == "" || crypto.IsEnvelope(v) {
-				continue
-			}
-			env, err := crypto.EncryptField(key, v, config.SecretAAD(bag, k))
-			if err != nil {
-				return fmt.Errorf("secret %q.%s: %w", bag, k, err)
-			}
-			kv[k] = env
-		}
-	}
-	return nil
+	return config.EncryptInPlace(c, key)
 }

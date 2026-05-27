@@ -55,11 +55,11 @@ func TestRunShortCircuitsOnNoChange(t *testing.T) {
 	wrapDir := paths.ShellWrapDir(pid)
 
 	// First call from outside projectDir: nothing wanted, dir stays empty.
-	if err := Run([]string{strconv.Itoa(pid), "", tmp}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), "", tmp}); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	// Second call entering projectDir: firstcmd symlink appears.
-	if err := Run([]string{strconv.Itoa(pid), tmp, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), tmp, projectDir}); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(wrapDir, "firstcmd")); err != nil {
@@ -71,7 +71,7 @@ func TestRunShortCircuitsOnNoChange(t *testing.T) {
 	if err := os.Remove(filepath.Join(wrapDir, "firstcmd")); err != nil {
 		t.Fatalf("remove symlink: %v", err)
 	}
-	if err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
 		t.Fatalf("third Run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(wrapDir, "firstcmd")); err == nil {
@@ -83,7 +83,7 @@ func TestRunShortCircuitsOnNoChange(t *testing.T) {
 	if err := os.Chtimes(cfgPath, future, future); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
+	if _, err := Run([]string{strconv.Itoa(pid), projectDir, projectDir}); err != nil {
 		t.Fatalf("fourth Run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(wrapDir, "firstcmd")); err != nil {
@@ -99,5 +99,60 @@ func TestLastMtimeSidecarLivesUnderShellDir(t *testing.T) {
 	want := "/run/jitenv/shells/123/last-mtime"
 	if got != want {
 		t.Errorf("lastMtimePath: got %q want %q", got, want)
+	}
+}
+
+// TestRunUnlinksInjectionMarker covers the #182 follow-up: the
+// injection marker file at <shellsDir>/<pid>/injected is what the
+// shim uses to gate the bypass for downstream re-wrapped commands
+// (turbo workers etc.), and `__chpwd` is responsible for unlinking
+// it on every prompt fire so the marker's lifetime is scoped to
+// "one user command" — between two prompts. A leftover marker
+// would silently suppress injection in the user's next command.
+//
+// The test drops a marker file by hand, calls Run, and confirms
+// the file is gone. The cleanup runs BEFORE the unchanged-state
+// short-circuit, so this works even when pwd + cfg mtime didn't
+// change since the last call (the common case for a foreground
+// `npm run dev` that completes in the same dir).
+func TestRunUnlinksInjectionMarker(t *testing.T) {
+	tmp := t.TempDir()
+	runtimeDir := filepath.Join(tmp, "runtime")
+	cfgPath := filepath.Join(tmp, "config.toml")
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("JITENV_CONFIG", cfgPath)
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Minimal valid config so the cfg-load branches don't error.
+	cfg := config.Config{Version: 1}
+	cf, err := os.Create(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := toml.NewEncoder(cf).Encode(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	cf.Close()
+
+	pid := os.Getpid()
+	paths, _ := agent.DefaultPaths()
+	wrapDir := paths.ShellWrapDir(pid)
+	shellDir := filepath.Dir(wrapDir)
+	if err := os.MkdirAll(shellDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(shellDir, "injected")
+	if err := os.WriteFile(markerPath, []byte("any-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same pwd both sides — exercises the cleanup BEFORE the
+	// short-circuit. The marker must be gone afterwards regardless.
+	if _, err := Run([]string{strconv.Itoa(pid), tmp, tmp}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("injection marker still exists after chpwd run: stat err=%v", err)
 	}
 }

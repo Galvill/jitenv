@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.9.1](https://github.com/Galvill/jitenv/compare/v0.9.0...v0.9.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **tui:** scroll the var-selection tree to keep the cursor visible ([#194](https://github.com/Galvill/jitenv/issues/194)) ([#195](https://github.com/Galvill/jitenv/issues/195)) ([bb3e98e](https://github.com/Galvill/jitenv/commit/bb3e98e8918bf3991d54e505ee5d170e4fb18a99))
+
+## [0.9.0](https://github.com/Galvill/jitenv/compare/v0.8.1...v0.9.0) (2026-05-26)
+
+
+### Features
+
+* **release:** add manual RC tagger workflow ([#192](https://github.com/Galvill/jitenv/issues/192)) ([910a898](https://github.com/Galvill/jitenv/commit/910a898a33093bd34d6a6b4d3f31ace12f79046c))
+
+
+### Bug Fixes
+
+* **cli:** mkdir config parent before TUI lockfile acquire ([#190](https://github.com/Galvill/jitenv/issues/190)) ([#191](https://github.com/Galvill/jitenv/issues/191)) ([e23465f](https://github.com/Galvill/jitenv/commit/e23465f969ad50274c684ee42be8d0cada4799e5))
+
+## [0.8.1](https://github.com/Galvill/jitenv/compare/v0.8.0...v0.8.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **release:** use index .Env for homebrew cask token ([#188](https://github.com/Galvill/jitenv/issues/188)) ([42b25e1](https://github.com/Galvill/jitenv/commit/42b25e19693540f23194f97351f4a2f4007ae976))
+
+## [0.8.0](https://github.com/Galvill/jitenv/compare/v0.7.0...v0.8.0) (2026-05-26)
+
+
+### Features
+
+* **release:** Homebrew cask for macOS/Linux installs ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#175](https://github.com/Galvill/jitenv/issues/175)) ([f2d941e](https://github.com/Galvill/jitenv/commit/f2d941e80c875c9d5b96b9b66c6452a9c3eb5b39))
+* **versioncheck:** daily background check + one-line upgrade notice ([#136](https://github.com/Galvill/jitenv/issues/136)) ([#178](https://github.com/Galvill/jitenv/issues/178)) ([21e963d](https://github.com/Galvill/jitenv/commit/21e963d0b573c6615570a9b0e7e94e8d0748816b))
+
+
+### Bug Fixes
+
+* close all symptoms of [#182](https://github.com/Galvill/jitenv/issues/182) (TUI binary split + injection-marker lifecycle) ([#187](https://github.com/Galvill/jitenv/issues/187)) ([95851c4](https://github.com/Galvill/jitenv/commit/95851c485cedf6f51a10b6d743553a2e7358f654))
+
 ## [0.7.0](https://github.com/Galvill/jitenv/compare/v0.6.0...v0.7.0) (2026-05-18)
 
 

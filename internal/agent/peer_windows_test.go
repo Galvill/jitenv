@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -17,14 +18,18 @@ import (
 // listener via listenSocket and connects to it from the same process.
 // checkPeerUid must accept the connection — both sides share the
 // current process's user SID. This exercises the
-// GetNamedPipeClientProcessId -> OpenProcess -> token-SID path against
-// a live OS-managed pipe.
+// ImpersonateNamedPipeClient -> OpenThreadToken -> token-SID path
+// against a live OS-managed pipe, and is the end-to-end guard for
+// security #132: the client must dial at PipeImpLevelImpersonation
+// (as dial_windows.go does) or the agent's impersonation token comes
+// back anonymous and OpenThreadToken fails.
 //
 // Cross-user rejection is the other half of the contract but is
 // impractical to test from a single-process unit test (it requires a
 // second user account and an impersonation token). The same-user path
-// is the regression-catcher: a broken handle extraction, a wrong
-// access mask on OpenProcess, or a missing EqualSid all fail here.
+// is the regression-catcher: a broken handle extraction, a missing
+// OS-thread lock, an anonymous-level dial, or a missing EqualSid all
+// fail here.
 func TestPeerCheckSameUserPipe(t *testing.T) {
 	sid, err := currentUserSID()
 	if err != nil {
@@ -57,8 +62,14 @@ func TestPeerCheckSameUserPipe(t *testing.T) {
 		acceptC <- c
 	}()
 
-	timeout := 5 * time.Second
-	client, err := winio.DialPipe(pipePath, &timeout)
+	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := winio.DialPipeAccessImpLevel(
+		dctx,
+		pipePath,
+		uint32(windows.GENERIC_READ|windows.GENERIC_WRITE),
+		winio.PipeImpLevelImpersonation,
+	)
 	if err != nil {
 		t.Fatalf("dial pipe: %v", err)
 	}

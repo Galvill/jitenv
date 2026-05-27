@@ -41,7 +41,62 @@ func Run(cfgPath string) error {
 	}
 	defer zero(key)
 
+	return runModel(cfgPath, cfg, key, nil)
+}
+
+// RunWithMappingTemplate runs the TUI with a freshly-reloaded config
+// decrypted using the caller-provided master key, opening directly
+// on a Mappings → Create New screen pre-filled with the supplied
+// template. Used by `jitenv clone` (#179) so the user can add more
+// mappings to a just-cloned repo without re-typing the passphrase.
+//
+// The key is owned by the caller — this function does NOT zero it on
+// return. cfgPath is re-resolved here so the caller can pass either a
+// pre-resolved path or one from $JITENV_CONFIG.
+//
+// The reload-from-disk is intentional: the caller has just AtomicSave'd
+// new state (the git-auth bag + mapping), so its in-memory cfg is
+// stale w.r.t. envelope encryption. Reading fresh from disk and
+// decrypting with the supplied key gives the TUI clean plaintext to
+// edit, and a subsequent TUI save flows through the normal
+// encrypt-everything-on-write path.
+func RunWithMappingTemplate(cfgPath string, key []byte, template *config.Mapping, footerHint string) error {
+	if !isInteractive() {
+		return errors.New("post-clone follow-up requires a TTY")
+	}
+	cfgPath, err := config.Resolve(cfgPath)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	if err := config.DecryptInPlace(cfg, key); err != nil {
+		return fmt.Errorf("decrypt config for post-clone follow-up: %w", err)
+	}
+	return runModel(cfgPath, cfg, key, &mappingTemplate{m: template, hint: footerHint})
+}
+
+// mappingTemplate is the optional "open on a pre-filled mapping form"
+// parameter consumed by runModel. Separated as a struct so the
+// runModel signature stays single-purpose.
+type mappingTemplate struct {
+	m    *config.Mapping
+	hint string
+}
+
+func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTemplate) error {
 	m := newRootModel(cfgPath, cfg, key)
+	if tmpl != nil && tmpl.m != nil {
+		// Append the template mapping and push the form screen on
+		// top of the default menu — Esc returns to the menu, save
+		// commits both the template and any user edits in the form.
+		cfg.Mappings = append(cfg.Mappings, *tmpl.m)
+		idx := len(cfg.Mappings) - 1
+		m.push(newMappingFormScreen(m, idx, true))
+		m.footerHint = tmpl.hint
+	}
 	prog := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := prog.Run()
 	if err != nil {
@@ -51,7 +106,6 @@ func Run(cfgPath string) error {
 	if root.err != nil {
 		return root.err
 	}
-	// Best-effort agent reload after a successful save.
 	if root.savedSinceLastReload {
 		_ = pingAgentReload()
 	}

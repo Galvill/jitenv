@@ -38,6 +38,11 @@ type AgentConfig struct {
 	// default-on behaviour exposed by PreRunNoticeEnabled. Read access
 	// should always go through that helper.
 	PreRunNotice *bool `toml:"pre_run_notice,omitempty"`
+	// VersionCheck gates the daily background check against
+	// api.github.com/repos/Galvill/jitenv/releases/latest fired by
+	// the shell hook (#136). Same *bool / default-on pattern as
+	// PreRunNotice. Read access through VersionCheckEnabled.
+	VersionCheck *bool `toml:"version_check,omitempty"`
 }
 
 // PreRunNoticeEnabled reports whether the "jitenv: injected N
@@ -49,6 +54,18 @@ func (a AgentConfig) PreRunNoticeEnabled() bool {
 		return true
 	}
 	return *a.PreRunNotice
+}
+
+// VersionCheckEnabled reports whether the shell hook should run the
+// daily background check for a newer jitenv release. On by default;
+// users who don't want an outbound HTTP call from a secrets tool
+// can flip it off in config.toml (or via JITENV_NO_VERSION_CHECK=1
+// for a per-shell opt-out).
+func (a AgentConfig) VersionCheckEnabled() bool {
+	if a.VersionCheck == nil {
+		return true
+	}
+	return *a.VersionCheck
 }
 
 type SourceConfig struct {
@@ -79,10 +96,17 @@ func (m Mapping) Kind() string {
 
 type VarRef struct {
 	Name   string            `toml:"name"`
-	Source string            `toml:"source"`
+	Source string            `toml:"source,omitempty"`
 	Ref    string            `toml:"ref,omitempty"`
 	Key    string            `toml:"key,omitempty"`
 	Extra  map[string]string `toml:"extra,omitempty"`
+	// Value is a literal env-var value that bypasses source lookup.
+	// Used by `jitenv clone` (#179) to wire GIT_ASKPASS to a stable
+	// per-user askpass shim path that doesn't live in any bag. When
+	// Value is set, Source/Ref/Key/Extra must be empty (Validate
+	// enforces this); when Value is empty, the VarRef resolves via
+	// the source machinery as before.
+	Value string `toml:"value,omitempty"`
 }
 
 // Load reads and parses a config file. It does not decrypt envelopes.
@@ -183,8 +207,22 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("mapping[%d]: at least one var is required", i)
 		}
 		for j, v := range m.Vars {
+			if v.Value != "" {
+				// Literal-value VarRef. Source/Ref/Key/Extra must all be
+				// empty: a value AND a source would mean two different
+				// places to look for the same env var, which is just
+				// confusing config. Name is required so we know what env
+				// var to set.
+				if v.Source != "" || v.Ref != "" || v.Key != "" || len(v.Extra) > 0 {
+					return fmt.Errorf("mapping[%d].vars[%d]: value is exclusive with source/ref/key/extra", i, j)
+				}
+				if v.Name == "" {
+					return fmt.Errorf("mapping[%d].vars[%d]: name is required for a literal-value var", i, j)
+				}
+				continue
+			}
 			if v.Source == "" {
-				return fmt.Errorf("mapping[%d].vars[%d]: source is required", i, j)
+				return fmt.Errorf("mapping[%d].vars[%d]: source is required (or set value for a literal)", i, j)
 			}
 			if v.Name == "" && v.Key != "" {
 				return fmt.Errorf("mapping[%d].vars[%d]: name is required when key is set", i, j)

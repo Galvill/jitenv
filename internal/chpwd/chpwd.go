@@ -51,23 +51,54 @@ import (
 // Run is the chpwd entrypoint. Args are the verbatim positional args
 // after `jitenv __chpwd` — at least three: shell pid, oldpwd, newpwd.
 // oldpwd may be empty on the very first call from a shell.
-func Run(args []string) error {
+//
+// The bool return reports whether the per-shell wrapper set actually
+// changed (a wrapper was added or removed). The shell hook uses it to
+// decide whether to clear its command-hash table: bash/zsh cache
+// command→path lookups, so a freshly-added wrapper would be masked by a
+// stale hash, and a freshly-removed wrapper would leave a dead hash
+// entry that fails with "command not found". See the exit-code contract
+// in internal/cli/chpwd_internal.go and the `hash -r` / `rehash` call in
+// the bash/zsh snippets.
+func Run(args []string) (bool, error) {
 	if len(args) < 3 {
-		return errors.New("usage: jitenv __chpwd <shell-pid> <oldpwd> <newpwd>")
+		return false, errors.New("usage: jitenv __chpwd <shell-pid> <oldpwd> <newpwd>")
 	}
 	pid, err := strconv.Atoi(args[0])
 	if err != nil || pid <= 0 {
-		return fmt.Errorf("invalid shell pid %q", args[0])
+		return false, fmt.Errorf("invalid shell pid %q", args[0])
 	}
 	oldPwd := args[1]
 	newPwd := args[2]
 
 	paths, err := agent.DefaultPaths()
 	if err != nil {
-		return err
+		return false, err
 	}
 	wrapDir := paths.ShellWrapDir(pid)
 	mtimePath := lastMtimePath(paths, pid)
+
+	// Scope the shim's on-disk injection marker (#182) to "one user
+	// command" by unlinking it on every prompt fire. The marker
+	// lives at <shellsDir>/<pid>/injected; the shim creates it after
+	// a successful first-hop inject so descendants (turbo workers,
+	// chained interpreters) bypass instead of double-fetching. Once
+	// the user's command tree has exited and bash/zsh fires
+	// PROMPT_COMMAND → __chpwd, we delete the file so the NEXT
+	// command starts clean and gets a fresh injection + notice.
+	//
+	// Best-effort: a stat/unlink failure (file missing — first
+	// prompt of the session, or already cleaned up) is fine. Run
+	// BEFORE the short-circuit-on-unchanged-state below: the marker
+	// must be cleaned even when pwd + cfg mtime didn't change, which
+	// is the common case for a foreground `npm run dev` that
+	// completes in the same dir.
+	markerPath := filepath.Join(filepath.Dir(wrapDir), "injected")
+	if err := os.Remove(markerPath); err == nil {
+		debugLog("removed injection marker %s", markerPath)
+	} else if !os.IsNotExist(err) {
+		debugLog("remove injection marker %s: %v", markerPath, err)
+	}
 
 	cfgPath, cfgErr := config.Resolve(os.Getenv("JITENV_CONFIG"))
 	curMtime := statMtime(cfgPath)
@@ -83,7 +114,7 @@ func Run(args []string) error {
 	// the shell starts inside an already-mapped cwd_glob dir).
 	if cfgErr == nil && oldPwd == newPwd && lastMtime != 0 && curMtime == lastMtime {
 		debugLog("short-circuit: pwd+mtime unchanged")
-		return nil
+		return false, nil
 	}
 
 	wanted, err := desiredCommandsFor(cfgPath, cfgErr, newPwd)
@@ -92,19 +123,20 @@ func Run(args []string) error {
 		// Config missing or malformed: leave the wrapper dir alone
 		// so a momentary parse error doesn't tear down a working
 		// state. Returning nil keeps the shell hook quiet.
-		return nil
+		return false, nil
 	}
 	debugLog("config reports wanted=%v", wanted)
-	if err := reconcile(wrapDir, wanted); err != nil {
+	changed, err := reconcile(wrapDir, wanted)
+	if err != nil {
 		debugLog("reconcile error: %v", err)
-		return err
+		return false, err
 	}
 	if err := writeLastMtime(mtimePath, curMtime); err != nil {
 		debugLog("writeLastMtime error: %v", err)
 		// Non-fatal: next call will just see a stale state and reconcile again.
 	}
-	debugLog("reconcile ok (%d wrappers)", len(wanted))
-	return nil
+	debugLog("reconcile ok (%d wrappers, changed=%t)", len(wanted), changed)
+	return changed, nil
 }
 
 // lastMtimePath is the per-shell sidecar that records the config-file
@@ -176,30 +208,36 @@ func desiredCommandsFor(cfgPath string, cfgErr error, pwd string) ([]string, err
 //
 // The shape of a "wrapper" is platform-split (symlink on Unix,
 // `.ps1` file on Windows). See reconcile_unix.go / reconcile_windows.go.
-func reconcile(wrapDir string, wanted []string) error {
+// reconcile returns whether it changed the wrapper set (removed or
+// created any entry). A no-op call (dir already matches `wanted`)
+// returns false so the shell hook can skip clearing its command hash.
+func reconcile(wrapDir string, wanted []string) (bool, error) {
 	if len(wanted) == 0 {
 		// No mapping → empty the dir if it exists. We don't remove
 		// the dir itself; the shell hook keeps it in $PATH.
 		entries, err := os.ReadDir(wrapDir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return nil
+				return false, nil
 			}
-			return err
+			return false, err
 		}
+		changed := false
 		for _, e := range entries {
-			_ = os.Remove(filepath.Join(wrapDir, e.Name()))
+			if err := os.Remove(filepath.Join(wrapDir, e.Name())); err == nil {
+				changed = true
+			}
 		}
-		return nil
+		return changed, nil
 	}
 
 	if err := os.MkdirAll(wrapDir, 0o700); err != nil {
-		return err
+		return false, err
 	}
 
 	target, err := os.Executable()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Build the desired set keyed by on-disk filename (e.g. "npm" on
@@ -210,17 +248,21 @@ func reconcile(wrapDir string, wanted []string) error {
 		want[wrapperFileName(c)] = c
 	}
 
+	changed := false
+
 	// Drop unwanted wrappers.
 	entries, err := os.ReadDir(wrapDir)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	for _, e := range entries {
 		name := e.Name()
 		if _, ok := want[name]; ok {
 			continue
 		}
-		_ = os.Remove(filepath.Join(wrapDir, name))
+		if err := os.Remove(filepath.Join(wrapDir, name)); err == nil {
+			changed = true
+		}
 	}
 
 	// Add missing ones. isOurs decides whether an existing entry is
@@ -233,10 +275,11 @@ func reconcile(wrapDir string, wanted []string) error {
 			continue
 		}
 		if err := createWrapper(wrapPath, c, target); err != nil {
-			return err
+			return changed, err
 		}
+		changed = true
 	}
-	return nil
+	return changed, nil
 }
 
 // debugLog writes one line to stderr when JITENV_HOOK_DEBUG is set.

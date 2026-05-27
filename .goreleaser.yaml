@@ -27,6 +27,34 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
 
+  # The interactive TUI lives in a separate binary so the main
+  # jitenv binary's import graph stays free of Bubble Tea / Lip
+  # Gloss / termenv. Those libs send OSC 11 (background color) +
+  # CPR (\e[6n) queries to the tty at package-init time; in
+  # contexts where the parent doesn't consume the responses
+  # (turbo strict-env pty being the canonical example) the
+  # responses leak into the user's output stream. See #182 bug B.
+  # `jitenv config` re-execs this binary via internal/cli/config.go.
+  - id: jitenv-tui
+    main: ./cmd/jitenv-tui
+    binary: jitenv-tui
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
+      - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
+
 archives:
   - id: jitenv
     # Unix archives are tar.gz; Windows archives are .zip so users can
@@ -36,7 +64,13 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Both binaries ship in the same archive so a brew/dpkg/manual
+    # install gets the pair atomically. `ids:` is the v2-spelling
+    # of the build allowlist.
+    ids:
+      - jitenv
+      - jitenv-tui
+    name_template: "jitenv_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
@@ -50,6 +84,9 @@ archives:
 nfpms:
   - id: jitenv
     package_name: jitenv
+    ids:
+      - jitenv
+      - jitenv-tui
     vendor: Galvill
     homepage: https://github.com/Galvill/jitenv
     maintainer: Galvill <nexvill.ai@gmail.com>
@@ -86,10 +123,10 @@ nfpms:
 # `brews:` block.
 #
 # Cross-repo pushes need a PAT scoped to the tap repo; the default
-# GITHUB_TOKEN can only write to the current repo. envOrDefault keeps
-# `goreleaser release --snapshot` working locally when the secret is
-# absent — combined with `skip_upload: auto` it just generates the
-# cask in dist/ without trying to push.
+# GITHUB_TOKEN can only write to the current repo. `index .Env "..."`
+# returns "" when the secret is absent, so `goreleaser release
+# --snapshot` keeps working locally — combined with `skip_upload:
+# auto` it just generates the cask in dist/ without trying to push.
 #
 # Without notarization the cask sets `no_quarantine: true` so the
 # Gatekeeper hard-block doesn't fire on install. Users still see the
@@ -101,11 +138,18 @@ homebrew_casks:
       owner: Galvill
       name: homebrew-jitenv
       branch: main
-      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
+      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
     directory: Casks
     homepage: https://github.com/Galvill/jitenv
     description: Just-in-time env-var injection from pluggable secret sources, scoped to per-command process trees
     skip_upload: auto
+    # Ship both halves of the binary split (#182 bug B): jitenv runs
+    # everything except the TUI; jitenv-tui is the re-exec target for
+    # `jitenv config`. The cask links both into the Homebrew prefix
+    # bin/ so `which jitenv-tui` resolves.
+    binaries:
+      - jitenv
+      - jitenv-tui
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
@@ -113,7 +157,15 @@ homebrew_casks:
     # No xattr-strip hook: the binaries are Apple-notarized below, so
     # Gatekeeper accepts them out of the box. If notarization gets
     # disabled (secrets missing on a release), users will need to run
-    # `xattr -dr com.apple.quarantine` themselves once.
+    # `xattr -dr com.apple.quarantine` on jitenv + jitenv-tui once.
+
+# Chocolatey (#180) is intentionally NOT a goreleaser pipe: its
+# packer shells out to the `choco` CLI, which only exists on Windows,
+# while this release runs on ubuntu. The package is built+pushed by a
+# separate windows-latest workflow (.github/workflows/chocolatey.yml)
+# from the hand-authored package under packaging/chocolatey/, which
+# downloads the windows .zip this release uploads and SHA256-verifies
+# it. See that workflow and packaging/chocolatey/ for the details.
 
 checksum:
   name_template: SHA256SUMS
@@ -154,8 +206,14 @@ signs:
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      # Both halves of the binary split (#182): jitenv-tui ships in the
+      # cask alongside jitenv and is the re-exec target for `jitenv
+      # config`, so it must be signed + notarized too — otherwise, with
+      # the cask's xattr-strip hook removed above, Gatekeeper would
+      # block jitenv-tui on first run.
       ids:
         - jitenv
+        - jitenv-tui
       sign:
         certificate: '{{ .Env.MACOS_SIGN_P12 }}'
         password: '{{ .Env.MACOS_SIGN_PASSWORD }}'
@@ -184,6 +242,12 @@ release:
 
     ```sh
     brew install Galvill/jitenv/jitenv
+    ```
+
+    Windows users can install via Chocolatey:
+
+    ```powershell
+    choco install jitenv
     ```
 
     macOS binaries are Apple Developer ID code-signed and notarized.

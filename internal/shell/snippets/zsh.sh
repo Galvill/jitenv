@@ -57,12 +57,35 @@ __jitenv_cfg_path() {
 __jitenv_chpwd() {
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
     jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    # Exit 10 means a wrapper was added or removed → rebuild zsh's
+    # command hash table so the change takes effect immediately. Without
+    # it, a wrapper added for an already-run command stays masked by the
+    # cached path, and a just-removed wrapper leaves a dead hash entry.
+    # See bash.sh for the full rationale. Capture $? first; the trailing
+    # assignment resets it so we don't leak a non-zero status.
+    local rc=$?
+    [[ $rc -eq 10 ]] && rehash
     __JITENV_LAST_PWD="$PWD"
 }
 typeset -ga precmd_functions
 precmd_functions+=(__jitenv_chpwd)
 # Populate once at hook-load.
 __jitenv_chpwd
+
+# Version-check (#136): fire-and-forget background HTTP fetch
+# refreshes a 24h-cached sidecar; the foreground __version_notice
+# reads that cache and prints a one-line yellow notice if a newer
+# release is known. Both are guarded server-side by
+# JITENV_NO_VERSION_CHECK / CI / config / version!="dev"; the shell
+# predicate below is a fork-saver.
+#
+# `2>&1 >/dev/null` on the notice (NOT `>/dev/null 2>&1`) silences
+# stdout while keeping stderr on the terminal so the notice is
+# visible. The background fetch silences both.
+if [[ -t 2 && -z "${JITENV_NO_VERSION_CHECK:-}" && -z "${CI:-}" ]]; then
+    ( jitenv __version_check & ) >/dev/null 2>&1
+    jitenv __version_notice 2>&1 >/dev/null
+fi
 
 # The agent-down "Press Enter to skip, Ctrl+C to abort" countdown is
 # implemented in Go (internal/agentwarn/agentwarn.go) and rendered by
