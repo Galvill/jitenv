@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/Galvill/jitenv/compare/v0.10.0...v0.10.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **release:** raise macOS notarization wait to 45m ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#211](https://github.com/Galvill/jitenv/issues/211)) ([f98e247](https://github.com/Galvill/jitenv/commit/f98e247766895160412d73c7d2639bfcb65f3e03))
+
 ## [0.10.0](https://github.com/Galvill/jitenv/compare/v0.9.1...v0.10.0) (2026-05-27)
 
 
