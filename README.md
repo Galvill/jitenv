@@ -102,6 +102,29 @@ exec $SHELL
 
 Homebrew never modifies your shell rc files on its own.
 
+### Chocolatey (Windows)
+
+```powershell
+choco install jitenv
+```
+
+A downloader package that fetches the official `windows_amd64` release
+zip and verifies its SHA256 before extracting; Chocolatey shims both
+`jitenv.exe` and `jitenv-tui.exe` onto `%PATH%`. `choco upgrade jitenv`
+picks up new releases. After install, activate the PowerShell hook
+**once**:
+
+```powershell
+jitenv hook install
+# open a new pwsh tab — the hook is live
+```
+
+The first run of `jitenv.exe` may trip SmartScreen because the binary
+is not yet Authenticode-signed (tracked in
+[#39](https://github.com/Galvill/jitenv/issues/39)) — `Unblock-File`,
+or right-click → Properties → Unblock, clears it. PowerShell 7+ is
+required for the hook.
+
 ## Commands
 
 ```

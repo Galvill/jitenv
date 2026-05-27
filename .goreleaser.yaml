@@ -168,6 +168,14 @@ homebrew_casks:
                            args: ["-dr", "com.apple.quarantine", "#{staged_path}/jitenv-tui"]
           end
 
+# Chocolatey (#180) is intentionally NOT a goreleaser pipe: its
+# packer shells out to the `choco` CLI, which only exists on Windows,
+# while this release runs on ubuntu. The package is built+pushed by a
+# separate windows-latest workflow (.github/workflows/chocolatey.yml)
+# from the hand-authored package under packaging/chocolatey/, which
+# downloads the windows .zip this release uploads and SHA256-verifies
+# it. See that workflow and packaging/chocolatey/ for the details.
+
 checksum:
   name_template: SHA256SUMS
 
@@ -202,6 +210,12 @@ release:
 
     ```sh
     brew install Galvill/jitenv/jitenv
+    ```
+
+    Windows users can install via Chocolatey:
+
+    ```powershell
+    choco install jitenv
     ```
 
     macOS binaries are **not** Apple-notarized — first run requires
