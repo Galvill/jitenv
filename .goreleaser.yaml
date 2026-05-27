@@ -26,6 +26,15 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
+    hooks:
+      # Sign + notarize darwin binaries with Apple's own toolchain
+      # (#13). The script no-ops on non-darwin targets and when the
+      # signing identity isn't configured, so non-macOS/local builds
+      # are unaffected. See packaging/macos/sign-notarize.sh and the
+      # note above the (intentionally absent) goreleaser notarize block.
+      post:
+        - cmd: ./packaging/macos/sign-notarize.sh "{{ .Path }}" "{{ .Os }}"
+          output: true
 
   # The interactive TUI lives in a separate binary so the main
   # jitenv binary's import graph stays free of Bubble Tea / Lip
@@ -54,6 +63,11 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
+    hooks:
+      # Same darwin sign+notarize hook as the jitenv build (#13).
+      post:
+        - cmd: ./packaging/macos/sign-notarize.sh "{{ .Path }}" "{{ .Os }}"
+          output: true
 
 archives:
   - id: jitenv
@@ -154,9 +168,11 @@ homebrew_casks:
       name: goreleaserbot
       email: bot@goreleaser.com
     commit_msg_template: "Brew cask update for jitenv {{ .Tag }}"
-    # No xattr-strip hook: the binaries are Apple-notarized below, so
-    # Gatekeeper accepts them out of the box. If notarization gets
-    # disabled (secrets missing on a release), users will need to run
+    # No xattr-strip hook: the binaries are code-signed + Apple-
+    # notarized by the build post-hook (see packaging/macos/sign-
+    # notarize.sh), so Gatekeeper accepts them out of the box. If
+    # notarization gets disabled (secrets missing on a release), users
+    # will need to run
     # `xattr -dr com.apple.quarantine` on jitenv + jitenv-tui once.
 
 # Chocolatey (#180) is intentionally NOT a goreleaser pipe: its
@@ -183,46 +199,18 @@ signs:
       - "${artifact}"
       - "--yes"
 
-# Apple Developer ID code-signing + notarization for the
-# darwin/amd64 + darwin/arm64 binaries (#13). The release job has
-# to run on macOS — codesign and notarytool are macOS-only.
-#
-# Required GH Actions secrets (set in repo Settings → Secrets):
-#
-#   MACOS_SIGN_P12          base64 of a Developer ID Application
-#                           certificate exported as .p12
-#   MACOS_SIGN_PASSWORD     password set when the .p12 was exported
-#   MACOS_NOTARY_KEY        base64 of an App Store Connect API key
-#                           (.p8 file)
-#   MACOS_NOTARY_KEY_ID     the API key ID (e.g. "A1B2C3D4E5")
-#   MACOS_NOTARY_ISSUER_ID  the issuer UUID from App Store Connect
-#
-# `enabled` is a templated boolean. When MACOS_SIGN_P12 is unset
-# (no Apple Developer account configured yet, or local snapshot),
-# the entire notarize block is skipped and unsigned tarballs ship
-# as before. When the secrets are set, each darwin binary is
-# code-signed, the archives are submitted to Apple, and goreleaser
-# waits for the ticket before publishing the release.
-notarize:
-  macos:
-    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      # Both halves of the binary split (#182): jitenv-tui ships in the
-      # cask alongside jitenv and is the re-exec target for `jitenv
-      # config`, so it must be signed + notarized too — otherwise, with
-      # the cask's xattr-strip hook removed above, Gatekeeper would
-      # block jitenv-tui on first run.
-      ids:
-        - jitenv
-        - jitenv-tui
-      sign:
-        certificate: '{{ .Env.MACOS_SIGN_P12 }}'
-        password: '{{ .Env.MACOS_SIGN_PASSWORD }}'
-      notarize:
-        issuer_id: '{{ .Env.MACOS_NOTARY_ISSUER_ID }}'
-        key_id: '{{ .Env.MACOS_NOTARY_KEY_ID }}'
-        key: '{{ .Env.MACOS_NOTARY_KEY }}'
-        wait: true
-        timeout: 20m
+# Apple Developer ID code-signing + notarization is NOT done via
+# goreleaser's `notarize:` block: that path uses the bundled `quill`
+# signer, whose Go crypto/x509 chain verification rejects Apple's
+# Developer ID certificate chain with "x509: unhandled critical
+# extension" (#13). Instead each darwin binary is signed + notarized
+# in a build post-hook (see the `hooks.post` on each build above)
+# using Apple's own `codesign` + `xcrun notarytool` on the macOS
+# runner — packaging/macos/sign-notarize.sh. The release job
+# (.github/workflows/release.yml) imports the signing identity into a
+# temp keychain before invoking goreleaser. The hook no-ops on
+# non-darwin targets and when signing isn't configured, so local
+# `goreleaser release --snapshot` still works unsigned.
 
 snapshot:
   version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"

@@ -15,10 +15,12 @@ concurrency:
 
 jobs:
   goreleaser:
-    # macOS runner is required: the `notarize:` block uses Apple's
-    # `codesign` + `notarytool`, both macOS-only. The Linux deb/rpm
-    # nfpms artifacts are still produced here — nfpm runs anywhere
-    # since it doesn't shell out to dpkg/rpm. Issue #13.
+    # macOS runner is required: darwin binaries are code-signed +
+    # notarized with Apple's own `codesign` + `xcrun notarytool` (both
+    # macOS-only) in a goreleaser build post-hook — see
+    # packaging/macos/sign-notarize.sh and .goreleaser.yaml. The Linux
+    # deb/rpm nfpms artifacts are still produced here — nfpm runs
+    # anywhere since it doesn't shell out to dpkg/rpm. Issue #13.
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -35,6 +37,62 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      # Import the Developer ID Application cert into a throwaway
+      # keychain and decode the notary API key, then export the derived
+      # values for goreleaser's sign-notarize build hook (#13). No-ops
+      # when MACOS_SIGN_P12 is empty, so unsigned releases keep working
+      # until the secrets are configured. We do NOT use goreleaser's
+      # `notarize:` block: its bundled quill signer can't verify Apple's
+      # cert chain (Go x509 "unhandled critical extension").
+      - name: Set up macOS signing keychain
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_SIGN_P12}" ]; then
+            echo "MACOS_SIGN_P12 unset — releasing unsigned darwin binaries."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/jitenv-signing.keychain-db"
+          keychain_pw="$(openssl rand -base64 24)"
+          cert_p12="$RUNNER_TEMP/cert.p12"
+          notary_key="$RUNNER_TEMP/notary-key.p8"
+
+          printf '%s' "$MACOS_SIGN_P12" | base64 --decode > "$cert_p12"
+          printf '%s' "$MACOS_NOTARY_KEY" | base64 --decode > "$notary_key"
+
+          security create-keychain -p "$keychain_pw" "$keychain"
+          # Long, no auto-lock so the keychain stays usable across steps.
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pw" "$keychain"
+          security import "$cert_p12" -k "$keychain" -P "$MACOS_SIGN_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Allow codesign to use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_pw" "$keychain" >/dev/null
+          # Prepend our keychain to the search list so codesign finds the key.
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | sed 's/"//g')
+
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | awk '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$identity" ]; then
+            echo "::error::no 'Developer ID Application' identity found in the imported cert"
+            security find-identity -v -p codesigning "$keychain" || true
+            exit 1
+          fi
+          rm -f "$cert_p12"
+
+          {
+            echo "MACOS_SIGN_IDENTITY=$identity"
+            echo "MACOS_KEYCHAIN=$keychain"
+            echo "MACOS_KEYCHAIN_PW=$keychain_pw"
+            echo "MACOS_NOTARY_KEY_FILE=$notary_key"
+          } >> "$GITHUB_ENV"
+          echo "Imported signing identity $identity"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -44,12 +102,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          # macOS signing + notarization (#13). Goreleaser's
-          # `notarize:` block skips itself when MACOS_SIGN_P12 is
-          # empty, so unsigned releases keep working until the
-          # secrets are configured in repo settings.
-          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          # The sign-notarize build hook reads the keychain/identity
+          # from the step above (via $GITHUB_ENV) plus the notary key
+          # id + issuer below. The hook no-ops when MACOS_SIGN_IDENTITY
+          # is unset (secrets not configured).
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -n "${MACOS_KEYCHAIN:-}" ] && [ -f "${MACOS_KEYCHAIN}" ]; then
+            security delete-keychain "$MACOS_KEYCHAIN" || true
+          fi
+          rm -f "${MACOS_NOTARY_KEY_FILE:-}" || true
