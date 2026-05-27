@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Chocolatey package manifest for jitenv (#180).
+
+  __VERSION__ / __URL64__ / __CHECKSUM64__ / __ZIPNAME__ are placeholder
+  tokens rendered at pack time by .github/workflows/chocolatey.yml from
+  the published GitHub release (tag, windows-amd64 .zip URL, and its
+  SHA256 pulled from the release's SHA256SUMS asset). The file is not
+  pack-able with the tokens unsubstituted — the workflow always renders
+  them first.
+
+  This is a downloader package: tools/chocolateyInstall.ps1 fetches and
+  checksum-verifies the official release .zip at install time rather
+  than embedding the binary, mirroring the Homebrew cask. The .zip
+  carries BOTH jitenv.exe and jitenv-tui.exe, so chocolatey's auto-shim
+  puts the pair on PATH and `jitenv config` (which re-execs jitenv-tui)
+  works.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>jitenv</id>
+    <version>__VERSION__</version>
+    <title>jitenv</title>
+    <authors>Galvill</authors>
+    <owners>Galvill</owners>
+    <projectUrl>https://github.com/Galvill/jitenv</projectUrl>
+    <projectSourceUrl>https://github.com/Galvill/jitenv</projectSourceUrl>
+    <packageSourceUrl>https://github.com/Galvill/jitenv</packageSourceUrl>
+    <docsUrl>https://github.com/Galvill/jitenv/blob/main/README.md</docsUrl>
+    <bugTrackerUrl>https://github.com/Galvill/jitenv/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/Galvill/jitenv/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <copyright>© 2026 Gal Villaret</copyright>
+    <tags>secrets cli environment-variables shell-hook powershell foss cross-platform</tags>
+    <summary>Just-in-time environment variable loader, scoped to per-command process trees</summary>
+    <description>
+jitenv loads environment variables on demand from pluggable sources
+when configured executables are run, keeping secrets out of the parent
+shell. Linux, macOS, and Windows.
+
+After install, activate the PowerShell hook once:
+
+    jitenv hook install
+
+then open a new pwsh tab.
+
+**SmartScreen:** the first run of `jitenv.exe` may trigger SmartScreen
+because the binary is not yet Authenticode-signed (tracked upstream in
+issue #39). Right-click the executable, choose Properties, then
+Unblock — or run `Unblock-File` from PowerShell.
+    </description>
+    <releaseNotes>https://github.com/Galvill/jitenv/releases/tag/v__VERSION__</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
