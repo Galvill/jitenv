@@ -91,8 +91,11 @@ brew install Galvill/jitenv/jitenv
 Distributed as a Homebrew **cask** that downloads the goreleaser
 tarball for your arch. macOS binaries are Developer ID code-signed
 and notarized, so Gatekeeper accepts them without a quarantine
-override. After install, activate the shell hook **once** as your
-normal user:
+override. The cask and the darwin tarballs ship from a separate
+post-publish workflow (`macos-release.yml`) so the GitHub release
+itself doesn't block on Apple notarization; the cask typically lands
+within ~30 minutes of a new release. After install, activate the
+shell hook **once** as your normal user:
 
 ```sh
 jitenv hook install

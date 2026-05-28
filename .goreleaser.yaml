@@ -6,6 +6,12 @@ before:
   hooks:
     - go mod download
 
+# Main release builds Linux + Windows only. Darwin binaries (signed
+# + notarized) and the Homebrew cask are produced by the separate
+# .github/workflows/macos-release.yml workflow on macos-latest after
+# this release publishes, so Apple's variable notarization latency
+# never blocks lin/win artifacts (or the Chocolatey publish that
+# triggers off release:published). See .goreleaser.darwin.yaml.
 builds:
   - id: jitenv
     main: ./cmd/jitenv
@@ -14,7 +20,6 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
@@ -26,15 +31,6 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
-    hooks:
-      # Sign + notarize darwin binaries with Apple's own toolchain
-      # (#13). The script no-ops on non-darwin targets and when the
-      # signing identity isn't configured, so non-macOS/local builds
-      # are unaffected. See packaging/macos/sign-notarize.sh and the
-      # note above the (intentionally absent) goreleaser notarize block.
-      post:
-        - cmd: ./packaging/macos/sign-notarize.sh "{{ .Path }}" "{{ .Os }}"
-          output: true
 
   # The interactive TUI lives in a separate binary so the main
   # jitenv binary's import graph stays free of Bubble Tea / Lip
@@ -51,7 +47,6 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
@@ -63,11 +58,6 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
-    hooks:
-      # Same darwin sign+notarize hook as the jitenv build (#13).
-      post:
-        - cmd: ./packaging/macos/sign-notarize.sh "{{ .Path }}" "{{ .Os }}"
-          output: true
 
 archives:
   - id: jitenv
@@ -126,54 +116,13 @@ nfpms:
       postinstall: packaging/postinstall.sh
       preremove: packaging/preremove.sh
 
-# Homebrew tap (#13): goreleaser auto-generates a cask from the
-# macOS tarball artifacts and pushes it to a separate tap repo
-# (`Galvill/homebrew-jitenv`). End users then install with:
-#
-#     brew install Galvill/jitenv/jitenv
-#
-# Cask (not formula) because Homebrew now recommends casks for any
-# pre-built binary distribution and goreleaser is phasing out the
-# `brews:` block.
-#
-# Cross-repo pushes need a PAT scoped to the tap repo; the default
-# GITHUB_TOKEN can only write to the current repo. `index .Env "..."`
-# returns "" when the secret is absent, so `goreleaser release
-# --snapshot` keeps working locally — combined with `skip_upload:
-# auto` it just generates the cask in dist/ without trying to push.
-#
-# Without notarization the cask sets `no_quarantine: true` so the
-# Gatekeeper hard-block doesn't fire on install. Users still see the
-# "downloaded from the internet" warning the first time they invoke
-# jitenv via Spotlight/Finder; running from the terminal is fine.
-homebrew_casks:
-  - name: jitenv
-    repository:
-      owner: Galvill
-      name: homebrew-jitenv
-      branch: main
-      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
-    directory: Casks
-    homepage: https://github.com/Galvill/jitenv
-    description: Just-in-time env-var injection from pluggable secret sources, scoped to per-command process trees
-    skip_upload: auto
-    # Ship both halves of the binary split (#182 bug B): jitenv runs
-    # everything except the TUI; jitenv-tui is the re-exec target for
-    # `jitenv config`. The cask links both into the Homebrew prefix
-    # bin/ so `which jitenv-tui` resolves.
-    binaries:
-      - jitenv
-      - jitenv-tui
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    commit_msg_template: "Brew cask update for jitenv {{ .Tag }}"
-    # No xattr-strip hook: the binaries are code-signed + Apple-
-    # notarized by the build post-hook (see packaging/macos/sign-
-    # notarize.sh), so Gatekeeper accepts them out of the box. If
-    # notarization gets disabled (secrets missing on a release), users
-    # will need to run
-    # `xattr -dr com.apple.quarantine` on jitenv + jitenv-tui once.
+# Homebrew cask + darwin binaries (#13) are NOT in this config: they
+# ship via .github/workflows/macos-release.yml using
+# .goreleaser.darwin.yaml on macos-latest after the main release
+# publishes, so Apple's variable notarization latency can't block the
+# lin/win artifacts or the Chocolatey publish that triggers off
+# release:published. The darwin tarballs + their cosign-signed
+# SHA256SUMS-darwin land on the same GitHub release asynchronously.
 
 # Chocolatey (#180) is intentionally NOT a goreleaser pipe: its
 # packer shells out to the `choco` CLI, which only exists on Windows,
@@ -199,18 +148,14 @@ signs:
       - "${artifact}"
       - "--yes"
 
-# Apple Developer ID code-signing + notarization is NOT done via
-# goreleaser's `notarize:` block: that path uses the bundled `quill`
-# signer, whose Go crypto/x509 chain verification rejects Apple's
-# Developer ID certificate chain with "x509: unhandled critical
-# extension" (#13). Instead each darwin binary is signed + notarized
-# in a build post-hook (see the `hooks.post` on each build above)
-# using Apple's own `codesign` + `xcrun notarytool` on the macOS
-# runner — packaging/macos/sign-notarize.sh. The release job
-# (.github/workflows/release.yml) imports the signing identity into a
-# temp keychain before invoking goreleaser. The hook no-ops on
-# non-darwin targets and when signing isn't configured, so local
-# `goreleaser release --snapshot` still works unsigned.
+# macOS code-signing + notarization runs entirely in
+# .github/workflows/macos-release.yml against .goreleaser.darwin.yaml
+# (#13). It triggers on `release: published`, builds + signs +
+# notarizes the darwin binaries using Apple's native codesign + xcrun
+# notarytool (packaging/macos/sign-notarize.sh), uploads the darwin
+# tarballs + their own SHA256SUMS-darwin to this release, and pushes
+# the Homebrew cask. Decoupled so Apple's variable notarization
+# latency never blocks the lin/win artifacts shipped here.
 
 snapshot:
   version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"
@@ -224,9 +169,13 @@ release:
   header: |
     ## jitenv {{ .Tag }}
 
-    Linux, macOS, and Windows artifacts for `amd64` and `arm64`.
+    Linux and Windows artifacts for `amd64` and `arm64`. The macOS
+    tarballs + Homebrew cask are signed + notarized + published
+    asynchronously by a separate workflow (typically within ~30 min)
+    and land on this same release with an `SHA256SUMS-darwin` of
+    their own.
 
-    macOS users can install via Homebrew:
+    macOS users can install via Homebrew (once the cask is pushed):
 
     ```sh
     brew install Galvill/jitenv/jitenv
@@ -244,7 +193,8 @@ release:
     tracking issue. Verify integrity:
 
     ```sh
-    sha256sum -c SHA256SUMS
+    sha256sum -c SHA256SUMS         # linux + windows
+    sha256sum -c SHA256SUMS-darwin  # macOS, once published
 
     cosign verify-blob \
       --certificate-identity-regexp "^https://github.com/Galvill/jitenv/" \
