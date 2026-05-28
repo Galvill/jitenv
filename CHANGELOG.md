@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/Galvill/jitenv/compare/v0.10.1...v0.10.2) (2026-05-28)
+
+
+### Bug Fixes
+
+* **release:** decouple macOS sign/notarize + cask from the main release ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#212](https://github.com/Galvill/jitenv/issues/212)) ([38862fc](https://github.com/Galvill/jitenv/commit/38862fcbb310752004e8cdd89c8d615cec67583d))
+
 ## [0.10.1](https://github.com/Galvill/jitenv/compare/v0.10.0...v0.10.1) (2026-05-27)
 
 
