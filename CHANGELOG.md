@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.3](https://github.com/Galvill/jitenv/compare/v0.10.2...v0.10.3) (2026-05-28)
+
+
+### Bug Fixes
+
+* **chocolatey:** poll the release asset list instead of trusting SHA256SUMS 200 ([#180](https://github.com/Galvill/jitenv/issues/180)) ([#214](https://github.com/Galvill/jitenv/issues/214)) ([eb50254](https://github.com/Galvill/jitenv/commit/eb502547f9d868cf3346118f365d5ed10aa74010))
+* **release:** raise macOS notarization wait to 120m ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#216](https://github.com/Galvill/jitenv/issues/216)) ([330aaba](https://github.com/Galvill/jitenv/commit/330aabaab17e5ab12400947cc649ddeafff4b591))
+
 ## [0.10.2](https://github.com/Galvill/jitenv/compare/v0.10.1...v0.10.2) (2026-05-28)
 
 
