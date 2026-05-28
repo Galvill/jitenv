@@ -1,0 +1,82 @@
+name: notary-info
+
+# Diagnostic workflow: query Apple's notary service for the final
+# status of one or more notarytool submission IDs (#13). Intended
+# for investigating notarizations that the macos-release.yml --wait
+# capped out on — Apple may have finished processing well after our
+# cap fired, so this confirms whether the bigger timeout would
+# resolve the issue (status: Accepted) or there's a real rejection
+# (status: Invalid).
+#
+# Read-only: no signing, no asset upload, no cask push. Just calls
+# xcrun notarytool info (and log on any non-Accepted) and prints
+# the result. Inputs accept a comma-separated submission_id list
+# so a single dispatch can check multiple submissions at once.
+#
+# Injection hygiene: inputs.submission_ids is routed through
+# env.SUBMISSION_IDS and read as $SUBMISSION_IDS in run blocks; each
+# individual ID is regex-validated as a UUID before being passed to
+# xcrun.
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_ids:
+        description: "Comma-separated notarytool submission IDs to check"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  info:
+    runs-on: macos-latest
+    env:
+      SUBMISSION_IDS: ${{ inputs.submission_ids }}
+    steps:
+      - name: Decode notary API key
+        env:
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_NOTARY_KEY}" ]; then
+            echo "::error::MACOS_NOTARY_KEY secret is not set"
+            exit 1
+          fi
+          key_file="$RUNNER_TEMP/notary-key.p8"
+          printf '%s' "$MACOS_NOTARY_KEY" | base64 --decode > "$key_file"
+          echo "MACOS_NOTARY_KEY_FILE=$key_file" >> "$GITHUB_ENV"
+
+      - name: notarytool info + log
+        env:
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          set -uo pipefail
+          IFS=', ' read -r -a ids <<< "$SUBMISSION_IDS"
+          for id in "${ids[@]}"; do
+            [ -z "$id" ] && continue
+            if ! [[ "$id" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+              echo "::error::skipping malformed submission id: $id"
+              continue
+            fi
+            echo "=========================="
+            echo "submission: $id"
+            echo "=========================="
+            xcrun notarytool info "$id" \
+              --key "$MACOS_NOTARY_KEY_FILE" \
+              --key-id "$MACOS_NOTARY_KEY_ID" \
+              --issuer "$MACOS_NOTARY_ISSUER_ID" || echo "  (notarytool info exited non-zero)"
+            echo
+            echo "--- notarytool log ---"
+            xcrun notarytool log "$id" \
+              --key "$MACOS_NOTARY_KEY_FILE" \
+              --key-id "$MACOS_NOTARY_KEY_ID" \
+              --issuer "$MACOS_NOTARY_ISSUER_ID" 2>&1 | sed 's/^/  /' || true
+            echo
+          done
+
+      - name: Clean up notary key
+        if: always()
+        run: rm -f "${MACOS_NOTARY_KEY_FILE:-}" || true
