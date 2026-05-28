@@ -24,6 +24,13 @@
 #   MACOS_NOTARY_KEY_ID     the API key ID
 #   MACOS_NOTARY_ISSUER_ID  the issuer UUID
 #
+# Optional:
+#   MACOS_NOTARY_TIMEOUT    notarytool --timeout value (e.g. "60m",
+#                           "3h"). Default "120m". Wired to the repo
+#                           variable of the same name by
+#                           macos-release.yml so the cap can be
+#                           bumped per-run without a code change.
+#
 # Bare CLI binaries (Mach-O, not .app/.pkg/.dmg) cannot be stapled, so
 # we don't staple — Gatekeeper verifies the notarization online on
 # first run. That's why the Homebrew cask no longer strips the
@@ -74,18 +81,23 @@ ditto -c -k "$BIN" "$zip"
 # --wait blocks until Apple finishes. Notarization time is highly
 # variable — the smaller jitenv-tui binary completes in ~25 min while
 # the larger jitenv binary has been observed still "In Progress" past
-# 45m (v0.10.2 timed out both jitenv targets at the previous cap).
-# 120m gives plenty of headroom; goreleaser runs the hooks with bounded
-# concurrency, so worst-case wall-clock is ~2 rounds × 120m = 4h,
-# inside the 6h default GitHub job timeout. Since macos-release.yml is
+# 45m. The cap is overridable at runtime via the MACOS_NOTARY_TIMEOUT
+# env var (set as a repo variable on macos-release.yml — see the
+# workflow), defaulting to 120m so it just works without configuration.
+# Bumping the var lets you retry a release with a longer wait without
+# a code change. Goreleaser runs the hooks with bounded concurrency,
+# so worst-case wall-clock is ~2 rounds × this value; pick something
+# inside GitHub's default 6h job timeout. Since macos-release.yml is
 # decoupled from the main release (#212), a long mac run no longer
 # blocks lin/win/choco. A real timeout here fails the cask publish
 # loudly rather than shipping an un-notarized binary.
+notary_timeout="${MACOS_NOTARY_TIMEOUT:-120m}"
+echo "sign-notarize: notarytool --timeout $notary_timeout"
 xcrun notarytool submit "$zip" \
   --key "$MACOS_NOTARY_KEY_FILE" \
   --key-id "$MACOS_NOTARY_KEY_ID" \
   --issuer "$MACOS_NOTARY_ISSUER_ID" \
   --wait \
-  --timeout 120m
+  --timeout "$notary_timeout"
 
 echo "sign-notarize: done $BIN"
