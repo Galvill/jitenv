@@ -15,6 +15,11 @@ concurrency:
 
 jobs:
   goreleaser:
+    # Linux runner: this workflow now builds Linux + Windows artifacts
+    # only. macOS code-signing + notarization + Homebrew cask publish
+    # ship asynchronously via .github/workflows/macos-release.yml (#13)
+    # so Apple's variable notarization latency can't block lin/win
+    # or the Chocolatey publish that triggers off release:published.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,4 +44,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

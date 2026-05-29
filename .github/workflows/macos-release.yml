@@ -1,0 +1,151 @@
+name: macos-release
+
+# Post-publish macOS workflow (#13). Triggered after the main
+# release.yml has published lin/win artifacts. Runs entirely on
+# macos-latest:
+#
+#   1. Imports the Developer ID Application cert into a throwaway
+#      keychain (same pattern release.yml used before the decoupling).
+#   2. Builds darwin amd64+arm64 for jitenv + jitenv-tui via
+#      goreleaser with .goreleaser.darwin.yaml; the build post-hook
+#      sign-notarize.sh codesigns + notarizes each binary using
+#      Apple's native codesign + xcrun notarytool.
+#   3. Uploads the darwin tarballs + their cosign-signed
+#      SHA256SUMS-darwin to the existing GH release (the main release
+#      ships SHA256SUMS for lin/win; the darwin checksum has its own
+#      filename so they don't clobber).
+#   4. Pushes the Homebrew cask to Galvill/homebrew-jitenv (goreleaser
+#      homebrew_casks pipe). The darwin config sets release.disable:
+#      true so goreleaser doesn't touch the GH release here.
+#
+# Skips pre-releases (the `-rc.N` tags). workflow_dispatch allows
+# manual re-runs against any tag without re-cutting the release.
+#
+# Injection hygiene: release-supplied values (the tag) flow through
+# the job-level env: block and are read as $TAG in run:, never
+# inlined as ${{ ... }} inside run:.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sign + notarize, e.g. v0.10.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: macos-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: macos-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Set up macOS signing keychain
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_SIGN_P12}" ]; then
+            echo "::error::MACOS_SIGN_P12 is empty — refuse to ship un-notarized darwin binaries."
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/jitenv-signing.keychain-db"
+          keychain_pw="$(openssl rand -base64 24)"
+          cert_p12="$RUNNER_TEMP/cert.p12"
+          notary_key="$RUNNER_TEMP/notary-key.p8"
+
+          printf '%s' "$MACOS_SIGN_P12" | base64 --decode > "$cert_p12"
+          printf '%s' "$MACOS_NOTARY_KEY" | base64 --decode > "$notary_key"
+
+          security create-keychain -p "$keychain_pw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pw" "$keychain"
+          security import "$cert_p12" -k "$keychain" -P "$MACOS_SIGN_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_pw" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | sed 's/"//g')
+
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | awk '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$identity" ]; then
+            echo "::error::no 'Developer ID Application' identity found in the imported cert"
+            security find-identity -v -p codesigning "$keychain" || true
+            exit 1
+          fi
+          rm -f "$cert_p12"
+
+          {
+            echo "MACOS_SIGN_IDENTITY=$identity"
+            echo "MACOS_KEYCHAIN=$keychain"
+            echo "MACOS_KEYCHAIN_PW=$keychain_pw"
+            echo "MACOS_NOTARY_KEY_FILE=$notary_key"
+          } >> "$GITHUB_ENV"
+          echo "Imported signing identity $identity"
+
+      - name: Run GoReleaser (darwin)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --config .goreleaser.darwin.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          # Repo variable (Settings -> Variables -> Actions), NOT a
+          # secret — overridable per-run without a code change so we
+          # can retry with a longer wait when Apple's queue is slow.
+          # sign-notarize.sh defaults to 120m if this is unset.
+          MACOS_NOTARY_TIMEOUT: ${{ vars.MACOS_NOTARY_TIMEOUT }}
+
+      - name: Upload darwin artifacts to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          gh release upload "$TAG" \
+            dist/jitenv_*_darwin_*.tar.gz \
+            "dist/jitenv_${version}_darwin_SHA256SUMS" \
+            "dist/jitenv_${version}_darwin_SHA256SUMS.sig" \
+            "dist/jitenv_${version}_darwin_SHA256SUMS.pem" \
+            --clobber
+
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -n "${MACOS_KEYCHAIN:-}" ] && [ -f "${MACOS_KEYCHAIN}" ]; then
+            security delete-keychain "$MACOS_KEYCHAIN" || true
+          fi
+          rm -f "${MACOS_NOTARY_KEY_FILE:-}" || true
