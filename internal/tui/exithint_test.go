@@ -4,11 +4,24 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gv/jitenv/internal/shell"
 )
+
+// skipOnWindows guards the bash-flavoured tests below: on windows,
+// shell.DetectShellDetailed always returns "powershell" (independent
+// of $SHELL), and the rc file is $PROFILE rather than ~/.bashrc.
+// The branches printHookExitHint walks are identical regardless of
+// shell — proven on the linux + macos runners — so the windows test
+// is just shell-name plumbing we'd duplicate. Keep it simple.
+func skipOnWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell detection is windows-pinned to powershell; bash branches covered on unix runners")
+	}
+}
 
 // TestPrintHookExitHint_NotInstalled asserts the safety-net hint
 // printed after the TUI tears down its alt-screen. When the hook
@@ -18,6 +31,7 @@ import (
 // activate-now one-liner so the user has clear next steps below the
 // restored shell prompt.
 func TestPrintHookExitHint_NotInstalled(t *testing.T) {
+	skipOnWindows(t)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/bin/bash")
@@ -43,6 +57,7 @@ func TestPrintHookExitHint_NotInstalled(t *testing.T) {
 // This is the safety net for the user's reported #206 step 4 + 5
 // ("hook installed but not loaded in current shell").
 func TestPrintHookExitHint_JustInstalled(t *testing.T) {
+	skipOnWindows(t)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/bin/bash")
@@ -74,6 +89,7 @@ func TestPrintHookExitHint_JustInstalled(t *testing.T) {
 // terminal on every TUI exit when the hook was already installed
 // before the session and remains installed at exit.
 func TestPrintHookExitHint_SilentWhenStable(t *testing.T) {
+	skipOnWindows(t)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/bin/bash")
