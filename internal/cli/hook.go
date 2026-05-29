@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/gv/jitenv/internal/shell"
 )
@@ -93,26 +95,59 @@ Re-running this command is a safe no-op when nothing needs to change.`,
 			if err != nil {
 				return err
 			}
+			activate := shell.ActivateCommand(sh)
+
+			// When stdout is captured (e.g. `eval "$(jitenv hook
+			// install)"`), emit ONLY the activation command on stdout so
+			// the surrounding eval loads the hook into the current shell
+			// now; route the human-readable status to stderr so it
+			// doesn't get eval'd (#206). Re-evaluating the hook snippet
+			// is idempotent, so this is safe even on a no-op install.
 			out := cmd.OutOrStdout()
+			captured := !stdoutIsTTY(out)
+			status := cmd.ErrOrStderr()
+			if !captured {
+				// Interactive: everything goes to stdout as before.
+				status = out
+			}
+
 			if rep.RcAdded {
-				fmt.Fprintf(out, "added hook line to %s\n", rep.RcPath)
+				fmt.Fprintf(status, "added hook line to %s\n", rep.RcPath)
 			} else {
-				fmt.Fprintf(out, "hook line already present in %s\n", rep.RcPath)
+				fmt.Fprintf(status, "hook line already present in %s\n", rep.RcPath)
 			}
 			if sh == "bash" {
 				switch {
 				case rep.LoginAdded && rep.LoginPath != "":
-					fmt.Fprintf(out, "added '. ~/.bashrc' to %s so login shells load the hook\n", rep.LoginPath)
+					fmt.Fprintf(status, "added '. ~/.bashrc' to %s so login shells load the hook\n", rep.LoginPath)
 				case rep.LoginAlreadyOK && rep.LoginPath != "":
-					fmt.Fprintf(out, "%s already sources ~/.bashrc — login shells covered\n", rep.LoginPath)
+					fmt.Fprintf(status, "%s already sources ~/.bashrc — login shells covered\n", rep.LoginPath)
 				}
 			}
-			fmt.Fprintln(out, "open a new shell to activate")
+			if captured {
+				fmt.Fprintln(out, activate)
+			} else {
+				fmt.Fprintf(out, "activate it in this shell with:\n    %s\n(or open a new shell)\n", activate)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&shellFlag, "shell", "", "shell to install for (bash|zsh|powershell); auto-detect by default")
 	return cmd
+}
+
+// stdoutIsTTY reports whether the command's stdout is a real terminal.
+// Cobra's OutOrStdout returns an io.Writer that is os.Stdout in normal
+// use but a *bytes.Buffer (or similar) under test or when the output is
+// captured by `$(...)`. We only treat an actual *os.File on a terminal
+// fd as interactive; anything else is "captured" so `eval "$(jitenv
+// hook install)"` gets a clean activation line on stdout (#206).
+func stdoutIsTTY(out interface{}) bool {
+	f, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func newHookStatusCmd() *cobra.Command {
