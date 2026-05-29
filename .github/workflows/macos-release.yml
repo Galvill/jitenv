@@ -122,6 +122,11 @@ jobs:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          # Repo variable (Settings -> Variables -> Actions), NOT a
+          # secret — overridable per-run without a code change so we
+          # can retry with a longer wait when Apple's queue is slow.
+          # sign-notarize.sh defaults to 120m if this is unset.
+          MACOS_NOTARY_TIMEOUT: ${{ vars.MACOS_NOTARY_TIMEOUT }}
 
       - name: Upload darwin artifacts to the GitHub release
         env:
