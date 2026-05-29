@@ -99,15 +99,6 @@ func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTempl
 		m.push(newMappingFormScreen(m, idx, true))
 		m.footerHint = tmpl.hint
 	}
-	// Snapshot the hook state BEFORE the TUI runs so we can compare
-	// against the post-exit state and tell the user exactly what
-	// action they still need to take (#205/#206). The in-TUI install
-	// modal + status flash are easy to miss after alt-screen restore,
-	// and a small number of users have reported the modal not
-	// appearing at all in their environment; this stderr hint after
-	// the TUI tears down its alt-screen is the bulletproof safety net.
-	hookBefore, _ := shell.CurrentStatus()
-
 	prog := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := prog.Run()
 	if err != nil {
@@ -120,47 +111,54 @@ func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTempl
 	if root.savedSinceLastReload {
 		_ = pingAgentReload()
 	}
-	printHookExitHint(os.Stderr, hookBefore)
+	// Auto-install the shell hook on TUI exit when there's at least
+	// one mapping configured and the hook isn't already wired. We
+	// re-read cfg from disk so a user who Discarded their session
+	// edits doesn't trigger install based on un-saved mappings.
+	// Notifies via a stderr block once the alt-screen has restored
+	// (the activation eval line is plain text below the shell prompt,
+	// ready to copy-paste). Silent when the shell isn't supported,
+	// when no mappings exist, or when the hook is already wired.
+	maybeAutoInstallHook(os.Stderr, cfgPath)
 	return nil
 }
 
-// printHookExitHint prints a one-block stderr notice after the TUI
-// has exited and the alt-screen has been restored. It compares the
-// hook state taken before the TUI ran against the current on-disk
-// state and prints:
-//
-//   - "hook not installed" with the install command, when the hook
-//     is still missing (covers both "user quit without saving" and
-//     "user dismissed the prompt"), OR
-//   - "hook installed, activate now" with the exact activation
-//     one-liner for the detected shell, when the hook was installed
-//     during this session — the eval line goes below the alt-screen
-//     restore so the user can copy-paste it.
-//
-// Silent when the hook is installed AND was already installed before
-// the TUI ran, and when the shell isn't supported (no message would
-// be actionable).
-func printHookExitHint(w io.Writer, before shell.Status) {
-	after, err := shell.CurrentStatus()
-	if err != nil || after.Shell == "" {
+// maybeAutoInstallHook is the simplified on-quit hook-install flow.
+// Loads cfg from disk; if it has any mappings and the shell hook
+// isn't installed, runs shell.InstallShell (the full installer:
+// rc-line + bash login-chain wiring) and prints a one-block stderr
+// notice with the exact command to activate the hook in the
+// current shell — that's as close to "source .bashrc for the user"
+// as the parent-shell process boundary allows.
+func maybeAutoInstallHook(w io.Writer, cfgPath string) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil || len(cfg.Mappings) == 0 {
 		return
 	}
-	if !after.Installed {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Note: jitenv shell hook is not installed.")
-		fmt.Fprintln(w, "  Install:   jitenv hook install")
-		fmt.Fprintf(w, "  Activate:  %s\n", shell.ActivateCommand(after.Shell))
+	st, err := shell.CurrentStatus()
+	if err != nil || st.Shell == "" || st.Installed {
 		return
 	}
-	if !before.Installed {
+	rep, ierr := shell.InstallShell(st.Shell)
+	if ierr != nil {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Hook installed in %s.\n", after.RcPath)
-		if after.Shell == "bash" && after.LoginPath != "" && after.LoginSources {
-			fmt.Fprintf(w, "  Login chain: %s sources ~/.bashrc.\n", after.LoginPath)
+		fmt.Fprintf(w, "warning: jitenv could not auto-install the shell hook: %v\n", ierr)
+		fmt.Fprintln(w, "  Try manually: jitenv hook install")
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Hook installed in %s.\n", rep.RcPath)
+	if st.Shell == "bash" {
+		switch {
+		case rep.LoginAdded && rep.LoginPath != "":
+			fmt.Fprintf(w, "  Login chain: wired via %s.\n", rep.LoginPath)
+		case rep.LoginAlreadyOK && rep.LoginPath != "":
+			fmt.Fprintf(w, "  Login chain: %s already sources ~/.bashrc.\n", rep.LoginPath)
 		}
-		fmt.Fprintf(w, "  Activate now: %s\n", shell.ActivateCommand(after.Shell))
-		fmt.Fprintln(w, "  (or open a new shell)")
 	}
+	fmt.Fprintln(w, "Activate it in this shell:")
+	fmt.Fprintf(w, "    %s\n", shell.ActivateCommand(st.Shell))
+	fmt.Fprintln(w, "(or open a new shell.)")
 }
 
 // loadOrInit handles the "no config yet" first-run path: prompt the

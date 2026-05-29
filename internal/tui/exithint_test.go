@@ -8,99 +8,133 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/shell"
 )
 
-// skipOnWindows guards the bash-flavoured tests below: on windows,
-// shell.DetectShellDetailed always returns "powershell" (independent
-// of $SHELL), and the rc file is $PROFILE rather than ~/.bashrc.
-// The branches printHookExitHint walks are identical regardless of
-// shell — proven on the linux + macos runners — so the windows test
-// is just shell-name plumbing we'd duplicate. Keep it simple.
+// The simplified on-quit flow (#205/#206 follow-up):
+//   - cfg has mappings + hook missing  -> auto-install + print activation block
+//   - cfg has no mappings              -> silent (don't bother the user)
+//   - hook already installed           -> silent
+//
+// shell.DetectShellDetailed is hardcoded to powershell on Windows, so
+// the bash-flavoured asserts below would no-op there; skip cleanly.
+
 func skipOnWindows(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell detection is windows-pinned to powershell; bash branches covered on unix runners")
 	}
 }
 
-// TestPrintHookExitHint_NotInstalled asserts the safety-net hint
-// printed after the TUI tears down its alt-screen. When the hook
-// isn't installed on disk (covers the user-reported #205 step 2 and
-// step 3 paths — quit-without-save and save-&-quit-without-prompt),
-// the hint must offer both the install command and the
-// activate-now one-liner so the user has clear next steps below the
-// restored shell prompt.
-func TestPrintHookExitHint_NotInstalled(t *testing.T) {
-	skipOnWindows(t)
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv("SHELL", "/bin/bash")
-
-	var buf bytes.Buffer
-	printHookExitHint(&buf, shell.Status{}) // before: empty (not installed)
-
-	got := buf.String()
-	for _, want := range []string{
-		"hook is not installed",
-		"jitenv hook install",
-		shell.ActivateCommand("bash"),
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("exit hint missing %q:\n%s", want, got)
-		}
+// initConfig writes a minimal valid encrypted cfg, optionally adding a
+// single mapping to it, and returns the cfg path.
+func initConfig(t *testing.T, dir string, withMapping bool) string {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := config.InitNew(cfgPath, []byte("hunter2")); err != nil {
+		t.Fatalf("InitNew: %v", err)
 	}
+	if !withMapping {
+		return cfgPath
+	}
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	key, err := config.DeriveKeyFromMeta(c, []byte("hunter2"))
+	if err != nil {
+		t.Fatalf("DeriveKeyFromMeta: %v", err)
+	}
+	if err := config.DecryptInPlace(c, key); err != nil {
+		t.Fatalf("DecryptInPlace: %v", err)
+	}
+	c.Mappings = append(c.Mappings, config.Mapping{Path: "/x.sh"})
+	if err := config.EncryptInPlace(c, key); err != nil {
+		t.Fatalf("EncryptInPlace: %v", err)
+	}
+	if err := config.AtomicSave(cfgPath, c); err != nil {
+		t.Fatalf("AtomicSave: %v", err)
+	}
+	return cfgPath
 }
 
-// TestPrintHookExitHint_JustInstalled asserts the activation-now
-// guidance prints after the TUI exits when the hook was installed
-// during this session — even if the in-TUI status flash was missed.
-// This is the safety net for the user's reported #206 step 4 + 5
-// ("hook installed but not loaded in current shell").
-func TestPrintHookExitHint_JustInstalled(t *testing.T) {
+// TestAutoInstallHook_MappingsAndMissing covers the headline path
+// (#205/#206): mappings exist, hook missing -> installer runs and the
+// activation block lands on stderr below the alt-screen restore.
+func TestAutoInstallHook_MappingsAndMissing(t *testing.T) {
 	skipOnWindows(t)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/bin/bash")
 
-	// Write the eval line into .bashrc so CurrentStatus reports Installed=true.
+	cfgPath := initConfig(t, tmp, true)
 	rc := filepath.Join(tmp, ".bashrc")
-	if err := os.WriteFile(rc, []byte(shell.HookLine("bash")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+	// Sanity: pre-condition is hook-missing.
+	if _, err := os.Stat(rc); err == nil {
+		t.Fatal("precondition: ~/.bashrc must not exist yet")
 	}
 
 	var buf bytes.Buffer
-	// `before` snapshot says NOT installed → after says installed →
-	// the helper should print the just-installed guidance.
-	printHookExitHint(&buf, shell.Status{Shell: "bash", Installed: false})
+	maybeAutoInstallHook(&buf, cfgPath)
+
+	// Post: hook line is now in ~/.bashrc.
+	body, err := os.ReadFile(rc)
+	if err != nil {
+		t.Fatalf("read .bashrc: %v", err)
+	}
+	if !strings.Contains(string(body), shell.HookLine("bash")) {
+		t.Fatalf("hook line not appended to .bashrc:\n%s", body)
+	}
 
 	got := buf.String()
 	for _, want := range []string{
 		"Hook installed in",
-		"Activate now",
+		"Activate it in this shell",
 		shell.ActivateCommand("bash"),
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("just-installed hint missing %q:\n%s", want, got)
+			t.Errorf("notification missing %q:\n%s", want, got)
 		}
 	}
 }
 
-// TestPrintHookExitHint_SilentWhenStable confirms we don't spam the
-// terminal on every TUI exit when the hook was already installed
-// before the session and remains installed at exit.
-func TestPrintHookExitHint_SilentWhenStable(t *testing.T) {
+// TestAutoInstallHook_SilentNoMappings: user opened the TUI and quit
+// without adding any mappings. Don't auto-install, don't print.
+func TestAutoInstallHook_SilentNoMappings(t *testing.T) {
 	skipOnWindows(t)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/bin/bash")
 
+	cfgPath := initConfig(t, tmp, false)
+	rc := filepath.Join(tmp, ".bashrc")
+
+	var buf bytes.Buffer
+	maybeAutoInstallHook(&buf, cfgPath)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected silent exit with no mappings, got:\n%s", buf.String())
+	}
+	if _, err := os.Stat(rc); err == nil {
+		t.Errorf(".bashrc was created even though there are no mappings")
+	}
+}
+
+// TestAutoInstallHook_SilentAlreadyInstalled: nothing to do, no notice.
+func TestAutoInstallHook_SilentAlreadyInstalled(t *testing.T) {
+	skipOnWindows(t)
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("SHELL", "/bin/bash")
+
+	cfgPath := initConfig(t, tmp, true)
 	rc := filepath.Join(tmp, ".bashrc")
 	if err := os.WriteFile(rc, []byte(shell.HookLine("bash")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var buf bytes.Buffer
-	printHookExitHint(&buf, shell.Status{Shell: "bash", Installed: true})
+	maybeAutoInstallHook(&buf, cfgPath)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected silent exit when hook already installed, got:\n%s", buf.String())
