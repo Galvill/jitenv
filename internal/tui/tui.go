@@ -147,16 +147,8 @@ func maybeAutoInstallHook(w io.Writer, cfgPath string) {
 		return
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Hook installed in %s.\n", rep.RcPath)
-	if st.Shell == "bash" {
-		switch {
-		case rep.LoginAdded && rep.LoginPath != "":
-			fmt.Fprintf(w, "  Login chain: wired via %s.\n", rep.LoginPath)
-		case rep.LoginAlreadyOK && rep.LoginPath != "":
-			fmt.Fprintf(w, "  Login chain: %s already sources ~/.bashrc.\n", rep.LoginPath)
-		}
-	}
-	fmt.Fprintln(w, "Activate it in this shell:")
+	fmt.Fprintln(w, okStyle.Render(fmt.Sprintf("Hook installed in %s.", rep.RcPath)))
+	fmt.Fprintln(w, warnStyle.Render("Activate it in this shell:"))
 	fmt.Fprintf(w, "    %s\n", shell.ActivateCommand(st.Shell))
 	fmt.Fprintln(w, "(or open a new shell.)")
 }
