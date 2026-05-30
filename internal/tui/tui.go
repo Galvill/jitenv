@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
+	"github.com/gv/jitenv/internal/shell"
 )
 
 // Run is the entrypoint invoked by `jitenv config`. It prompts for the
@@ -109,7 +111,46 @@ func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTempl
 	if root.savedSinceLastReload {
 		_ = pingAgentReload()
 	}
+	// Auto-install the shell hook on TUI exit when there's at least
+	// one mapping configured and the hook isn't already wired. We
+	// re-read cfg from disk so a user who Discarded their session
+	// edits doesn't trigger install based on un-saved mappings.
+	// Notifies via a stderr block once the alt-screen has restored
+	// (the activation eval line is plain text below the shell prompt,
+	// ready to copy-paste). Silent when the shell isn't supported,
+	// when no mappings exist, or when the hook is already wired.
+	maybeAutoInstallHook(os.Stderr, cfgPath)
 	return nil
+}
+
+// maybeAutoInstallHook is the simplified on-quit hook-install flow.
+// Loads cfg from disk; if it has any mappings and the shell hook
+// isn't installed, runs shell.InstallShell (the full installer:
+// rc-line + bash login-chain wiring) and prints a one-block stderr
+// notice with the exact command to activate the hook in the
+// current shell — that's as close to "source .bashrc for the user"
+// as the parent-shell process boundary allows.
+func maybeAutoInstallHook(w io.Writer, cfgPath string) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil || len(cfg.Mappings) == 0 {
+		return
+	}
+	st, err := shell.CurrentStatus()
+	if err != nil || st.Shell == "" || st.Installed {
+		return
+	}
+	rep, ierr := shell.InstallShell(st.Shell)
+	if ierr != nil {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "warning: jitenv could not auto-install the shell hook: %v\n", ierr)
+		fmt.Fprintln(w, "  Try manually: jitenv hook install")
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, okStyle.Render(fmt.Sprintf("Hook installed in %s.", rep.RcPath)))
+	fmt.Fprintln(w, warnStyle.Render("Activate it in this shell:"))
+	fmt.Fprintf(w, "    %s\n", shell.ActivateCommand(st.Shell))
+	fmt.Fprintln(w, "(or open a new shell.)")
 }
 
 // loadOrInit handles the "no config yet" first-run path: prompt the

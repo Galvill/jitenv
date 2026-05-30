@@ -129,6 +129,16 @@ func HookLine(shell string) string {
 	return fmt.Sprintf(`eval "$(jitenv hook %s)"`, shell)
 }
 
+// ActivateCommand returns the command a user can run in their *current*
+// shell to load the jitenv hook now, without opening a new shell.
+// Re-evaluating the hook snippet is idempotent — bash.sh / zsh.sh guard
+// on __JITENV_LOADED — so this is safe even when the rc file already
+// runs it (#206). For bash/zsh it's the same `eval "$(jitenv hook
+// <shell>)"` HookLine; for PowerShell it's the Invoke-Expression form.
+func ActivateCommand(shell string) string {
+	return HookLine(shell)
+}
+
 // IsInstalled reports whether `line` already appears in `rcPath`. A
 // non-existent file is treated as "not installed" without error.
 func IsInstalled(rcPath, line string) (bool, error) {

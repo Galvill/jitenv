@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.11.0](https://github.com/Galvill/jitenv/compare/v0.10.2...v0.11.0) (2026-05-29)
+
+
+### Features
+
+* **release:** make macOS notarization timeout overridable via repo variable ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#217](https://github.com/Galvill/jitenv/issues/217)) ([12905c1](https://github.com/Galvill/jitenv/commit/12905c112a57196dc5485549b29d0f40e2d324e5))
+
+
+### Bug Fixes
+
+* TUI hook-install parity + activate hook in current shell ([#205](https://github.com/Galvill/jitenv/issues/205), [#206](https://github.com/Galvill/jitenv/issues/206)) ([#208](https://github.com/Galvill/jitenv/issues/208)) ([defc740](https://github.com/Galvill/jitenv/commit/defc740c4fbcfa377ea8943093705d39396d7288))
+
+## [0.10.2](https://github.com/Galvill/jitenv/compare/v0.10.1...v0.10.2) (2026-05-28)
+
+
+### Bug Fixes
+
+* **release:** decouple macOS sign/notarize + cask from the main release ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#212](https://github.com/Galvill/jitenv/issues/212)) ([38862fc](https://github.com/Galvill/jitenv/commit/38862fcbb310752004e8cdd89c8d615cec67583d))
+
+## [0.10.1](https://github.com/Galvill/jitenv/compare/v0.10.0...v0.10.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **release:** raise macOS notarization wait to 45m ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#211](https://github.com/Galvill/jitenv/issues/211)) ([f98e247](https://github.com/Galvill/jitenv/commit/f98e247766895160412d73c7d2639bfcb65f3e03))
+
+## [0.10.0](https://github.com/Galvill/jitenv/compare/v0.9.1...v0.10.0) (2026-05-27)
+
+
+### Features
+
+* **clone:** jitenv clone &lt;url&gt; — encrypted bag + GIT_ASKPASS injection ([#179](https://github.com/Galvill/jitenv/issues/179)) ([#181](https://github.com/Galvill/jitenv/issues/181)) ([7b72d8f](https://github.com/Galvill/jitenv/commit/7b72d8ff2a02cf0aa33811d4cd0cafa6e96b182a))
+* **release:** Apple Developer ID code-sign + notarize macOS binaries ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#176](https://github.com/Galvill/jitenv/issues/176)) ([6927ebb](https://github.com/Galvill/jitenv/commit/6927ebb22d4f408b5b80257a4087c4209ec49b02))
+* **release:** Chocolatey package for Windows installs ([#180](https://github.com/Galvill/jitenv/issues/180)) ([#197](https://github.com/Galvill/jitenv/issues/197)) ([2c157ec](https://github.com/Galvill/jitenv/commit/2c157ececf68c7fa4915eca71d1e9cd43f7583bd))
+
+
+### Bug Fixes
+
+* **agent/windows:** authenticate pipe peer via impersonation, not PID ([#132](https://github.com/Galvill/jitenv/issues/132)) ([#200](https://github.com/Galvill/jitenv/issues/200)) ([42e1358](https://github.com/Galvill/jitenv/commit/42e1358f84624c1a55548a861d0ac2bccb27df13))
+* **chpwd:** rehash shell command table when the cwd_glob wrapper set changes ([#201](https://github.com/Galvill/jitenv/issues/201)) ([adb6dbb](https://github.com/Galvill/jitenv/commit/adb6dbb0318a479cf66700414db219d6c76de810))
+
 ## [0.9.1](https://github.com/Galvill/jitenv/compare/v0.9.0...v0.9.1) (2026-05-27)
 
 
