@@ -18,9 +18,10 @@ import (
 
 func newConfigCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "config",
-		Short: "Manage the jitenv config file (interactive TUI by default)",
-		Args:  cobra.NoArgs,
+		Use:     "config",
+		Aliases: []string{"c"},
+		Short:   "Manage the jitenv config file (interactive TUI by default)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigTUI()
 		},
