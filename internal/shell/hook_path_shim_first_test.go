@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestHookKeepsWrapDirFirstAfterLaterPrepend regresses #223: Ubuntu's
+// TestHookKeepsWrapDirFirstAfterLaterPrepend regresses #224: Ubuntu's
 // stock ~/.profile sources ~/.bashrc (which loads the hook → wrap dir
 // prepended) and THEN prepends ~/.local/bin to PATH. The result is
 // wrap dir at position 2 with .local/bin at position 1, so any real

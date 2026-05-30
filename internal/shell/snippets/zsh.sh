@@ -34,7 +34,7 @@ export __JITENV_SHELL_PID=$$
 # Ensure the wrap dir sits at the FRONT of PATH. Re-run from
 # __jitenv_chpwd below so any later PATH prepend can't silently mask a
 # wrapper symlink with a real binary of the same name. See bash.sh
-# (#223) for the concrete Ubuntu-stock-~/.profile repro.
+# (#224) for the concrete Ubuntu-stock-~/.profile repro.
 __jitenv_ensure_path() {
     case ":$PATH:" in
         ":$__JITENV_WRAP_DIR:"*) return 0 ;;
@@ -67,7 +67,7 @@ __jitenv_cfg_path() {
 # hook doesn't cause a spurious reconcile.
 __jitenv_chpwd() {
     # Keep the wrap dir at the front of PATH even if a downstream
-    # startup file (e.g. ~/.zprofile prepends) shoved it back (#223).
+    # startup file (e.g. ~/.zprofile prepends) shoved it back (#224).
     __jitenv_ensure_path
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
     jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"

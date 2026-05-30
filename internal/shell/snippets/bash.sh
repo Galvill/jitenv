@@ -43,7 +43,7 @@ export __JITENV_SHELL_PID=$$
 # wrapper symlink with a real binary of the same name. Concrete
 # repro: Ubuntu's stock ~/.profile sources ~/.bashrc (running the
 # hook → shim dir prepended) and THEN prepends ~/.local/bin (issue
-# #223). A real `~/.local/bin/terraform` would otherwise win over our
+# #224). A real `~/.local/bin/terraform` would otherwise win over our
 # symlinked wrapper and secrets would silently not get injected.
 __jitenv_ensure_path() {
     case ":$PATH:" in
@@ -78,7 +78,7 @@ __jitenv_cfg_path() {
 __jitenv_chpwd() {
     # Keep the wrap dir at the front of PATH even if a downstream
     # startup file (e.g. ~/.profile's `~/.local/bin` prepend) shoved
-    # it back (#223).
+    # it back (#224).
     __jitenv_ensure_path
     # No 2>/dev/null on purpose: the chpwd subcommand is silent
     # in normal operation (it only writes to stderr when
