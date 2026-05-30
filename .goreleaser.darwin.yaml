@@ -118,6 +118,16 @@ homebrew_casks:
     homepage: https://github.com/Galvill/jitenv
     description: Just-in-time env-var injection from pluggable secret sources, scoped to per-command process trees
     skip_upload: auto
+    # Explicit tarball URL — goreleaser normally derives this from the
+    # `release:` block, but we set `release.disable: true` above (the
+    # mac workflow uploads assets manually to the GH release that
+    # release.yml already created), and goreleaser refuses to render
+    # the cask without a fallback URL: "release is disabled, cannot
+    # use default url_template". Same shape as the auto-derived URL
+    # the main config used to emit, so the cask download URL is
+    # unchanged for end users.
+    url:
+      template: "https://github.com/Galvill/jitenv/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     binaries:
       - jitenv
       - jitenv-tui
