@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/Galvill/jitenv/compare/v0.10.2...v0.11.0) (2026-05-29)
+
+
+### Features
+
+* **release:** make macOS notarization timeout overridable via repo variable ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#217](https://github.com/Galvill/jitenv/issues/217)) ([12905c1](https://github.com/Galvill/jitenv/commit/12905c112a57196dc5485549b29d0f40e2d324e5))
+
+
+### Bug Fixes
+
+* TUI hook-install parity + activate hook in current shell ([#205](https://github.com/Galvill/jitenv/issues/205), [#206](https://github.com/Galvill/jitenv/issues/206)) ([#208](https://github.com/Galvill/jitenv/issues/208)) ([defc740](https://github.com/Galvill/jitenv/commit/defc740c4fbcfa377ea8943093705d39396d7288))
+
 ## [0.10.2](https://github.com/Galvill/jitenv/compare/v0.10.1...v0.10.2) (2026-05-28)
 
 

@@ -27,7 +27,6 @@ type rootModel struct {
 
 	dirty                bool
 	savedSinceLastReload bool
-	hookChecked          bool // true once we've prompted to install the shell hook this session
 
 	flash    string // transient overlay: temporary message in the title bar
 	flashErr bool
@@ -107,12 +106,6 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r.savedSinceLastReload = true
 		r.flash = "saved"
 		r.flashErr = false
-		if !r.hookChecked {
-			r.hookChecked = true
-			if cmd := maybePromptInstallHook(r); cmd != nil {
-				return r, cmd
-			}
-		}
 		return r, nil
 	}
 

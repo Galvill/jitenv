@@ -152,7 +152,7 @@ func (m *menuScreen) quitFlow() tea.Cmd {
 	cb := func(choice string) tea.Cmd {
 		switch choice {
 		case "Save & quit":
-			return tea.Sequence(saveCmd(m.root), emit(popMsg{}), tea.Quit)
+			return tea.Sequence(emit(popMsg{}), saveCmd(m.root), tea.Quit)
 		case "Discard":
 			return tea.Sequence(emit(popMsg{}), tea.Quit)
 		default:

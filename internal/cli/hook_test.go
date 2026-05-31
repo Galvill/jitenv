@@ -7,6 +7,48 @@ import (
 	"testing"
 )
 
+// TestHookInstallCapturedStdoutEmitsActivation asserts that when
+// `jitenv hook install` runs with stdout captured (a *bytes.Buffer,
+// i.e. not a TTY — the `eval "$(jitenv hook install)"` case), stdout
+// carries ONLY the activation command and the human-readable status is
+// routed to stderr so it doesn't get eval'd (#206).
+func TestHookInstallCapturedStdoutEmitsActivation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("JITENV_CONFIG", "")
+	t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "la"))
+
+	for _, sh := range []string{"bash", "zsh"} {
+		t.Run(sh, func(t *testing.T) {
+			cmd := newHookCmd()
+			var out, errBuf bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errBuf)
+			cmd.SetArgs([]string{"install", "--shell", sh})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("execute hook install --shell %s: %v", sh, err)
+			}
+
+			wantActivate := `eval "$(jitenv hook ` + sh + `)"`
+			gotOut := strings.TrimSpace(out.String())
+			if gotOut != wantActivate {
+				t.Errorf("stdout = %q, want exactly the activation line %q", gotOut, wantActivate)
+			}
+			// The status (rc path etc.) must NOT pollute stdout — it
+			// would break the surrounding eval.
+			if strings.Contains(out.String(), "added hook line") ||
+				strings.Contains(out.String(), "already present") ||
+				strings.Contains(out.String(), "open a new shell") {
+				t.Errorf("stdout leaked status text (would be eval'd):\n%s", out.String())
+			}
+			if !strings.Contains(errBuf.String(), "hook line") {
+				t.Errorf("stderr missing human-readable status:\n%s", errBuf.String())
+			}
+		})
+	}
+}
+
 // TestHookPowerShellCommand asserts that `jitenv hook powershell`
 // prints the PowerShell snippet with the runtime + config paths
 // substituted in. We don't reproduce the full Render-test surface here
