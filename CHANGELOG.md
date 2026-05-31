@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/Galvill/jitenv/compare/v0.11.0...v0.12.0) (2026-05-31)
+
+
+### Features
+
+* **cli:** add short aliases `c` for config and `u` for unlock ([#219](https://github.com/Galvill/jitenv/issues/219)) ([#222](https://github.com/Galvill/jitenv/issues/222)) ([1cb2845](https://github.com/Galvill/jitenv/commit/1cb2845aa29c524458880af49f939a8f5534cce3))
+
+
+### Bug Fixes
+
+* **hook:** keep wrap dir at the front of PATH across later prepends ([#224](https://github.com/Galvill/jitenv/issues/224)) ([#225](https://github.com/Galvill/jitenv/issues/225)) ([ddd35c4](https://github.com/Galvill/jitenv/commit/ddd35c4da82c7c2088ec196f59edb2a17903c446))
+* **release:** set explicit cask url template for the darwin config ([#13](https://github.com/Galvill/jitenv/issues/13)) ([#220](https://github.com/Galvill/jitenv/issues/220)) ([b811f6a](https://github.com/Galvill/jitenv/commit/b811f6a7b2482d51d1ab0bfad796993532cd7fe0))
+
 ## [0.11.0](https://github.com/Galvill/jitenv/compare/v0.10.2...v0.11.0) (2026-05-29)
 
 
