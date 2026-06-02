@@ -1,0 +1,131 @@
+name: macos-notarize-poll
+
+# Polls Apple's notary service for any darwin builds that
+# macos-release.yml submitted asynchronously (#226). Runs on
+# ubuntu-latest with the App Store Connect REST API, so the polling
+# loop costs ~1000× less than a macos-latest runner sitting idle on
+# `notarytool --wait`. When everything for a tag is Accepted, this
+# workflow dispatches macos-release-finalize.yml which uploads the
+# tarballs + pushes the Homebrew cask.
+#
+# Triggers:
+#   - schedule: every 15 min while pending artifacts exist.
+#   - workflow_dispatch: macos-release.yml fires this immediately
+#     after each submit so we don't wait for the next cron window.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write     # for gh release reads + finalize dispatch
+  actions: write      # to delete the pending artifact after dispatch
+
+# Serialize cron + dispatch firings: two pollers racing on the same
+# artifact would each try to dispatch finalize, and we'd get
+# duplicate cask pushes. cancel-in-progress is false so the first
+# tick always finishes its work.
+concurrency:
+  group: macos-notarize-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for the poll script)
+        uses: actions/checkout@v4
+
+      - name: Setup Go (needed by notarize-jwt)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Write notary API key
+        env:
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_NOTARY_KEY}" ]; then
+            echo "::error::MACOS_NOTARY_KEY secret missing"
+            exit 1
+          fi
+          notary_key="$RUNNER_TEMP/notary-key.p8"
+          printf '%s' "$MACOS_NOTARY_KEY" | base64 --decode > "$notary_key"
+          echo "MACOS_NOTARY_KEY_FILE=$notary_key" >> "$GITHUB_ENV"
+
+      - name: List pending artifacts and poll each
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          # List non-expired artifacts named darwin-notarize-pending-*.
+          # gh's --jq filters server-side; paginate covers the whole
+          # actions/artifacts listing.
+          mapfile -t pending < <(gh api --paginate \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("darwin-notarize-pending-")) | select(.expired==false) | "\(.id)\t\(.name)\t\(.workflow_run.id)"')
+
+          if [ "${#pending[@]}" -eq 0 ]; then
+            echo "notarize-poll: no pending darwin notarization artifacts"
+            exit 0
+          fi
+
+          had_failures=0
+
+          for row in "${pending[@]}"; do
+            id="$(printf '%s' "$row" | cut -f1)"
+            name="$(printf '%s' "$row" | cut -f2)"
+            submit_run_id="$(printf '%s' "$row" | cut -f3)"
+            tag="${name#darwin-notarize-pending-}"
+            echo "::group::poll $name (artifact_id=$id submit_run=$submit_run_id)"
+
+            workdir="$RUNNER_TEMP/poll-$id"
+            mkdir -p "$workdir"
+            # Download via the API (works across runs, unlike
+            # actions/download-artifact@v4 which is scoped to the
+            # current run by default).
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" \
+              > "$workdir/artifact.zip"
+            unzip -q "$workdir/artifact.zip" -d "$workdir"
+
+            export NOTARY_SUBMISSIONS_FILE="$workdir/submissions.jsonl"
+            if [ ! -s "$NOTARY_SUBMISSIONS_FILE" ]; then
+              echo "::warning::artifact $name has no submissions.jsonl — skipping"
+              echo "::endgroup::"
+              continue
+            fi
+
+            set +e
+            ./packaging/macos/notarize-poll.sh
+            rc=$?
+            set -e
+
+            case "$rc" in
+              0)
+                echo "notarize-poll: all Accepted for $tag — dispatching finalize"
+                gh workflow run macos-release-finalize.yml \
+                  -f tag="$tag" \
+                  -f submit_run_id="$submit_run_id" \
+                  -f artifact_id="$id"
+                ;;
+              2)
+                echo "notarize-poll: still in progress for $tag — will retry next tick"
+                ;;
+              *)
+                echo "::error::notarize-poll failed for $tag (exit=$rc) — see the log above"
+                had_failures=1
+                ;;
+            esac
+
+            echo "::endgroup::"
+          done
+
+          if [ "$had_failures" -ne 0 ]; then
+            exit 1
+          fi
