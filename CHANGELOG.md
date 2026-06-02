@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/Galvill/jitenv/compare/v0.12.0...v0.13.0) (2026-06-02)
+
+
+### Features
+
+* **release:** async macOS notarization (submit → poll → finalize) ([#226](https://github.com/Galvill/jitenv/issues/226)) ([#228](https://github.com/Galvill/jitenv/issues/228)) ([5ffd93a](https://github.com/Galvill/jitenv/commit/5ffd93a4e018b39b8b7f77fbccd2e8554c540d8e))
+* **tui:** add file browser for picking mapping targets ([#223](https://github.com/Galvill/jitenv/issues/223)) ([#231](https://github.com/Galvill/jitenv/issues/231)) ([2bc6167](https://github.com/Galvill/jitenv/commit/2bc6167cbacbf94429ed9bb46379e5bf4e123af9))
+
+
+### Bug Fixes
+
+* **chocolatey:** read SHA256SUMS as text, not a byte[] ([#227](https://github.com/Galvill/jitenv/issues/227)) ([#230](https://github.com/Galvill/jitenv/issues/230)) ([38a72bc](https://github.com/Galvill/jitenv/commit/38a72bcb46397e925e340d723227da72e9d807c6))
+* **cli,tui:** prefix passphrase prompts with the command ([#199](https://github.com/Galvill/jitenv/issues/199)) ([#207](https://github.com/Galvill/jitenv/issues/207)) ([458895e](https://github.com/Galvill/jitenv/commit/458895ef95ec154679adade378bc14f07beaef13))
+
 ## [0.12.0](https://github.com/Galvill/jitenv/compare/v0.11.0...v0.12.0) (2026-05-31)
 
 
