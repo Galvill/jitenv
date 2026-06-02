@@ -94,8 +94,13 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
+          # cd into FINALIZE_WORK so the tarball glob expands locally,
+          # but the `cd` puts us outside the repo, so `gh` can't
+          # auto-detect which repository to upload to from the .git
+          # parent walk. Pass --repo explicitly.
           cd "$FINALIZE_WORK"
           gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             jitenv_*_darwin_*.tar.gz \
             "jitenv_${version}_darwin_SHA256SUMS" \
             "jitenv_${version}_darwin_SHA256SUMS.sig" \
