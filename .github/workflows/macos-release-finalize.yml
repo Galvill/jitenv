@@ -1,0 +1,122 @@
+name: macos-release-finalize
+
+# Finalize a macOS release after notarization has been Accepted
+# (#226). Dispatched by macos-notarize-poll.yml when every submission
+# UUID for a tag comes back green. Runs on ubuntu-latest:
+#
+#   1. Downloads the workflow artifact left behind by macos-release.yml
+#      (tarballs + per-file SHA256SUMS-darwin + the submissions
+#      manifest).
+#   2. Cosign-signs SHA256SUMS-darwin and uploads everything to the
+#      existing GH release with `gh release upload --clobber`.
+#   3. Pushes the Homebrew cask via packaging/macos/cask-publish.sh.
+#   4. Deletes the pending artifact so the next poll tick stops
+#      seeing it.
+#
+# Mac runners aren't needed here because the binaries are NOT stapled
+# (bare CLI Mach-O — see the rationale in sign-submit.sh). Once Apple
+# says Accepted, the bytes on disk are the shippable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.10.1"
+        required: true
+        type: string
+      submit_run_id:
+        description: "macos-release.yml run id that produced the pending artifact"
+        required: true
+        type: string
+      artifact_id:
+        description: "Pending artifact id to consume"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  actions: write
+
+# Serialize per-tag so two pollers can't both publish the cask.
+concurrency:
+  group: macos-finalize-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      SUBMIT_RUN_ID: ${{ inputs.submit_run_id }}
+      ARTIFACT_ID: ${{ inputs.artifact_id }}
+    steps:
+      - name: Checkout (for cask-publish.sh)
+        uses: actions/checkout@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Download pending artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          workdir="$RUNNER_TEMP/finalize"
+          mkdir -p "$workdir"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            > "$workdir/artifact.zip"
+          unzip -q "$workdir/artifact.zip" -d "$workdir"
+          ls -la "$workdir"
+          echo "FINALIZE_WORK=$workdir" >> "$GITHUB_ENV"
+
+      - name: Sign checksum (cosign blob)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          checksum="$FINALIZE_WORK/jitenv_${version}_darwin_SHA256SUMS"
+          if [ ! -f "$checksum" ]; then
+            echo "::error::checksum file missing from artifact: $checksum"
+            ls -la "$FINALIZE_WORK"
+            exit 1
+          fi
+          cosign sign-blob \
+            --output-signature "$checksum.sig" \
+            --output-certificate "$checksum.pem" \
+            --yes \
+            "$checksum"
+
+      - name: Upload darwin artifacts to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          cd "$FINALIZE_WORK"
+          gh release upload "$TAG" \
+            jitenv_*_darwin_*.tar.gz \
+            "jitenv_${version}_darwin_SHA256SUMS" \
+            "jitenv_${version}_darwin_SHA256SUMS.sig" \
+            "jitenv_${version}_darwin_SHA256SUMS.pem" \
+            --clobber
+
+      - name: Push Homebrew cask
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          export DARWIN_AMD64_TARBALL="$FINALIZE_WORK/jitenv_${version}_darwin_amd64.tar.gz"
+          export DARWIN_ARM64_TARBALL="$FINALIZE_WORK/jitenv_${version}_darwin_arm64.tar.gz"
+          ./packaging/macos/cask-publish.sh
+
+      - name: Delete pending artifact (signals poll to stop)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}"
+          echo "deleted pending artifact $ARTIFACT_ID"
