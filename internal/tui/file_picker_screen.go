@@ -177,7 +177,11 @@ func staticPrefix(pattern string) string {
 		return pattern
 	}
 	prefix := pattern[:cut]
-	if idx := strings.LastIndex(prefix, "/"); idx >= 0 {
+	// Accept either path separator: jitenv normalises mapping
+	// patterns to `/` but a Windows user may paste a native path
+	// like C:\Users\…\**\*.sh straight from explorer, and the test
+	// fixture uses filepath.Join which produces `\` on windows.
+	if idx := strings.LastIndexAny(prefix, "/\\"); idx >= 0 {
 		return prefix[:idx]
 	}
 	return ""
