@@ -16,10 +16,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -39,6 +41,9 @@ func TestJWTSignVerify(t *testing.T) {
 	}
 
 	bin := filepath.Join(t.TempDir(), "notarize-jwt")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", bin, ".")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
@@ -53,7 +58,11 @@ func TestJWTSignVerify(t *testing.T) {
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("run: %v (stderr=%s)", err, err.(*exec.ExitError).Stderr)
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("run: %v (stderr=%s)", err, ee.Stderr)
+		}
+		t.Fatalf("run: %v", err)
 	}
 	jwt := strings.TrimSpace(string(out))
 
