@@ -1,25 +1,20 @@
 name: macos-release
 
-# Post-publish macOS workflow (#13). Triggered after the main
-# release.yml has published lin/win artifacts. Runs entirely on
-# macos-latest:
+# Async macOS release SUBMIT phase (#13, #226). Builds + codesigns +
+# submits each darwin binary to Apple's notary without waiting for the
+# result, then exits. The poll job (macos-notarize-poll.yml) picks up
+# the submission UUIDs from the workflow artifact this job leaves
+# behind and, once everything is Accepted, dispatches the finalize
+# job (macos-release-finalize.yml) which uploads to the GH release and
+# pushes the Homebrew cask.
 #
-#   1. Imports the Developer ID Application cert into a throwaway
-#      keychain (same pattern release.yml used before the decoupling).
-#   2. Builds darwin amd64+arm64 for jitenv + jitenv-tui via
-#      goreleaser with .goreleaser.darwin.yaml; the build post-hook
-#      sign-notarize.sh codesigns + notarizes each binary using
-#      Apple's native codesign + xcrun notarytool.
-#   3. Uploads the darwin tarballs + their cosign-signed
-#      SHA256SUMS-darwin to the existing GH release (the main release
-#      ships SHA256SUMS for lin/win; the darwin checksum has its own
-#      filename so they don't clobber).
-#   4. Pushes the Homebrew cask to Galvill/homebrew-jitenv (goreleaser
-#      homebrew_casks pipe). The darwin config sets release.disable:
-#      true so goreleaser doesn't touch the GH release here.
+# Before #226 this was a single ~1h job that polled Apple
+# synchronously and burned macos-latest minutes for the whole wait.
+# Now this job finishes in a few minutes — just long enough to build,
+# sign, and queue.
 #
 # Skips pre-releases (the `-rc.N` tags). workflow_dispatch allows
-# manual re-runs against any tag without re-cutting the release.
+# manual re-submits against any tag without re-cutting the release.
 #
 # Injection hygiene: release-supplied values (the tag) flow through
 # the job-level env: block and are read as $TAG in run:, never
@@ -31,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to sign + notarize, e.g. v0.10.1"
+        description: "Release tag to sign + submit, e.g. v0.10.1"
         required: true
         type: string
 
@@ -44,7 +39,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  submit:
     if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
     runs-on: macos-latest
     env:
@@ -61,9 +56,6 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
 
       - name: Set up macOS signing keychain
         env:
@@ -103,43 +95,76 @@ jobs:
           fi
           rm -f "$cert_p12"
 
+          submissions_file="$RUNNER_TEMP/notary-submissions.jsonl"
+          : > "$submissions_file"
+
           {
             echo "MACOS_SIGN_IDENTITY=$identity"
             echo "MACOS_KEYCHAIN=$keychain"
             echo "MACOS_KEYCHAIN_PW=$keychain_pw"
             echo "MACOS_NOTARY_KEY_FILE=$notary_key"
+            echo "NOTARY_SUBMISSIONS_FILE=$submissions_file"
           } >> "$GITHUB_ENV"
           echo "Imported signing identity $identity"
 
-      - name: Run GoReleaser (darwin)
+      - name: Build + submit (no-wait notarize)
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
+          # No cask push and no checksum-cosign here — both moved to
+          # macos-release-finalize.yml so they run AFTER notarization
+          # is Accepted and the tarballs are on the GH release. The
+          # build post-hook (sign-submit.sh) appends UUIDs to
+          # $NOTARY_SUBMISSIONS_FILE; we upload that next.
           args: release --clean --config .goreleaser.darwin.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          # Repo variable (Settings -> Variables -> Actions), NOT a
-          # secret — overridable per-run without a code change so we
-          # can retry with a longer wait when Apple's queue is slow.
-          # sign-notarize.sh defaults to 120m if this is unset.
-          MACOS_NOTARY_TIMEOUT: ${{ vars.MACOS_NOTARY_TIMEOUT }}
 
-      - name: Upload darwin artifacts to the GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Bundle artifact for the poll/finalize jobs
         run: |
           set -euo pipefail
+          # Tarballs + checksum from goreleaser + the submissions
+          # manifest — everything finalize needs once Apple says yes.
+          mkdir -p "$RUNNER_TEMP/pending"
           version="${TAG#v}"
-          gh release upload "$TAG" \
-            dist/jitenv_*_darwin_*.tar.gz \
-            "dist/jitenv_${version}_darwin_SHA256SUMS" \
-            "dist/jitenv_${version}_darwin_SHA256SUMS.sig" \
-            "dist/jitenv_${version}_darwin_SHA256SUMS.pem" \
-            --clobber
+          cp dist/jitenv_*_darwin_*.tar.gz "$RUNNER_TEMP/pending/"
+          cp "dist/jitenv_${version}_darwin_SHA256SUMS" "$RUNNER_TEMP/pending/"
+          cp "$NOTARY_SUBMISSIONS_FILE" "$RUNNER_TEMP/pending/submissions.jsonl"
+          # Stash the tag so the poll job (which doesn't have the
+          # release event context) can dispatch finalize with the
+          # right input.
+          echo "$TAG" > "$RUNNER_TEMP/pending/tag.txt"
+          ls -la "$RUNNER_TEMP/pending"
+
+      - name: Upload pending artifact for poll → finalize
+        uses: actions/upload-artifact@v4
+        with:
+          # The poll workflow filters artifacts by this prefix.
+          name: darwin-notarize-pending-${{ env.TAG }}
+          path: ${{ runner.temp }}/pending/
+          # 30 days is well past Apple's longest observed queue
+          # latencies and gives the maintainer headroom for a manual
+          # re-finalize if something goes sideways.
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Trigger first poll immediately
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Route through env to avoid `${{ ... }}` expansion inside
+          # the run: shell — see the workflow-injection guidance.
+          POLL_REF: ${{ github.ref_name || github.ref }}
+        run: |
+          set -euo pipefail
+          # Cron handles the steady-state polling; this kicks off the
+          # first tick right away so we don't wait for the next cron
+          # window after a submit.
+          gh workflow run macos-notarize-poll.yml \
+            -r "$POLL_REF" \
+            || echo "::warning::could not trigger poll immediately — cron will pick it up"
 
       - name: Clean up signing keychain
         if: always()

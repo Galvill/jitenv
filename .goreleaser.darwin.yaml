@@ -1,14 +1,18 @@
 version: 2
 
-# macOS-only goreleaser config (#13). Used by
-# .github/workflows/macos-release.yml on macos-latest to build, sign,
-# notarize, archive, and publish the darwin tarballs + Homebrew cask
-# AFTER the main release (.goreleaser.yaml, ubuntu) has shipped
-# lin/win. release.disable is true here: this config doesn't create or
-# touch the GitHub release — the workflow uploads the darwin tarballs +
-# their SHA256SUMS-darwin to the existing release via `gh release
-# upload`. Goreleaser still pushes the Homebrew cask (cask publish is
-# independent of the release pipe).
+# macOS-only goreleaser config (#13, #226). Used by
+# .github/workflows/macos-release.yml on macos-latest to build,
+# codesign, and submit each binary for notarization WITHOUT waiting.
+# The submission UUIDs are written to $NOTARY_SUBMISSIONS_FILE by the
+# build post-hook; the workflow then uploads the dist/ tree + that
+# manifest as a workflow artifact for the async poll → finalize jobs
+# to consume (#226).
+#
+# Both the Homebrew cask push and the cosign checksum signing have
+# moved out of this config — they now run in macos-release-finalize.yml
+# AFTER notarization is Accepted and the tarballs are on the GH
+# release. Doing it here would mean publishing a cask whose URLs point
+# to assets that don't exist yet.
 
 project_name: jitenv
 
@@ -35,13 +39,14 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
     hooks:
-      # Sign + notarize each darwin binary using Apple's native
-      # codesign + xcrun notarytool. The script no-ops when the
-      # signing identity isn't configured, so a local
-      # `goreleaser release --config .goreleaser.darwin.yaml --snapshot`
-      # still works unsigned for testing.
+      # Sign each darwin binary and SUBMIT it for notarization
+      # without blocking on Apple's queue. UUIDs accumulate in
+      # $NOTARY_SUBMISSIONS_FILE (set by the workflow) for the poll
+      # job to read. The helper no-ops when MACOS_SIGN_IDENTITY is
+      # unset, so a local `goreleaser release --snapshot` still works
+      # unsigned for smoke-testing.
       post:
-        - cmd: ./packaging/macos/sign-notarize.sh "{{ .Path }}" "{{ .Os }}"
+        - cmd: ./packaging/macos/sign-submit.sh "{{ .Path }}" "{{ .Os }}"
           output: true
 
   - id: jitenv-tui
@@ -63,7 +68,7 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
     hooks:
       post:
-        - cmd: ./packaging/macos/sign-notarize.sh "{{ .Path }}" "{{ .Os }}"
+        - cmd: ./packaging/macos/sign-submit.sh "{{ .Path }}" "{{ .Os }}"
           output: true
 
 # Archive shape matches the main release's archives exactly (same
@@ -87,64 +92,16 @@ archives:
         dst: snippets/powershell.ps1
 
 # Distinct checksum filename so this doesn't clobber the main
-# release's SHA256SUMS (which covers lin/win).
+# release's SHA256SUMS (which covers lin/win). cosign-signing of the
+# checksum is done in the finalize workflow.
 checksum:
   name_template: "jitenv_{{ .Version }}_darwin_SHA256SUMS"
-
-signs:
-  - id: cosign-checksum
-    cmd: cosign
-    artifacts: checksum
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
-    args:
-      - sign-blob
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
-      - "${artifact}"
-      - "--yes"
-
-# Homebrew tap: cask references the darwin tarballs this config
-# produces. Cask publishing is part of goreleaser's publish stage and
-# is independent of `release.disable`, so the cask still gets pushed.
-homebrew_casks:
-  - name: jitenv
-    repository:
-      owner: Galvill
-      name: homebrew-jitenv
-      branch: main
-      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
-    directory: Casks
-    homepage: https://github.com/Galvill/jitenv
-    description: Just-in-time env-var injection from pluggable secret sources, scoped to per-command process trees
-    skip_upload: auto
-    # Explicit tarball URL — goreleaser normally derives this from the
-    # `release:` block, but we set `release.disable: true` above (the
-    # mac workflow uploads assets manually to the GH release that
-    # release.yml already created), and goreleaser refuses to render
-    # the cask without a fallback URL: "release is disabled, cannot
-    # use default url_template". Same shape as the auto-derived URL
-    # the main config used to emit, so the cask download URL is
-    # unchanged for end users.
-    url:
-      template: "https://github.com/Galvill/jitenv/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-    binaries:
-      - jitenv
-      - jitenv-tui
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    commit_msg_template: "Brew cask update for jitenv {{ .Tag }}"
-    # No xattr-strip hook: the binaries are code-signed + Apple-
-    # notarized by the build post-hook above, so Gatekeeper accepts
-    # them out of the box.
 
 snapshot:
   version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"
 
-# Disable goreleaser's GH release pipe — the release was already
-# created by the main workflow on the same tag. macos-release.yml
-# uploads the darwin tarballs + SHA256SUMS-darwin + cosign sigs to it
-# via `gh release upload --clobber`.
+# The GH release is created by the main release.yml workflow (lin/win);
+# this config never touches it. Tarballs + checksums get uploaded by
+# the finalize workflow once notarization is Accepted.
 release:
   disable: true

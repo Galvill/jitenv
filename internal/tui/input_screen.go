@@ -20,6 +20,7 @@ type inputScreen struct {
 	masked    bool
 	allowBlnk bool
 	onCommit  func(string) tea.Cmd
+	browse    func(current string) tea.Cmd
 	err       string
 
 	btnFocus int // -1 = input focused; else button idx
@@ -36,6 +37,12 @@ type inputOpts struct {
 	AllowBlank  bool // when false, empty values produce an error
 	SaveLabel   string
 	CancelLabel string
+	// Browse, when non-nil, adds a `[ Browse ]` button (and a ctrl+o
+	// binding) to the screen. The callback receives the current
+	// textinput value and returns a tea.Cmd that should push a
+	// filePickerScreen — the picker emits a pathPickedMsg on commit
+	// which the inputScreen catches and uses to fill the field.
+	Browse func(current string) tea.Cmd
 }
 
 func newInputScreen(r *rootModel, opts inputOpts, onCommit func(string) tea.Cmd) *inputScreen {
@@ -64,6 +71,11 @@ func newInputScreen(r *rootModel, opts inputOpts, onCommit func(string) tea.Cmd)
 	if opts.Masked {
 		btns = append([]button{newButton("Reveal")}, btns...)
 	}
+	if opts.Browse != nil {
+		// Place Browse right before the save button so the focus
+		// order reads naturally left-to-right: [..., Browse, Apply, Back].
+		btns = append([]button{newButton("Browse")}, btns...)
+	}
 
 	return &inputScreen{
 		root:      r,
@@ -73,6 +85,7 @@ func newInputScreen(r *rootModel, opts inputOpts, onCommit func(string) tea.Cmd)
 		masked:    opts.Masked,
 		allowBlnk: opts.AllowBlank,
 		onCommit:  onCommit,
+		browse:    opts.Browse,
 		btnFocus:  -1,
 		buttons:   btns,
 	}
@@ -83,10 +96,25 @@ func (s *inputScreen) Status() string { return defaultFormStatus }
 func (s *inputScreen) Init() tea.Cmd  { return nil }
 
 func (s *inputScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+	// pathPickedMsg comes from filePickerScreen via tea.Sequence
+	// after the picker pops itself, so it always reaches this screen
+	// after the picker is off the stack (#223).
+	if m, ok := msg.(pathPickedMsg); ok {
+		if m.path != "" {
+			s.input.SetValue(m.path)
+			s.input.CursorEnd()
+			s.err = ""
+		}
+		return s, nil
+	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "esc":
 			return s, emit(popMsg{})
+		case "ctrl+o":
+			if s.browse != nil {
+				return s, s.browse(s.input.Value())
+			}
 		case "tab":
 			if s.btnFocus < 0 {
 				s.btnFocus = 0
@@ -156,6 +184,11 @@ func (s *inputScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, nil
 			case "Back", "Cancel":
 				return s, emit(popMsg{})
+			case "Browse":
+				if s.browse != nil {
+					return s, s.browse(s.input.Value())
+				}
+				return s, nil
 			default:
 				return s, s.commit()
 			}

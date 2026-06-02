@@ -30,10 +30,21 @@ export __JITENV_SHELL_PID=$$
 # ownership check (security #117). A subshell with umask 077 makes
 # every intermediate land at 0700.
 (umask 077 && mkdir -p "$__JITENV_WRAP_DIR" 2>/dev/null)
-case ":$PATH:" in
-    *":$__JITENV_WRAP_DIR:"*) : ;;
-    *) export PATH="$__JITENV_WRAP_DIR:$PATH" ;;
-esac
+
+# Ensure the wrap dir sits at the FRONT of PATH. Re-run from
+# __jitenv_chpwd below so any later PATH prepend can't silently mask a
+# wrapper symlink with a real binary of the same name. See bash.sh
+# (#224) for the concrete Ubuntu-stock-~/.profile repro.
+__jitenv_ensure_path() {
+    case ":$PATH:" in
+        ":$__JITENV_WRAP_DIR:"*) return 0 ;;
+    esac
+    local p=":$PATH:"
+    p="${p//:$__JITENV_WRAP_DIR:/:}"
+    p="${p#:}"; p="${p%:}"
+    export PATH="$__JITENV_WRAP_DIR:$p"
+}
+__jitenv_ensure_path
 
 # Tiny per-shell $JITENV_CONFIG override so users can re-point one
 # shell at a different config without re-sourcing the hook. The
@@ -55,6 +66,9 @@ __jitenv_cfg_path() {
 # common case. Keeping the state in Go means a fresh re-source of the
 # hook doesn't cause a spurious reconcile.
 __jitenv_chpwd() {
+    # Keep the wrap dir at the front of PATH even if a downstream
+    # startup file (e.g. ~/.zprofile prepends) shoved it back (#224).
+    __jitenv_ensure_path
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
     jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
     # Exit 10 means a wrapper was added or removed → rebuild zsh's

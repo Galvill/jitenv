@@ -148,14 +148,19 @@ signs:
       - "${artifact}"
       - "--yes"
 
-# macOS code-signing + notarization runs entirely in
-# .github/workflows/macos-release.yml against .goreleaser.darwin.yaml
-# (#13). It triggers on `release: published`, builds + signs +
-# notarizes the darwin binaries using Apple's native codesign + xcrun
-# notarytool (packaging/macos/sign-notarize.sh), uploads the darwin
-# tarballs + their own SHA256SUMS-darwin to this release, and pushes
-# the Homebrew cask. Decoupled so Apple's variable notarization
-# latency never blocks the lin/win artifacts shipped here.
+# macOS code-signing + notarization runs out-of-band across three
+# workflows (#13, #226):
+#   - macos-release.yml builds + signs + SUBMITS each darwin binary
+#     to Apple (no --wait) via packaging/macos/sign-submit.sh, then
+#     uploads a workflow artifact with the tarballs + submission UUIDs.
+#   - macos-notarize-poll.yml runs on a 15-min cron, polls Apple's
+#     REST API for each UUID, and dispatches finalize when everything
+#     comes back Accepted.
+#   - macos-release-finalize.yml cosign-signs the checksum, uploads
+#     the darwin tarballs to this release, and pushes the Homebrew
+#     cask via packaging/macos/cask-publish.sh.
+# Decoupled so Apple's variable notarization latency never blocks
+# the lin/win artifacts shipped here.
 
 snapshot:
   version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"

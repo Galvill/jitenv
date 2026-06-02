@@ -18,9 +18,10 @@ var unlockForeground bool
 
 func newUnlockCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "unlock",
-		Short: "Unlock the agent (prompts passphrase, starts background agent)",
-		Args:  cobra.NoArgs,
+		Use:     "unlock",
+		Aliases: []string{"u"},
+		Short:   "Unlock the agent (prompts passphrase, starts background agent)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfgPath, err := config.Resolve(configPath)
 			if err != nil {
