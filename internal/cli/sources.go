@@ -84,7 +84,7 @@ func newSourcesTestCmd() *cobra.Command {
 				return fmt.Errorf("source %q not found", args[0])
 			}
 
-			pw, err := crypto.PromptPassphrase("Passphrase: ", false)
+			pw, err := crypto.PromptPassphrase("jitenv sources passphrase: ", false)
 			if err != nil {
 				return err
 			}

@@ -87,7 +87,7 @@ func runClone(cmd *cobra.Command, args []string, tokenStdin bool, bagOverride st
 	if err != nil {
 		return fmt.Errorf("load %s: %w (run `jitenv config init` first)", cfgPath, err)
 	}
-	pw, err := crypto.PromptPassphrase("Passphrase: ", false)
+	pw, err := crypto.PromptPassphrase("jitenv clone passphrase: ", false)
 	if err != nil {
 		return err
 	}
