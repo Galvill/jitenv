@@ -495,9 +495,22 @@ func (s *mappingFormScreen) openTargetInput() tea.Cmd {
 		}
 		return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}))
 	}
+	// Picker mode follows the mapping kind: file pick for path,
+	// directory pick for glob/cwd. The picker is launched via the
+	// inputOpts.Browse callback (button or ctrl+o); the input field
+	// stays primary so typing a not-yet-existing path still works
+	// (#223).
+	pickerKind := pickFile
+	if kind == "glob" || kind == "cwd" {
+		pickerKind = pickDir
+	}
+	browse := func(current string) tea.Cmd {
+		return emit(pushMsg{s: newFilePickerScreen(s.root, pickerKind, pickerStartDir(current))})
+	}
 	return emit(pushMsg{s: newInputScreen(s.root, inputOpts{
 		Title: title, Prompt: prompt, Placeholder: ph, Initial: init,
 		SaveLabel: "Apply", CancelLabel: "Back",
+		Browse: browse,
 	}, commit)})
 }
 
