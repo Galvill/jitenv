@@ -54,6 +54,11 @@ jobs:
       - name: Resolve version, archive URL, and checksum
         id: meta
         shell: pwsh
+        env:
+          # Used by `gh release download` below — GitHub Actions
+          # doesn't auto-inject GH_TOKEN into pwsh steps the way it
+          # does for bash via $GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = $env:TAG
           if (-not $tag) { throw "no release tag available" }
@@ -97,7 +102,25 @@ jobs:
             throw "Release $tag never exposed both SHA256SUMS and $zip in its asset list"
           }
 
-          $sums = (Invoke-WebRequest -Uri "$base/SHA256SUMS" -UseBasicParsing).Content
+          # Don't use Invoke-WebRequest for the asset download (#227):
+          # GitHub serves release assets with
+          # `Content-Type: application/octet-stream`, and pwsh's
+          # `.Content` for that comes back as `byte[]`. Subsequent
+          # `-split "\n"` then stringifies the array as a stream of
+          # space-separated decimal byte values — no newlines in
+          # sight — so the grep for the zip's checksum line never
+          # matches and the script throws a misleading "asset listed
+          # but not in checksum file" error.
+          # `gh release download` writes raw asset bytes to a file we
+          # then read as utf8 text, sidestepping the content-type
+          # heuristic entirely.
+          $sumsFile = Join-Path $env:RUNNER_TEMP "SHA256SUMS"
+          if (Test-Path $sumsFile) { Remove-Item $sumsFile }
+          gh release download $tag --repo Galvill/jitenv --pattern SHA256SUMS --output $sumsFile
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sumsFile)) {
+            throw "gh release download SHA256SUMS failed (exit $LASTEXITCODE)"
+          }
+          $sums = Get-Content -Raw -Encoding utf8 $sumsFile
           $line = ($sums -split "`n") |
             Where-Object { $_ -match [regex]::Escape($zip) } |
             Select-Object -First 1
