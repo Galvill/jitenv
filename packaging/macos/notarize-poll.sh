@@ -47,7 +47,14 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # whole poll cycle finishes in seconds.
 JWT="$("$GO_BIN" run "$script_dir/notarize-jwt")"
 
-api="https://api.appstoreconnect.apple.com/notary/v2"
+# Apple's Notary REST API lives at appstoreconnect.apple.com — NOT
+# api.appstoreconnect.apple.com (which serves the broader App Store
+# Connect API but doesn't host the /notary/v2 prefix). Hitting the
+# `api.` host returns a generic 404 with a JSON body like
+# {"errors":[{"status":"404",...}]} — easy to mistake for the real
+# submission status. See:
+# https://developer.apple.com/documentation/notaryapi/get_submission_status
+api="https://appstoreconnect.apple.com/notary/v2"
 any_pending=0
 any_rejected=0
 
@@ -64,8 +71,28 @@ while IFS= read -r line; do
     exit 1
   fi
 
-  resp="$(curl -sS -H "Authorization: Bearer $JWT" "$api/submissions/$uuid")"
-  status="$(printf '%s' "$resp" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  # Capture HTTP status alongside the body so we can detect a
+  # transport-level 404/401 distinct from a real "Accepted" response.
+  http_resp="$(curl -sS -o /tmp/notary-resp.json \
+    -w '%{http_code}' \
+    -H "Authorization: Bearer $JWT" \
+    "$api/submissions/$uuid")"
+  resp="$(cat /tmp/notary-resp.json)"
+
+  if [ "$http_resp" != "200" ]; then
+    # Surface the response body so the next debug is fast — the old
+    # parser silently swallowed the error JSON and pretended this was
+    # still "in progress".
+    echo "::error::notary API returned HTTP $http_resp for $name ($arch / $uuid)"
+    echo "$resp"
+    exit 1
+  fi
+
+  # Parse the actual status field — it lives under
+  # .data.attributes.status. The previous naive sed grabbed the FIRST
+  # "status" anywhere in the body, which on an error response is the
+  # HTTP status string ("404") rather than the submission status.
+  status="$(printf '%s' "$resp" | jq -r '.data.attributes.status // empty')"
 
   echo "notarize-poll: $name ($arch) uuid=$uuid status=${status:-UNKNOWN}"
 
@@ -80,7 +107,7 @@ while IFS= read -r line; do
       # visible without a manual xcrun roundtrip.
       log_url="$(curl -sS -H "Authorization: Bearer $JWT" \
         "$api/submissions/$uuid/logs" \
-        | sed -n 's/.*"developerLogUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        | jq -r '.data.attributes.developerLogUrl // empty')"
       if [ -n "$log_url" ]; then
         echo "--- notarization log for $name ($arch / $uuid) ---"
         curl -sS "$log_url" || true
@@ -88,10 +115,12 @@ while IFS= read -r line; do
       fi
       ;;
     *)
-      # Treat unknown statuses as pending so we don't tear down a
-      # release on a transient API hiccup. The maintainer can re-run
-      # the poll workflow manually if something is genuinely stuck.
-      echo "notarize-poll: unrecognized status %q — treating as pending" >&2
+      # Genuinely-empty status (didn't parse) is different from any
+      # known state; print the raw body so future debugging shows
+      # exactly what Apple returned. Treat as pending to avoid
+      # tearing a release down on a transient API hiccup.
+      echo "notarize-poll: unrecognized status '${status:-EMPTY}' — treating as pending" >&2
+      echo "$resp" >&2
       any_pending=1
       ;;
   esac
