@@ -634,6 +634,36 @@ func TestPathMapping_BareNameInvocationInjects_Zsh(t *testing.T) {
 	}
 }
 
+// TestPathMapping_ParentRelativeInvocationInjects_Zsh is the #245
+// regression: a `path` mapping for an absolute file must fire when the
+// command is invoked via a `../`-relative path from a subdirectory. The
+// zsh widget used to resolve `../foo` as `${PWD}/${first#./}` →
+// `$PWD/../foo`, an UNNORMALIZED path that never path-equality-matched
+// the canonical absolute mapping, so injection silently failed. The fix
+// mirrors bash.sh's `cd "$(dirname …)" && pwd` normalization, so the
+// resolved path is canonical and is-mapped matches. This test cd's into
+// a sibling subdir (projA) and invokes the mapped file in `bin/` as
+// `../bin/fakecmd`; with normalization that resolves to the mapped
+// absolute path and FOO is injected. Skips cleanly where zsh is absent
+// (exercised on ubuntu CI).
+func TestPathMapping_ParentRelativeInvocationInjects_Zsh(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// projA and bin are siblings under f.dir, so from projA the mapped
+	// file (f.fakeBin/fakecmd) is reachable as `../bin/fakecmd`. Without
+	// normalization this resolves to `<projA>/../bin/fakecmd` and fails
+	// the path-equality match against the canonical absolute mapping.
+	out := f.runZsh(fmt.Sprintf("cd %q", f.projA), "../bin/fakecmd")
+	t.Logf("output:\n%s", out)
+	if !strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("zsh ../-relative invocation: expected FOO=from-cwd (normalized path matches mapping); got:\n%s", out)
+	}
+}
+
 // TestCwdGlob_BareNameNotDoubleDispatched_Zsh is the zsh twin of the
 // double-dispatch guard (#237): once the cwd_glob wrapper is built it
 // sits first on $PATH, so a bare `fakecmd` resolves (via `whence -p`) to
