@@ -78,6 +78,20 @@ func newCPCFixture(t *testing.T) *cpcFixture {
 	bin := buildBinary(t)
 	dir := t.TempDir()
 
+	// The agent runtime dir holds an AF_UNIX socket whose absolute path
+	// (<runtimeDir>/jitenv/agent.sock) must fit in sun_path — 108 bytes
+	// on Linux, 104 on macOS. t.TempDir() embeds the (long) test name,
+	// so for a test like TestCwdGlob_LockedVsUnlocked_WrapperIsLockIndependent
+	// the socket path overflows and bind/connect fails with EINVAL
+	// ("invalid argument"), leaving the agent permanently unreachable.
+	// Anchor the runtime dir at a short, test-name-independent temp path
+	// instead so the socket path stays well under the limit (#238).
+	runtimeDir, err := os.MkdirTemp("", "jrt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+
 	f := &cpcFixture{
 		t:            t,
 		bin:          bin,
@@ -86,7 +100,7 @@ func newCPCFixture(t *testing.T) *cpcFixture {
 		projA:        filepath.Join(dir, "projA"),
 		projB:        filepath.Join(dir, "projB"),
 		fakeBin:      filepath.Join(dir, "bin"),
-		runtimeDir:   filepath.Join(dir, "runtime"),
+		runtimeDir:   runtimeDir,
 		agentCfgPath: filepath.Join(dir, "agent.toml"),
 		shellCfgPath: filepath.Join(dir, "shell.toml"),
 	}
@@ -168,13 +182,30 @@ func (f *cpcFixture) startAgent(key []byte) func() {
 
 	f.t.Setenv("XDG_RUNTIME_DIR", f.runtimeDir)
 	paths, _ := agent.DefaultPaths()
+	// Block until the agent socket is actually accepting connections
+	// (status round-trips) rather than sleeping a fixed interval, so the
+	// first shim invocation after startAgent can never lose a startup
+	// race. If it never comes up, fail loudly with the agent log instead
+	// of silently proceeding into a misleading "agent down" assertion.
 	cli := agent.NewClient(paths.Socket)
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for {
 		if _, err := cli.Status(context.Background()); err == nil {
 			break
+		} else {
+			lastErr = err
 		}
-		time.Sleep(50 * time.Millisecond)
+		if time.Now().After(deadline) {
+			logTail := "<no agent log>"
+			if lg, e := os.ReadFile(paths.LogFile); e == nil {
+				logTail = string(lg)
+			}
+			_ = daemon.Process.Kill()
+			f.t.Fatalf("agent never became reachable on %s: %v\nagent log:\n%s",
+				paths.Socket, lastErr, logTail)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	return func() { _ = daemon.Process.Kill() }
 }
