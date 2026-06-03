@@ -44,6 +44,32 @@ func TestRenderBakesPaths(t *testing.T) {
 	}
 }
 
+// TestRenderHasPathResolvedBranch is the render-level guard for #237:
+// both the bash and zsh hooks must resolve bare-name commands through
+// $PATH (type -P / whence -p) and must short-circuit when that resolves
+// into the cwd_glob wrapper dir so wrappers are not double-dispatched.
+func TestRenderHasPathResolvedBranch(t *testing.T) {
+	t.Setenv("JITENV_CONFIG", "")
+	cases := map[string]string{
+		"bash": "builtin type -P -- ",
+		"zsh":  "whence -p -- ",
+	}
+	for sh, lookup := range cases {
+		t.Run(sh, func(t *testing.T) {
+			out, err := Render(sh)
+			if err != nil {
+				t.Fatalf("Render(%q): %v", sh, err)
+			}
+			if !strings.Contains(out, lookup) {
+				t.Errorf("%s hook missing PATH-resolution lookup %q:\n%s", sh, lookup, out)
+			}
+			if !strings.Contains(out, `"$__JITENV_WRAP_DIR/"*`) {
+				t.Errorf("%s hook missing the cwd_glob wrapper double-dispatch guard:\n%s", sh, out)
+			}
+		})
+	}
+}
+
 // TestRenderQuotesShellMetacharacters guards against an XDG_RUNTIME_DIR
 // or config path with a single quote in it (Windows-mounted home dirs,
 // users with apostrophes in their names, etc.). The single-quote-escape

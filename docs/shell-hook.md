@@ -32,15 +32,22 @@ the line is already present.
 
 ## Trigger semantics
 
-The hook only intercepts commands whose first token resolves to an
-**absolute** or **`./` / `../`-relative** filesystem path. Bare PATH
-lookups (`deploy.sh`, `npm`, `python`) are ignored. This is
-intentional: it keeps the hook fast (one stat per command, not a
-PATH walk) and predictable.
+The hook intercepts a command when its first token resolves to a real
+file, whether that token is:
 
-To map a binary you'd otherwise invoke by PATH name, either run it
-explicitly through `jitenv run`, or shadow it with a wrapper script
-at a known path that's covered by a mapping.
+- an **absolute** path (`/usr/local/bin/terraform`),
+- a **`./` / `../`-relative** path (`./scripts/deploy.sh`), or
+- a **bare name resolved through `$PATH`** (`terraform`, `deploy.sh`) —
+  the hook does a single `type -P` / `whence -p` lookup and matches the
+  mapping against the resolved absolute path.
+
+Bare names that don't resolve to a real executable file — shell
+builtins, aliases, functions, and typos — are ignored, so the common
+case (no mapping) stays cheap: one `type -P` and at most one
+`jitenv is-mapped` per command, never a manual PATH walk.
+
+So a `path = "/usr/local/bin/terraform"` (or a matching `glob`) mapping
+now fires whether you type the full path or just `terraform`.
 
 ## The exit-code contract
 
@@ -119,9 +126,12 @@ shell shortens it to 2 seconds.
 
 ### "Why does the hook ignore `deploy.sh` when I'm in `./scripts/`?"
 
-Because the first token is a bare name; the hook only matches
-absolute or `./`-relative paths. Either run `./deploy.sh` or set up
-a glob mapping that covers the resolved path. See
+A bare `deploy.sh` only triggers the hook if it resolves through
+`$PATH` to a real file. A script in the current directory is *not* on
+`$PATH` (jitenv never adds `.` to PATH), so `deploy.sh` doesn't resolve
+and is ignored — run `./deploy.sh`, or set up a glob mapping that
+covers the resolved path. A binary that *is* on `$PATH` (e.g.
+`terraform`) is matched by its resolved absolute path. See
 [concepts.md](concepts.md#path-vs-glob).
 
 ### "I edited config.toml but the agent shows old values"

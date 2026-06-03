@@ -214,10 +214,12 @@ the check entirely — there is no upgrade story for snapshots.
 - All three mapping kinds (`path`, `glob`, `cwd_glob`) work on every
   supported shell. Implementation differs per shell:
   - bash: `extdebug` + `DEBUG` trap intercepts absolute / `./`-relative
-    paths; `cwd_glob` is driven by wrapper symlinks in a per-shell PATH
-    entry, reconciled on every prompt.
-  - zsh: an `accept-line` zle widget does the same path interception;
-    `cwd_glob` again uses wrapper symlinks reconciled per prompt.
+    paths and bare names resolved through `$PATH` (`type -P`); `cwd_glob`
+    is driven by wrapper symlinks in a per-shell PATH entry, reconciled
+    on every prompt.
+  - zsh: an `accept-line` zle widget does the same path interception
+    (bare names via `whence -p`); `cwd_glob` again uses wrapper symlinks
+    reconciled per prompt.
   - PowerShell 7+: a PSReadLine `Enter` chord handler intercepts paths;
     `cwd_glob` uses `.ps1` wrappers in a per-shell PATH entry,
     reconciled by the `prompt` override. PSReadLine is the default
@@ -225,9 +227,11 @@ the check entirely — there is no upgrade story for snapshots.
     no-ops and `cwd_glob` still works.
 - Windows release binaries are not Authenticode-signed; SmartScreen
   may warn on first run.
-- The shell hook only intercepts commands whose first token is an
-  absolute or `./`-relative path — not bare PATH lookups (those are
-  routed via `cwd_glob` wrappers instead).
+- The shell hook intercepts commands whose first token is an absolute
+  or `./`-relative path, or a bare name that resolves through `$PATH` to
+  a real file — so a `path`/`glob` mapping fires whether you type the
+  full path or just the command name. Builtins, aliases, functions, and
+  typos (which don't resolve to a file) are left alone.
 - Single agent per user; multiple terminals share one unlocked instance.
 - TUI requires a TTY; for scripted setup use `jitenv config init` then
   re-run interactively.

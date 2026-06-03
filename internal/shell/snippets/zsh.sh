@@ -125,7 +125,21 @@ __jitenv_accept_line() {
         case "$first" in
             /*)        resolved="$first" ;;
             ./*|../*)  resolved="${PWD}/${first#./}" ;;
-            *)         resolved="" ;;
+            *)
+                # Bare name → resolve through $PATH so `path`/`glob`
+                # mappings fire on PATH-invoked commands too, not just
+                # explicit-path ones. `whence -p` reports only a real
+                # executable file (skips builtins, aliases, functions,
+                # and typos, which yield an empty result → run normally).
+                # If it resolves to a cwd_glob wrapper, the wrapper shim
+                # already calls is-mapped itself, so don't double-dispatch
+                # — leave resolved empty and let the wrapper handle it.
+                # (issue #237)
+                resolved="$(whence -p -- "$first" 2>/dev/null)"
+                if [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]]; then
+                    resolved=""
+                fi
+                ;;
         esac
         if [[ -n "$resolved" && -f "$resolved" ]]; then
             __jitenv_log "candidate cmd=[$BUFFER] resolved=[$resolved]"

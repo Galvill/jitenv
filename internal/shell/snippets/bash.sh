@@ -170,7 +170,17 @@ __jitenv_debug_trap() {
     elif [[ "$first" = ./* || "$first" = ../* ]]; then
         resolved="$(cd "$(dirname "$first")" 2>/dev/null && pwd)/$(basename "$first")"
     else
-        return 0
+        # Bare name → resolve through $PATH so `path`/`glob` mappings fire
+        # on PATH-invoked commands too, not just explicit-path ones.
+        # `type -P` only reports a real executable file (skips builtins,
+        # aliases, functions, and typos, which yield an empty result →
+        # run normally). (issue #237)
+        resolved="$(builtin type -P -- "$first" 2>/dev/null)"
+        [[ -z "$resolved" ]] && return 0
+        # If the name resolved to a cwd_glob wrapper, the wrapper shim
+        # already calls is-mapped itself — routing it through here too
+        # would double-dispatch. Let the wrapper handle it.
+        [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]] && return 0
     fi
     [[ ! -f "$resolved" ]] && return 0
 

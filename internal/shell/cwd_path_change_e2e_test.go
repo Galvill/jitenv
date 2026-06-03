@@ -78,6 +78,20 @@ func newCPCFixture(t *testing.T) *cpcFixture {
 	bin := buildBinary(t)
 	dir := t.TempDir()
 
+	// The agent runtime dir holds an AF_UNIX socket whose absolute path
+	// (<runtimeDir>/jitenv/agent.sock) must fit in sun_path — 108 bytes
+	// on Linux, 104 on macOS. t.TempDir() embeds the (long) test name,
+	// so for a test like TestCwdGlob_LockedVsUnlocked_WrapperIsLockIndependent
+	// the socket path overflows and bind/connect fails with EINVAL
+	// ("invalid argument"), leaving the agent permanently unreachable.
+	// Anchor the runtime dir at a short, test-name-independent temp path
+	// instead so the socket path stays well under the limit (#238).
+	runtimeDir, err := os.MkdirTemp("", "jrt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+
 	f := &cpcFixture{
 		t:            t,
 		bin:          bin,
@@ -86,7 +100,7 @@ func newCPCFixture(t *testing.T) *cpcFixture {
 		projA:        filepath.Join(dir, "projA"),
 		projB:        filepath.Join(dir, "projB"),
 		fakeBin:      filepath.Join(dir, "bin"),
-		runtimeDir:   filepath.Join(dir, "runtime"),
+		runtimeDir:   runtimeDir,
 		agentCfgPath: filepath.Join(dir, "agent.toml"),
 		shellCfgPath: filepath.Join(dir, "shell.toml"),
 	}
@@ -168,13 +182,30 @@ func (f *cpcFixture) startAgent(key []byte) func() {
 
 	f.t.Setenv("XDG_RUNTIME_DIR", f.runtimeDir)
 	paths, _ := agent.DefaultPaths()
+	// Block until the agent socket is actually accepting connections
+	// (status round-trips) rather than sleeping a fixed interval, so the
+	// first shim invocation after startAgent can never lose a startup
+	// race. If it never comes up, fail loudly with the agent log instead
+	// of silently proceeding into a misleading "agent down" assertion.
 	cli := agent.NewClient(paths.Socket)
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for {
 		if _, err := cli.Status(context.Background()); err == nil {
 			break
+		} else {
+			lastErr = err
 		}
-		time.Sleep(50 * time.Millisecond)
+		if time.Now().After(deadline) {
+			logTail := "<no agent log>"
+			if lg, e := os.ReadFile(paths.LogFile); e == nil {
+				logTail = string(lg)
+			}
+			_ = daemon.Process.Kill()
+			f.t.Fatalf("agent never became reachable on %s: %v\nagent log:\n%s",
+				paths.Socket, lastErr, logTail)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	return func() { _ = daemon.Process.Kill() }
 }
@@ -215,6 +246,55 @@ eval "$(%s/jitenv hook bash)"
 	}
 	f.t.Fatalf("bash run failed to start: %v\noutput=%s", err, out)
 	return "", -1
+}
+
+// runZsh drives the zsh hook's bare-name PATH branch. The zsh hook lives
+// in a `zle` widget bound to accept-line, which only fires inside the
+// interactive line editor — it never runs under `zsh -c`. Rather than
+// pull in a pty dependency just for this, the harness sources the hook,
+// sets BUFFER, and calls __jitenv_accept_line directly: the widget does
+// its real `whence -p` resolution + is-mapped routing and rewrites BUFFER
+// to `jitenv run <resolved>` exactly as it would interactively. The
+// trailing `zle .accept-line` errors harmlessly outside the editor (no
+// set -e), so we eval the rewritten BUFFER by hand to actually run the
+// command — the same hand-driven approach the bash tests use for
+// __jitenv_chpwd, which PROMPT_COMMAND doesn't fire under `bash -c`.
+//
+// setup runs after the hook is sourced but before the widget fires (e.g.
+// `cd <dir> && __jitenv_chpwd` to build a cwd_glob wrapper); buffer is
+// the single command line fed through the widget as its first token.
+// JITENV_CONFIG points at shellCfg.
+func (f *cpcFixture) runZsh(setup, buffer string) string {
+	f.t.Helper()
+	if _, err := exec.LookPath("zsh"); err != nil {
+		f.t.Skip("zsh not available")
+	}
+	// Source the hook, run setup, set BUFFER, run the widget (rewrites
+	// BUFFER for a mapped command; the final `zle .accept-line` fails
+	// outside the line editor, which we ignore), then eval whatever
+	// BUFFER ended up as.
+	full := fmt.Sprintf(
+		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
+eval "$(%s/jitenv hook zsh)"
+%s
+BUFFER=%q
+__jitenv_accept_line 2>/dev/null || true
+eval "$BUFFER"`, f.binDir, f.fakeBin, f.shellCfgPath, f.binDir, setup, buffer)
+	cmd := exec.Command("zsh", "-c", full)
+	cmd.Env = append(os.Environ(),
+		"XDG_RUNTIME_DIR="+f.runtimeDir,
+		"JITENV_HOOK_DELAY=1",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			f.t.Fatalf("zsh exited %d\noutput=%s", ee.ExitCode(), out)
+		}
+		f.t.Fatalf("zsh run failed to start: %v\noutput=%s", err, out)
+	}
+	return string(out)
 }
 
 func cwdGlobMapping(dir string) []config.Mapping {
@@ -435,5 +515,148 @@ fakecmd
 	}
 	if !strings.Contains(afterPrompt, "FOO=from-cwd") {
 		t.Errorf("after prompt fire: expected FOO=from-cwd; got:\n%s", afterPrompt)
+	}
+}
+
+// pathMappingFor maps the absolute path of fakeBin/fakecmd.
+func (f *cpcFixture) pathMappingFor() []config.Mapping {
+	return []config.Mapping{{
+		Path: filepath.Join(f.fakeBin, "fakecmd"),
+		Vars: []config.VarRef{{Name: "FOO", Source: "n", Ref: "my-secret"}},
+	}}
+}
+
+// TestPathMapping_BareNameInvocationInjects is the #237 regression: a
+// `path` mapping for an absolute file fires even when the command is
+// typed as a bare name resolved through $PATH (not just ./foo or an
+// absolute path). The hook now `type -P`s the bare name and routes the
+// resolved absolute path through `jitenv is-mapped`.
+func TestPathMapping_BareNameInvocationInjects(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// fakeBin is on PATH (see runBashAllowErr), so `fakecmd` is a bare
+	// name that resolves through $PATH to the mapped absolute file.
+	out := f.runBash(`
+echo '--- bare ---'
+fakecmd
+`)
+	t.Logf("output:\n%s", out)
+	if bare := sectionBetween(out, "--- bare ---", ""); !strings.Contains(bare, "FOO=from-cwd") {
+		t.Errorf("bare-name PATH invocation: expected FOO=from-cwd; got:\n%s", bare)
+	}
+}
+
+// TestPathMapping_BareNameBuiltinOrTypoRunsNormally verifies the new
+// PATH branch fails open: a shell builtin and an unresolvable typo both
+// yield an empty `type -P`, so the hook returns 0 and the command runs
+// without any jitenv involvement.
+func TestPathMapping_BareNameBuiltinOrTypoRunsNormally(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// `echo` is a builtin (empty type -P) and `definitely_not_a_cmd_237`
+	// does not resolve — neither should trip the mapped path.
+	out, code := f.runBashAllowErr(`
+echo '--- builtin ---'
+definitely_not_a_cmd_237 2>/dev/null
+echo '--- done ---'
+`)
+	t.Logf("output (exit %d):\n%s", code, out)
+	if strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("builtin/typo path should not inject; got:\n%s", out)
+	}
+	if !strings.Contains(out, "--- builtin ---") || !strings.Contains(out, "--- done ---") {
+		t.Errorf("expected the script to run to completion; got:\n%s", out)
+	}
+}
+
+// TestCwdGlob_BareNameNotDoubleDispatched is the critical #237
+// correctness guard: once a cwd_glob wrapper is built, the wrapper dir
+// is first on $PATH, so a bare `fakecmd` resolves to the wrapper. The
+// new PATH branch must short-circuit (resolved under $__JITENV_WRAP_DIR
+// → return 0) and let the wrapper shim do the single is-mapped call, so
+// cwd_glob behavior is byte-for-byte what it was before #237: injection
+// still works and the command is not dispatched twice.
+func TestCwdGlob_BareNameNotDoubleDispatched(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(cwdGlobMapping(f.projA))
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	out := f.runBash(fmt.Sprintf(`
+cd %q
+__jitenv_chpwd             # build the wrapper + clear the hash
+echo '--- via-wrapper ---'
+fakecmd                    # bare name → resolves to the wrapper, not double-dispatched
+`, f.projA))
+	t.Logf("output:\n%s", out)
+	section := sectionBetween(out, "--- via-wrapper ---", "")
+	if !strings.Contains(section, "FOO=from-cwd") {
+		t.Errorf("cwd_glob bare-name: expected FOO=from-cwd via the wrapper; got:\n%s", section)
+	}
+	// The wrapper emits exactly one injected line. A double-dispatch
+	// would run the command twice → two FOO= lines.
+	if n := strings.Count(section, "FOO="); n != 1 {
+		t.Errorf("expected exactly one FOO= line (no double dispatch); got %d:\n%s", n, section)
+	}
+}
+
+// TestPathMapping_BareNameInvocationInjects_Zsh is the zsh twin of
+// TestPathMapping_BareNameInvocationInjects (#237). GitHub's
+// ubuntu-latest CI image (where `go test -race ./...` runs the
+// !windows-tagged shell e2e suites) ships zsh, so this branch is
+// exercised in CI; it skips cleanly where zsh is absent. It drives the
+// real `whence -p` bare-name branch of the zsh accept-line widget — see
+// runZsh for why the widget is invoked directly rather than through an
+// interactive line editor.
+func TestPathMapping_BareNameInvocationInjects_Zsh(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// fakeBin is on PATH (see runZsh), so `fakecmd` is a bare name that
+	// resolves through $PATH (via `whence -p`) to the mapped absolute
+	// file and must route through `jitenv run`.
+	out := f.runZsh("", "fakecmd")
+	t.Logf("output:\n%s", out)
+	if !strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("zsh bare-name PATH invocation: expected FOO=from-cwd; got:\n%s", out)
+	}
+}
+
+// TestCwdGlob_BareNameNotDoubleDispatched_Zsh is the zsh twin of the
+// double-dispatch guard (#237): once the cwd_glob wrapper is built it
+// sits first on $PATH, so a bare `fakecmd` resolves (via `whence -p`) to
+// the wrapper. The zsh widget must blank `resolved` for a wrap-dir hit
+// and let the wrapper shim do the single is-mapped call — so injection
+// still works and the command runs exactly once.
+func TestCwdGlob_BareNameNotDoubleDispatched_Zsh(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(cwdGlobMapping(f.projA))
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// cd into the mapped dir and reconcile so the wrapper exists and the
+	// wrap dir is first on PATH, then drive a bare-name `fakecmd` through
+	// the widget.
+	out := f.runZsh(fmt.Sprintf("cd %q && __jitenv_chpwd", f.projA), "fakecmd")
+	t.Logf("output:\n%s", out)
+	if !strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("zsh cwd_glob bare-name: expected FOO=from-cwd via the wrapper; got:\n%s", out)
+	}
+	// A double-dispatch would run the command twice → two FOO= lines.
+	if n := strings.Count(out, "FOO="); n != 1 {
+		t.Errorf("expected exactly one FOO= line (no double dispatch); got %d:\n%s", n, out)
 	}
 }
