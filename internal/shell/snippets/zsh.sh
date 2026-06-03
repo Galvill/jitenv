@@ -124,7 +124,15 @@ __jitenv_accept_line() {
         first="${first#\'}"; first="${first%\'}"
         case "$first" in
             /*)        resolved="$first" ;;
-            ./*|../*)  resolved="${PWD}/${first#./}" ;;
+            ./*|../*)
+                # Normalize the same way bash.sh does so zsh and bash
+                # produce identical canonical absolute paths and stay in
+                # sync. The old `${PWD}/${first#./}` only stripped a
+                # leading `./`, so `../foo` became `$PWD/../foo` — an
+                # unnormalized path that won't path-equality-match a
+                # mapping stored in canonical absolute form (issue #245).
+                resolved="$(cd "$(dirname "$first")" 2>/dev/null && pwd)/$(basename "$first")"
+                ;;
             *)
                 # Bare name → resolve through $PATH so `path`/`glob`
                 # mappings fire on PATH-invoked commands too, not just
