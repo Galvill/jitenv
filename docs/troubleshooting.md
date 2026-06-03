@@ -26,9 +26,11 @@ Try in this order:
    `~/.bash_login`, or `~/.profile` sources it. The status output
    tells you whether the chain is wired up. Re-running
    `jitenv hook install` adds the guarded source line.
-3. Is the command's first token an absolute or `./`-relative path?
-   Bare PATH lookups (`deploy.sh`, `npm`) are intentionally not
-   intercepted. See [shell-hook.md](shell-hook.md#trigger-semantics).
+3. Does the command's first token resolve to a real file — an absolute
+   path, a `./`-relative path, or a bare name found on `$PATH`? Names
+   that don't resolve (builtins, aliases, functions, typos, and scripts
+   in the current dir that aren't on `$PATH`) are not intercepted. See
+   [shell-hook.md](shell-hook.md#trigger-semantics).
 4. Is the file a symlink? Mappings match the resolved canonical path,
    not the symlink. `ls -L` to confirm what jitenv sees.
 5. `JITENV_HOOK_DEBUG=1` and re-run. The hook logs each branch it

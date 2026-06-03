@@ -468,3 +468,94 @@ fakecmd
 		t.Errorf("after prompt fire: expected FOO=from-cwd; got:\n%s", afterPrompt)
 	}
 }
+
+// pathMappingFor maps the absolute path of fakeBin/fakecmd.
+func (f *cpcFixture) pathMappingFor() []config.Mapping {
+	return []config.Mapping{{
+		Path: filepath.Join(f.fakeBin, "fakecmd"),
+		Vars: []config.VarRef{{Name: "FOO", Source: "n", Ref: "my-secret"}},
+	}}
+}
+
+// TestPathMapping_BareNameInvocationInjects is the #237 regression: a
+// `path` mapping for an absolute file fires even when the command is
+// typed as a bare name resolved through $PATH (not just ./foo or an
+// absolute path). The hook now `type -P`s the bare name and routes the
+// resolved absolute path through `jitenv is-mapped`.
+func TestPathMapping_BareNameInvocationInjects(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// fakeBin is on PATH (see runBashAllowErr), so `fakecmd` is a bare
+	// name that resolves through $PATH to the mapped absolute file.
+	out := f.runBash(`
+echo '--- bare ---'
+fakecmd
+`)
+	t.Logf("output:\n%s", out)
+	if bare := sectionBetween(out, "--- bare ---", ""); !strings.Contains(bare, "FOO=from-cwd") {
+		t.Errorf("bare-name PATH invocation: expected FOO=from-cwd; got:\n%s", bare)
+	}
+}
+
+// TestPathMapping_BareNameBuiltinOrTypoRunsNormally verifies the new
+// PATH branch fails open: a shell builtin and an unresolvable typo both
+// yield an empty `type -P`, so the hook returns 0 and the command runs
+// without any jitenv involvement.
+func TestPathMapping_BareNameBuiltinOrTypoRunsNormally(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// `echo` is a builtin (empty type -P) and `definitely_not_a_cmd_237`
+	// does not resolve — neither should trip the mapped path.
+	out, code := f.runBashAllowErr(`
+echo '--- builtin ---'
+definitely_not_a_cmd_237 2>/dev/null
+echo '--- done ---'
+`)
+	t.Logf("output (exit %d):\n%s", code, out)
+	if strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("builtin/typo path should not inject; got:\n%s", out)
+	}
+	if !strings.Contains(out, "--- builtin ---") || !strings.Contains(out, "--- done ---") {
+		t.Errorf("expected the script to run to completion; got:\n%s", out)
+	}
+}
+
+// TestCwdGlob_BareNameNotDoubleDispatched is the critical #237
+// correctness guard: once a cwd_glob wrapper is built, the wrapper dir
+// is first on $PATH, so a bare `fakecmd` resolves to the wrapper. The
+// new PATH branch must short-circuit (resolved under $__JITENV_WRAP_DIR
+// → return 0) and let the wrapper shim do the single is-mapped call, so
+// cwd_glob behavior is byte-for-byte what it was before #237: injection
+// still works and the command is not dispatched twice.
+func TestCwdGlob_BareNameNotDoubleDispatched(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(cwdGlobMapping(f.projA))
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	out := f.runBash(fmt.Sprintf(`
+cd %q
+__jitenv_chpwd             # build the wrapper + clear the hash
+echo '--- via-wrapper ---'
+fakecmd                    # bare name → resolves to the wrapper, not double-dispatched
+`, f.projA))
+	t.Logf("output:\n%s", out)
+	section := sectionBetween(out, "--- via-wrapper ---", "")
+	if !strings.Contains(section, "FOO=from-cwd") {
+		t.Errorf("cwd_glob bare-name: expected FOO=from-cwd via the wrapper; got:\n%s", section)
+	}
+	// The wrapper emits exactly one injected line. A double-dispatch
+	// would run the command twice → two FOO= lines.
+	if n := strings.Count(section, "FOO="); n != 1 {
+		t.Errorf("expected exactly one FOO= line (no double dispatch); got %d:\n%s", n, section)
+	}
+}
