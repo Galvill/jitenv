@@ -173,6 +173,7 @@ func newRenameSourceScreen(r *rootModel, oldName string) screen {
 		r.cfg.Sources[newName] = r.cfg.Sources[oldName]
 		delete(r.cfg.Sources, oldName)
 		rewriteSourceRefs(r.cfg, oldName, newName)
+		renameIDMapSource(r.cfg, oldName, newName)
 		return tea.Sequence(
 			emit(popMsg{}),
 			emit(dirtyMsg{}),

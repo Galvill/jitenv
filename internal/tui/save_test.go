@@ -61,28 +61,45 @@ func TestEncryptForSave_RoundTrip(t *testing.T) {
 		t.Fatalf("live secret mutated: %v", c.Secrets["stripe"]["SK"])
 	}
 
-	// Re-load and inspect the on-disk form.
+	// Re-load and inspect the on-disk form. Post-#248 the Sources /
+	// Secrets maps are keyed by opaque IDs, and the source / bag / key
+	// NAMES are gone from the structure (sealed into _meta.name_map), so
+	// we can't index by name before decrypt — assert encryption by
+	// walking the maps instead.
 	reloaded, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	sak := reloaded.Sources["prod_aws"].Params["secret_access_key"].(string)
-	if !crypto.IsEnvelope(sak) {
-		t.Fatalf("secret_access_key not encrypted on disk: %q", sak)
+	for id := range reloaded.Sources {
+		if !config.IsSourceID(id) {
+			t.Fatalf("source key %q is not an opaque ID on disk", id)
+		}
 	}
-	// Security #112: encrypt-by-default. Every non-envelope string
-	// param must land on disk as an envelope, regardless of whether
-	// the schema flagged it Sensitive. The previous behaviour treated
-	// the schema as the sole gate, which silently leaked params from
-	// sources without a registered schema (or sources where an author
-	// forgot the Sensitive flag).
-	region := reloaded.Sources["prod_aws"].Params["region"].(string)
-	if !crypto.IsEnvelope(region) {
-		t.Fatalf("non-sensitive region was NOT encrypted on disk: %q", region)
+	if reloaded.Meta.NameMap == "" {
+		t.Fatalf("expected sealed _meta.name_map on disk")
 	}
-	for _, v := range reloaded.Secrets["stripe"] {
-		if !crypto.IsEnvelope(v) {
-			t.Fatalf("secret not encrypted: %q", v)
+	// Security #112: encrypt-by-default. Every non-envelope string param
+	// must land on disk as an envelope, regardless of the schema's
+	// Sensitive flag.
+	for _, sc := range reloaded.Sources {
+		for pk, pv := range sc.Params {
+			s, _ := pv.(string)
+			if !crypto.IsEnvelope(s) {
+				t.Fatalf("param %q not encrypted on disk: %q", pk, s)
+			}
+		}
+	}
+	for bagID, kv := range reloaded.Secrets {
+		if !config.IsBagID(bagID) {
+			t.Fatalf("bag key %q is not an opaque ID on disk", bagID)
+		}
+		for keyID, v := range kv {
+			if !config.IsKeyID(keyID) {
+				t.Fatalf("bag-key %q is not an opaque ID on disk", keyID)
+			}
+			if !crypto.IsEnvelope(v) {
+				t.Fatalf("secret not encrypted: %q", v)
+			}
 		}
 	}
 
@@ -146,9 +163,13 @@ func TestEncryptForSave_EncryptsParamsWithoutSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	v := reloaded.Sources["myop"].Params["opaque_token"].(string)
-	if !crypto.IsEnvelope(v) {
-		t.Fatalf("schema-less param was NOT encrypted on disk: %q", v)
+	// Opaque-ID on-disk form: assert encryption by walking, since the
+	// "myop" name is sealed into _meta.name_map (#248).
+	for _, sc := range reloaded.Sources {
+		v, _ := sc.Params["opaque_token"].(string)
+		if !crypto.IsEnvelope(v) {
+			t.Fatalf("schema-less param was NOT encrypted on disk: %q", v)
+		}
 	}
 	if err := config.DecryptInPlace(reloaded, key); err != nil {
 		t.Fatalf("decrypt: %v", err)

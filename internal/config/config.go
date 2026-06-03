@@ -16,18 +16,32 @@ type Config struct {
 	Sources  map[string]SourceConfig      `toml:"sources"`
 	Mappings []Mapping                    `toml:"mappings"`
 	Secrets  map[string]map[string]string `toml:"secrets,omitempty"`
+
+	// IDMap is the decrypted opaque-ID↔name dictionary (#248). It is
+	// populated by DecryptInPlace from the sealed Meta.NameMap and is
+	// NOT serialized to TOML (the `-` tag). EncryptInPlace consumes it so
+	// renames keep IDs stable: the TUI updates the name carried here for
+	// an existing ID rather than letting a new name mint a fresh ID. nil
+	// on a freshly-loaded (still-encrypted) config and on configs that
+	// have never had named structure.
+	IDMap *NameMap `toml:"-"`
 }
 
 // Meta carries KDF parameters and a passphrase verification sentinel.
-// All fields are plaintext on disk; "Verify" is an enc:v1: blob whose
-// successful decryption proves the passphrase.
+// All scalar fields are plaintext on disk; "Verify" is an enc:v1: blob
+// whose successful decryption proves the passphrase. "NameMap" (#248) is
+// an AEAD-sealed JSON envelope holding the ID↔name dictionary that maps
+// the opaque s_/b_/k_ TOML keys back to the user-facing source / bag /
+// bag-key names. It is omitted entirely on configs that have no named
+// structure yet (a fresh `jitenv config init`).
 type Meta struct {
 	KDF            string `toml:"kdf"`
 	ArgonTime      uint32 `toml:"argon_time"`
 	ArgonMemoryKiB uint32 `toml:"argon_memory_kib"`
 	ArgonThreads   uint8  `toml:"argon_threads"`
-	Salt           string `toml:"salt"`   // base64
-	Verify         string `toml:"verify"` // enc:v1:...
+	Salt           string `toml:"salt"`               // base64
+	Verify         string `toml:"verify"`             // enc:v1:...
+	NameMap        string `toml:"name_map,omitempty"` // enc:v2: sealed JSON (#248)
 }
 
 type AgentConfig struct {

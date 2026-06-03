@@ -74,6 +74,14 @@ func RunWithMappingTemplate(cfgPath string, key []byte, template *config.Mapping
 	if err != nil {
 		return err
 	}
+	if migrated, err := config.MigrateToOpaqueIDs(cfgPath, key); err != nil {
+		return fmt.Errorf("migrate config for post-clone follow-up: %w", err)
+	} else if migrated {
+		cfg, err = config.Load(cfgPath)
+		if err != nil {
+			return err
+		}
+	}
 	if err := config.DecryptInPlace(cfg, key); err != nil {
 		return fmt.Errorf("decrypt config for post-clone follow-up: %w", err)
 	}
@@ -188,6 +196,20 @@ func loadOrInit(cfgPath string) (*config.Config, []byte, error) {
 	key, err := config.DeriveKeyFromMeta(c, pw)
 	if err != nil {
 		return nil, nil, err
+	}
+	// One-shot opaque-ID migration (#248). Runs under the TUI lock held
+	// by `jitenv config`, so it can't race the agent-spawn migration.
+	if migrated, err := config.MigrateToOpaqueIDs(cfgPath, key); err != nil {
+		zero(key)
+		return nil, nil, err
+	} else if migrated {
+		// Reload the rewritten (opaque-ID) form so DecryptInPlace below
+		// works on the migrated bytes.
+		c, err = config.Load(cfgPath)
+		if err != nil {
+			zero(key)
+			return nil, nil, err
+		}
 	}
 	if err := config.DecryptInPlace(c, key); err != nil {
 		zero(key)

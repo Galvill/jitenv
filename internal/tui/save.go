@@ -29,6 +29,11 @@ func saveCmd(r *rootModel) tea.Cmd {
 			if err := config.AtomicSave(r.cfgPath, out); err != nil {
 				return errorMsg(fmt.Sprintf("save: %v", err))
 			}
+			// Propagate the freshly-built ID↔name dictionary (with any
+			// IDs minted for new sources/bags/keys) back into the live
+			// config so a subsequent rename/save reuses the same IDs
+			// instead of minting new ones (#248 ID stability).
+			r.cfg.IDMap = out.IDMap
 			return savedMsg{}
 		},
 		func() tea.Msg {

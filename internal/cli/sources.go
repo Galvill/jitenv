@@ -38,6 +38,24 @@ func newSourcesListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Post-#248 the source NAMES live only in the sealed
+			// _meta.name_map; the on-disk Sources map is keyed by opaque
+			// IDs. Decrypt so we can list the real names. (source.type
+			// stays plaintext, so a config with no name_map — pre-#248 or
+			// never-migrated — still lists fine after a no-op decrypt.)
+			pw, err := crypto.PromptPassphrase("jitenv sources passphrase: ", false)
+			if err != nil {
+				return err
+			}
+			defer zeroBytes(pw)
+			key, err := config.DeriveKeyFromMeta(cfg, pw)
+			if err != nil {
+				return err
+			}
+			defer zeroBytes(key)
+			if err := config.DecryptInPlace(cfg, key); err != nil {
+				return err
+			}
 			names := make([]string, 0, len(cfg.Sources))
 			for n := range cfg.Sources {
 				names = append(names, n)
@@ -79,10 +97,6 @@ func newSourcesTestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sc, ok := cfg.Sources[args[0]]
-			if !ok {
-				return fmt.Errorf("source %q not found", args[0])
-			}
 
 			pw, err := crypto.PromptPassphrase("jitenv sources passphrase: ", false)
 			if err != nil {
@@ -94,10 +108,17 @@ func newSourcesTestCmd() *cobra.Command {
 				return err
 			}
 			defer zeroBytes(key)
+			// Decrypt first: post-#248 the on-disk Sources map is keyed by
+			// opaque IDs, and DecryptInPlace translates them back to the
+			// user-facing names this command looks up by.
 			if err := config.DecryptInPlace(cfg, key); err != nil {
 				return err
 			}
-			s, err := sources.Build(sc.Type, cfg.Sources[args[0]].Params)
+			sc, ok := cfg.Sources[args[0]]
+			if !ok {
+				return fmt.Errorf("source %q not found", args[0])
+			}
+			s, err := sources.Build(sc.Type, sc.Params)
 			if err != nil {
 				return err
 			}

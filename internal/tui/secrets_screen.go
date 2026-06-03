@@ -211,6 +211,7 @@ func newRenameBagScreen(r *rootModel, oldName string) screen {
 		r.cfg.Secrets[newName] = r.cfg.Secrets[oldName]
 		delete(r.cfg.Secrets, oldName)
 		rewriteLocalBagRefs(r.cfg, oldName, newName)
+		renameIDMapBag(r.cfg, oldName, newName)
 		return tea.Sequence(
 			emit(popMsg{}),
 			emit(dirtyMsg{}),
@@ -609,6 +610,7 @@ func (s *kvEditScreen) commit() tea.Cmd {
 			delete(bag, s.existingKey)
 			bag[key] = val
 			rewriteLocalKeyRefs(s.root.cfg, s.bag, s.existingKey, key)
+			renameIDMapKey(s.root.cfg, s.bag, s.existingKey, key)
 		} else {
 			bag[key] = val
 		}
