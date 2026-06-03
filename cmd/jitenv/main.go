@@ -9,6 +9,7 @@ import (
 	"github.com/gv/jitenv/internal/cli"
 	"github.com/gv/jitenv/internal/shim"
 	_ "github.com/gv/jitenv/internal/sources/builtin"
+	_ "github.com/gv/jitenv/internal/syncadapters/builtin"
 )
 
 func main() {
