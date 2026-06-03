@@ -3,13 +3,14 @@
 // registry. Mirrors internal/sources/builtin. Blank-imported from
 // cmd/jitenv/main.go.
 //
-// v1 ships the "file" (local / mounted filesystem) and "ssh" adapters.
-// An "s3" adapter is tracked as a follow-up: the AWS S3 service client
-// is not yet vendored, and adding it is a pure registration call here
-// once written — no core change.
+// Ships the "file" (local / mounted filesystem), "ssh", and "s3"
+// adapters. The S3 adapter stores the encrypted blob as an object in an
+// Amazon S3 (or S3-compatible) bucket; adding a new adapter is a pure
+// registration call here — no core change.
 package builtin
 
 import (
 	_ "github.com/gv/jitenv/internal/syncadapters/file"
+	_ "github.com/gv/jitenv/internal/syncadapters/s3"
 	_ "github.com/gv/jitenv/internal/syncadapters/ssh"
 )
