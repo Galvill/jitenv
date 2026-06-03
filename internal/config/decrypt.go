@@ -36,5 +36,44 @@ func DecryptInPlace(c *Config, key []byte) error {
 			kv[k] = pt
 		}
 	}
+	// vars[*] scalar + extra fields (#235). Symmetric with the encrypt
+	// walker; plaintext fields (legacy configs not yet re-saved) pass
+	// through untouched.
+	for i := range c.Mappings {
+		m := &c.Mappings[i]
+		for j := range m.Vars {
+			v := &m.Vars[j]
+			fields := []struct {
+				field string
+				ptr   *string
+			}{
+				{"name", &v.Name},
+				{"source", &v.Source},
+				{"ref", &v.Ref},
+				{"key", &v.Key},
+				{"value", &v.Value},
+			}
+			for _, f := range fields {
+				if !crypto.IsEnvelope(*f.ptr) {
+					continue
+				}
+				pt, err := crypto.DecryptField(key, *f.ptr, VarFieldAAD(i, j, f.field))
+				if err != nil {
+					return fmt.Errorf("decrypt mapping[%d].vars[%d].%s: %w", i, j, f.field, err)
+				}
+				*f.ptr = pt
+			}
+			for k, ev := range v.Extra {
+				if !crypto.IsEnvelope(ev) {
+					continue
+				}
+				pt, err := crypto.DecryptField(key, ev, VarExtraAAD(i, j, k))
+				if err != nil {
+					return fmt.Errorf("decrypt mapping[%d].vars[%d].extra.%s: %w", i, j, k, err)
+				}
+				v.Extra[k] = pt
+			}
+		}
+	}
 	return nil
 }

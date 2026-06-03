@@ -413,13 +413,15 @@ func TestCommandsList_TomlRoundTrip(t *testing.T) {
 		t.Fatalf("after edit+delete: %v", got)
 	}
 
-	// Save + validate + reload, mirroring saveCmd.
+	// Save + validate + reload, mirroring saveCmd: validate the
+	// plaintext form (ValidatePost resolves var.source) BEFORE
+	// EncryptInPlace seals those fields (#235).
 	out := cloneForSave(c)
-	if err := encryptForSave(out, key); err != nil {
-		t.Fatalf("encrypt: %v", err)
-	}
 	if err := out.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
+	}
+	if err := encryptForSave(out, key); err != nil {
+		t.Fatalf("encrypt: %v", err)
 	}
 	if err := config.AtomicSave(path, out); err != nil {
 		t.Fatalf("save: %v", err)

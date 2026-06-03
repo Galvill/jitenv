@@ -17,11 +17,14 @@ func saveCmd(r *rootModel) tea.Cmd {
 	return tea.Sequence(
 		func() tea.Msg {
 			out := cloneForSave(r.cfg)
-			if err := encryptForSave(out, r.key); err != nil {
-				return errorMsg(fmt.Sprintf("encrypt: %v", err))
-			}
+			// Validate the still-plaintext form: ValidatePost resolves
+			// var.source against the source map, which only works before
+			// EncryptInPlace seals var.source into an envelope (#235).
 			if err := out.Validate(); err != nil {
 				return errorMsg(fmt.Sprintf("validate: %v", err))
+			}
+			if err := encryptForSave(out, r.key); err != nil {
+				return errorMsg(fmt.Sprintf("encrypt: %v", err))
 			}
 			if err := config.AtomicSave(r.cfgPath, out); err != nil {
 				return errorMsg(fmt.Sprintf("save: %v", err))
@@ -62,6 +65,19 @@ func cloneForSave(c *config.Config) *config.Config {
 			if c.Mappings[i].Vars != nil {
 				cp := make([]config.VarRef, len(c.Mappings[i].Vars))
 				copy(cp, c.Mappings[i].Vars)
+				// Deep-copy each var's Extra map: EncryptInPlace seals
+				// extra values in place (#235), and a shallow struct copy
+				// would otherwise share the map with the live config and
+				// poison it with envelopes on save.
+				for j := range cp {
+					if cp[j].Extra != nil {
+						em := make(map[string]string, len(cp[j].Extra))
+						for k, v := range cp[j].Extra {
+							em[k] = v
+						}
+						cp[j].Extra = em
+					}
+				}
 				nm[i].Vars = cp
 			}
 		}

@@ -280,6 +280,111 @@ func TestRunLocalBag(t *testing.T) {
 	}
 }
 
+// TestRunEncryptedVars is the #235 end-to-end regression: a config
+// whose vars[*] fields (name/source/ref/key + extra, and a literal
+// value var) are all sealed with EncryptInPlace — exactly as the TUI
+// save path writes them — must still unlock, decrypt, and inject env
+// into the mapped command. Proves the agent's DecryptInPlace +
+// ValidatePost path round-trips sealed var topology end-to-end.
+func TestRunEncryptedVars(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "show.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf 'DB=%s\\n' \"$DATABASE_URL\"\nprintf 'LIT=%s\\n' \"$LITERAL\"\n"), 0755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-encvars")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	key, err := config.DeriveKeyFromMeta(cfg, pw)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
+	cfg.Sources = map[string]config.SourceConfig{
+		"n": {Type: "noop", Params: map[string]any{"db-secret": "postgres://sealed"}},
+	}
+	cfg.Mappings = []config.Mapping{
+		{Path: scriptPath, Vars: []config.VarRef{
+			{Name: "DATABASE_URL", Source: "n", Ref: "db-secret"},
+			{Name: "LITERAL", Value: "literal-sealed"},
+		}},
+	}
+	// Seal everything (source params + all vars[*] fields) exactly as
+	// the TUI save path does, then write it through the real save.
+	if err := config.EncryptInPlace(cfg, key); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := config.AtomicSave(cfgPath, cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	// Sanity: on-disk form must not leak the var names or literal value.
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	// Note: "db-secret" is a noop source-param KEY (source-map keys are
+	// out of scope for #235) and the var Ref envelope decrypts to it, so
+	// it legitimately appears as a param key — don't assert on it here.
+	for _, leak := range []string{"DATABASE_URL", "postgres://sealed", "literal-sealed", "LITERAL"} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("config.toml leaks %q in plaintext:\n%s", leak, raw)
+		}
+	}
+
+	runtimeDir := shortRuntimeDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	paths, _ := agent.DefaultPaths()
+
+	pr, pw2, _ := os.Pipe()
+	daemon := exec.Command(bin, "__agent", "--key-fd=3", "--config="+cfgPath, "--idle=10s")
+	daemon.ExtraFiles = []*os.File{pr}
+	daemon.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	daemon.Stdout = os.Stdout
+	daemon.Stderr = os.Stderr
+	if err := daemon.Start(); err != nil {
+		t.Fatalf("daemon start: %v", err)
+	}
+	pr.Close()
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	pw2.Close()
+	defer func() { _ = daemon.Process.Kill() }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	cli := agent.NewClient(paths.Socket)
+	for time.Now().Before(deadline) {
+		if _, err := cli.Status(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	subprocEnv := append(filterEnvKeys(os.Environ(), "CI", "JITENV_NO_NOTICE"),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_CONFIG="+cfgPath,
+	)
+	cmd := exec.Command(bin, "run", scriptPath)
+	cmd.Env = subprocEnv
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run: %v\noutput=%s", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	if !strings.Contains(got, "DB=postgres://sealed") || !strings.Contains(got, "LIT=literal-sealed") {
+		t.Fatalf("unexpected script output:\n%s", got)
+	}
+}
+
 // TestRunPreRunNotice exercises the [agent].pre_run_notice toggle. It
 // runs `jitenv run` with stderr captured (i.e. not a TTY) so the
 // expected output is the plain-text branch — proving the wiring,
