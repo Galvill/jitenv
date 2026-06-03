@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gv/jitenv/internal/syncadapters"
@@ -46,13 +47,17 @@ func TestRegistryAndFile(t *testing.T) {
 		t.Fatalf("push: %v", err)
 	}
 
-	// Blob written 0600.
+	// Blob written 0600. NTFS ACLs don't map to Unix mode bits, so a
+	// 0600 file reports 0666 via os.FileMode on Windows; assert exact
+	// perms on non-Windows only.
 	fi, err := os.Stat(blobPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm() != 0600 {
-		t.Fatalf("blob perm = %o, want 0600", fi.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Fatalf("blob perm = %o, want 0600", got)
+		}
 	}
 
 	got, gotMeta, err := a.Pull(context.Background())
