@@ -19,6 +19,7 @@ import (
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
 	"github.com/gv/jitenv/internal/runnotice"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 // injectedMarker mirrors the one in internal/shim: a one-shot env
@@ -43,12 +44,14 @@ const (
 // replaces the current process with file+args+merged-env.
 //
 // When the agent is unreachable (locked, never started, …), the
-// command isn't refused: the user gets the same "agent is not
-// loaded — Press Enter to skip, Ctrl+C to abort" countdown the
-// shim uses, and after the wait the script runs with the parent
-// env. This is what the bash hook used to paint inline; moving it
-// here means `jitenv run`'s behaviour is consistent whether it was
-// invoked by the hook, by hand, or by another tool.
+// command isn't refused: the user gets the same agent-down countdown
+// the shim uses ("Press [u] to unlock and inject, [Enter] to continue
+// without env, [Ctrl+C] to abort"). Pressing `u` runs the inline
+// unlock flow and re-fetches env so the command IS injected; Enter /
+// timeout runs the script with the parent env. This is what the bash
+// hook used to paint inline; moving it here means `jitenv run`'s
+// behaviour is consistent whether it was invoked by the hook, by hand,
+// or by another tool.
 func Run(ctx context.Context, file string, args []string) error {
 	abs, err := filepath.Abs(file)
 	if err != nil {
@@ -164,20 +167,47 @@ var cryptoRandRead = rand.Read
 // zero vars; false = agent was down and the user dismissed the
 // warning).
 func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, bool, error) {
-	if _, err := os.Stat(socket); err != nil {
-		if agentwarn.WarnAndWait(abs) {
-			return nil, false, errors.New("aborted")
+	// First attempt: dial the agent if its socket is present.
+	if _, err := os.Stat(socket); err == nil {
+		cli := agent.NewClient(socket)
+		dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		extra, err := cli.FetchEnv(dctx, abs)
+		cancel()
+		if err == nil {
+			return extra, true, nil
 		}
+	}
+
+	// Agent down (socket missing or unresponsive). Show the countdown.
+	switch agentwarn.WarnAndWait(abs) {
+	case agentwarn.ActionAbort:
+		return nil, false, errors.New("aborted")
+	case agentwarn.ActionUnlock:
+		return fetchAfterUnlock(ctx, abs)
+	default: // ActionContinue
 		return nil, false, nil
 	}
-	cli := agent.NewClient(socket)
+}
+
+// fetchAfterUnlock runs the interactive unlock flow on the same TTY,
+// then re-fetches env from the now-unlocked agent so the mapped
+// command DOES get its vars (issue #232). On any failure — wrong
+// passphrase, Ctrl+C in the prompt, daemon spawn failure, or a fetch
+// error against the freshly unlocked agent — it prints one stderr line
+// and falls back to the existing "run without env" path rather than
+// aborting the command.
+func fetchAfterUnlock(ctx context.Context, abs string) (map[string]string, bool, error) {
+	res, err := unlock.Spawn("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jitenv: unlock failed (%v) — running without injected env.\n", err)
+		return nil, false, nil
+	}
+	cli := agent.NewClient(res.Socket)
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	extra, err := cli.FetchEnv(dctx, abs)
 	if err != nil {
-		if agentwarn.WarnAndWait(abs) {
-			return nil, false, errors.New("aborted")
-		}
+		fmt.Fprintf(os.Stderr, "jitenv: agent unreachable after unlock (%v) — running without injected env.\n", err)
 		return nil, false, nil
 	}
 	return extra, true, nil

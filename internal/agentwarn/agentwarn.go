@@ -3,6 +3,8 @@
 //
 // During the countdown the user can:
 //
+//	u        → caller drops the countdown and runs the unlock flow,
+//	           then re-fetches env so the mapped command IS injected.
 //	wait     → caller proceeds with the parent environment.
 //	Enter    → caller proceeds immediately, no further wait.
 //	Ctrl+C   → caller aborts; nothing runs.
@@ -21,16 +23,36 @@ import (
 	"golang.org/x/term"
 )
 
-// WarnAndWait paints the warning + countdown to stderr and returns
-// true when the user aborted via Ctrl+C (caller should not exec).
-// Returns false on Enter or timeout (caller should exec, possibly
-// without injected env vars).
+// stdinIsTTY reports whether stdin is an interactive terminal. It's a
+// package var so tests can force the interactive path while feeding a
+// pipe (real PTY allocation needs a dependency the repo doesn't carry;
+// the keystroke-dispatch logic this gate guards is what's under test).
+var stdinIsTTY = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
+// Action is the outcome of the agent-down countdown.
+type Action int
+
+const (
+	// ActionContinue: run the command without injected env (the user
+	// pressed Enter / any non-`u` key, or the countdown timed out).
+	ActionContinue Action = iota
+	// ActionAbort: the user pressed Ctrl+C; the caller must not exec.
+	ActionAbort
+	// ActionUnlock: the user pressed `u`; the caller should run the
+	// unlock flow and, on success, re-fetch env before exec.
+	ActionUnlock
+)
+
+// WarnAndWait paints the warning + countdown to stderr and reports the
+// user's choice as an Action.
 //
-// Skipped entirely when stdin is not a TTY: no human can press
-// Enter, so the countdown serves no purpose and only adds latency
-// to scripted / piped invocations. The warning line is still
-// printed once so the failure mode is visible in logs.
-func WarnAndWait(target string) bool {
+// Skipped entirely when stdin is not a TTY: no human can answer the
+// prompt, so the countdown serves no purpose and only adds latency to
+// scripted / piped invocations — it returns ActionContinue after
+// printing the warning line once so the failure mode stays visible in
+// logs. The inline-unlock option is likewise only offered on a TTY
+// (issue #232 out-of-scope note).
+func WarnAndWait(target string) Action {
 	const red = "\033[1;31m"
 	const reset = "\033[0m"
 
@@ -41,33 +63,55 @@ func WarnAndWait(target string) bool {
 		}
 	}
 
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !stdinIsTTY() {
 		fmt.Fprintf(os.Stderr,
 			"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
 			red, target, reset)
-		return false
+		return ActionContinue
 	}
 
 	fmt.Fprintf(os.Stderr,
 		"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
 		red, target, reset)
 	fmt.Fprintf(os.Stderr,
-		"%sWill run the command anyway in %ds. Press Enter to skip, Ctrl+C to abort.%s\n",
-		red, total, reset)
+		"%sPress [u] to unlock and inject, [Enter] to continue without env, [Ctrl+C] to abort.%s\n",
+		red, reset)
 
 	if total == 0 {
-		return false
+		return ActionContinue
 	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
 
-	// Drain stdin in a goroutine; signal on the first newline. We
-	// don't tear it down at return time: the caller is about to
-	// syscall.Exec, which replaces the process image and reaps the
-	// goroutine for free.
-	enterCh := make(chan struct{}, 1)
+	// Put stdin into raw mode for the countdown so a single keypress
+	// (`u`, Enter, Ctrl+C) is delivered immediately instead of being
+	// line-buffered until the user also hits Enter — the prompt offers
+	// single-key options, so cooked mode would make `u` feel broken.
+	// Restored before return so the subsequent passphrase prompt (which
+	// drives its own raw mode on /dev/tty) and the eventual exec inherit
+	// a sane terminal. In raw mode Ctrl+C arrives as the 0x03 byte
+	// rather than SIGINT, so the reader treats it as abort; the
+	// signal.Notify above remains a fallback for the non-raw path
+	// (e.g. when MakeRaw fails).
+	var restore func()
+	if oldState, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+		fd := int(os.Stdin.Fd())
+		restore = func() { _ = term.Restore(fd, oldState) }
+		defer restore()
+	}
+
+	// Drain stdin in a goroutine; report the first decisive keystroke.
+	// `u`/`U` → unlock, newline → continue, Ctrl+C (0x03) → abort. We
+	// don't tear it down at return time: on the continue/abort paths
+	// the caller is about to syscall.Exec (which replaces the process
+	// image and reaps the goroutine for free), and on the unlock path
+	// WarnAndWait returns before the passphrase prompt opens — the
+	// single outstanding Read has already consumed the keystroke, so it
+	// can't steal a byte from the subsequent term.ReadPassword on the
+	// same TTY.
+	keyCh := make(chan Action, 1)
 	go func() {
 		buf := make([]byte, 1)
 		for {
@@ -75,31 +119,58 @@ func WarnAndWait(target string) bool {
 			if err != nil || n == 0 {
 				return
 			}
-			if buf[0] == '\n' || buf[0] == '\r' {
+			switch buf[0] {
+			case 'u', 'U':
 				select {
-				case enterCh <- struct{}{}:
+				case keyCh <- ActionUnlock:
+				default:
+				}
+				return
+			case 0x03: // Ctrl+C in raw mode (no SIGINT is raised)
+				select {
+				case keyCh <- ActionAbort:
+				default:
+				}
+				return
+			case '\n', '\r':
+				select {
+				case keyCh <- ActionContinue:
 				default:
 				}
 				return
 			}
+			// Any other key: keep reading until a decisive keystroke,
+			// the countdown elapses, or stdin closes.
 		}
 	}()
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
+	// finish restores the terminal (so the trailing newline / any later
+	// prompt render on a cooked TTY) before returning the chosen action.
+	finish := func(act Action) Action {
+		if restore != nil {
+			restore()
+			restore = nil // the deferred call becomes a no-op
+		}
+		if act == ActionAbort {
+			fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
+		} else {
+			fmt.Fprintln(os.Stderr)
+		}
+		return act
+	}
+
 	for i := total; i > 0; i-- {
 		fmt.Fprintf(os.Stderr, "\r%s  %2ds remaining %s", red, i, reset)
 		select {
 		case <-sigCh:
-			fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
-			return true
-		case <-enterCh:
-			fmt.Fprintln(os.Stderr)
-			return false
+			return finish(ActionAbort)
+		case act := <-keyCh:
+			return finish(act)
 		case <-tick.C:
 		}
 	}
-	fmt.Fprintln(os.Stderr)
-	return false
+	return finish(ActionContinue)
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
 	"github.com/gv/jitenv/internal/runnotice"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 // errAgentDown is returned by fetchEnv when the agent socket is
@@ -145,11 +146,24 @@ func run(invokedAs string, args []string) error {
 	alreadyWarned := os.Getenv(warnedMarker) == "1"
 	if shouldInject() && !alreadyWarned {
 		extra, fetchErr := fetchEnv(invokedAs)
+		// On agent-down, the countdown may offer an inline unlock. If
+		// the user picks it and the unlock + re-fetch succeed, fold the
+		// result back into the normal "fetch succeeded" path below by
+		// clearing fetchErr.
+		if errors.Is(fetchErr, errAgentDown) {
+			switch agentwarn.WarnAndWait(invokedAs) {
+			case agentwarn.ActionAbort:
+				return errors.New("aborted")
+			case agentwarn.ActionUnlock:
+				if unlocked, err := fetchAfterUnlock(invokedAs); err == nil {
+					extra, fetchErr = unlocked, nil
+				}
+				// On unlock failure fetchErr stays errAgentDown and we
+				// fall through to the warn-and-continue handling below.
+			}
+		}
 		switch {
 		case errors.Is(fetchErr, errAgentDown):
-			if agentwarn.WarnAndWait(invokedAs) {
-				return errors.New("aborted")
-			}
 			// User chose to continue without env. Propagate the marker
 			// so chained shim entries (e.g. npm → node via shebang)
 			// don't re-prompt.
@@ -491,6 +505,34 @@ func fetchEnv(cmd string) (map[string]string, error) {
 	out, err := cli.FetchEnvCwd(ctx, pwd, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errAgentDown, err)
+	}
+	return out, nil
+}
+
+// fetchAfterUnlock runs the interactive unlock flow on the same TTY,
+// then re-fetches env from the now-unlocked agent so the wrapped
+// command DOES get its vars (issue #232). On any failure — wrong
+// passphrase, Ctrl+C in the prompt, daemon spawn failure, or a fetch
+// error against the freshly unlocked agent — it prints one stderr line
+// and returns an error so the caller falls back to the existing
+// "run without env" path rather than aborting the command.
+func fetchAfterUnlock(cmd string) (map[string]string, error) {
+	res, err := unlock.Spawn("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jitenv: unlock failed (%v) — running without injected env.\n", err)
+		return nil, err
+	}
+	pwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	cli := agent.NewClient(res.Socket)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := cli.FetchEnvCwd(ctx, pwd, cmd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jitenv: agent unreachable after unlock (%v) — running without injected env.\n", err)
+		return nil, err
 	}
 	return out, nil
 }

@@ -41,7 +41,7 @@ The bash/zsh snippets switch on the exit code of `jitenv is-mapped`:
 - **1** → not mapped, run normally.
 - **2** → config unreadable. Run normally — no env injection, no warning. Treated like an unmapped path; only `JITENV_HOOK_DEBUG=1` reveals it.
 
-`jitenv is-mapped` reads the config directly and never contacts the agent, so exit 2 always means a missing/malformed `config.toml`, never an agent-down condition. The agent-down UX (red countdown, "Press Enter to skip, Ctrl+C to abort") lives in `internal/agentwarn/agentwarn.go` and only fires inside `jitenv run` / the cwd_glob shim — i.e. *after* `is-mapped` returned 0.
+`jitenv is-mapped` reads the config directly and never contacts the agent, so exit 2 always means a missing/malformed `config.toml`, never an agent-down condition. The agent-down UX (red countdown, "Press [u] to unlock and inject, [Enter] to continue without env, [Ctrl+C] to abort") lives in `internal/agentwarn/agentwarn.go` and only fires inside `jitenv run` / the cwd_glob shim — i.e. *after* `is-mapped` returned 0. `WarnAndWait` returns an `Action` (`ActionContinue` / `ActionAbort` / `ActionUnlock`); on `ActionUnlock` the caller drives `internal/unlock.Spawn` (passphrase prompt → background agent) and re-fetches env so the mapped command IS injected. `internal/unlock` exists as its own package to sidestep the import cycle (`internal/cli` already imports `internal/run` and `internal/shim`, so those cannot import `internal/cli`). The prompt is TTY-only and switches stdin to raw mode for the countdown so single keystrokes register without Enter.
 
 See `internal/cli/ismapped.go` for the exit-code contract and `bash.sh` for the dispatch.
 
