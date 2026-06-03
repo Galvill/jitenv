@@ -121,3 +121,38 @@ func TestSSHRejectsUnsafePath(t *testing.T) {
 		t.Fatal("expected missing host to be rejected")
 	}
 }
+
+// TestSSHRejectsArgvInjection guards against argv flag smuggling: a host
+// that begins with '-' (or otherwise leaves the allowlist) and a
+// non-numeric port must be rejected at construction.
+func TestSSHRejectsArgvInjection(t *testing.T) {
+	if _, err := New(map[string]any{"host": "-oProxyCommand=touch /tmp/pwn", "path": "/ok"}); err == nil {
+		t.Fatal("expected leading-dash host (flag smuggling) to be rejected")
+	}
+	if _, err := New(map[string]any{"host": "-J jump", "path": "/ok"}); err == nil {
+		t.Fatal("expected dash-prefixed host to be rejected")
+	}
+	if _, err := New(map[string]any{"host": "user@host", "path": "/ok", "port": "-oProxyCommand=x"}); err == nil {
+		t.Fatal("expected non-numeric port to be rejected")
+	}
+	if _, err := New(map[string]any{"host": "user@host", "path": "/ok", "port": "22abc"}); err == nil {
+		t.Fatal("expected non-numeric port to be rejected")
+	}
+	// A normal host + numeric port must still construct fine.
+	if _, err := New(map[string]any{"host": "user@host.example.com", "path": "/srv/blob", "port": "2222"}); err != nil {
+		t.Fatalf("expected valid host/port to construct, got %v", err)
+	}
+}
+
+// TestSSHBaseArgsHasEndOfOptions asserts the `--` end-of-options sentinel
+// precedes the host in the ssh argv (defence-in-depth).
+func TestSSHBaseArgsHasEndOfOptions(t *testing.T) {
+	a, err := New(map[string]any{"host": "user@host", "path": "/srv/blob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := a.(*adapter).baseArgs()
+	if len(args) < 2 || args[len(args)-2] != "--" || args[len(args)-1] != "user@host" {
+		t.Fatalf("expected baseArgs to end with `-- <host>`, got %v", args)
+	}
+}

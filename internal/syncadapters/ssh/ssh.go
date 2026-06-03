@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gv/jitenv/internal/syncadapters"
@@ -25,6 +27,13 @@ import (
 )
 
 const typeName = "ssh"
+
+// hostAllowed is a strict allowlist for the [user@]host argv value:
+// letters, digits, and the small set of punctuation that legitimately
+// appears in hosts and user@host forms. Combined with the explicit
+// leading-'-' rejection below, this prevents a host that smuggles ssh
+// options into the command line (argv flag injection).
+var hostAllowed = regexp.MustCompile(`^[A-Za-z0-9._@-]+$`)
 
 func init() {
 	syncadapters.Register(typeName, New)
@@ -82,8 +91,21 @@ func New(cfg map[string]any) (syncadapter.Adapter, error) {
 	if strings.ContainsAny(path, "\"'$`;&|<>(){}*?\\\n\r") {
 		return nil, fmt.Errorf("ssh adapter: remote path %q contains unsafe characters", path)
 	}
-	if strings.ContainsAny(host, " \t\n\r;&|") {
+	// A host beginning with '-' would be parsed by ssh/scp/sftp as an
+	// option, not a hostname — reject it outright (argv flag smuggling).
+	if strings.HasPrefix(host, "-") {
+		return nil, errors.New("ssh adapter: host must not start with '-'")
+	}
+	// Strict allowlist (also bars whitespace/shell metacharacters).
+	if !hostAllowed.MatchString(host) {
 		return nil, fmt.Errorf("ssh adapter: host %q contains unsafe characters", host)
+	}
+	// Port, when set, must be purely numeric so it can never be parsed as
+	// a flag or otherwise alter the ssh command line.
+	if port != "" {
+		if _, err := strconv.Atoi(port); err != nil {
+			return nil, fmt.Errorf("ssh adapter: port %q is not numeric", port)
+		}
 	}
 	return &adapter{host: host, path: path, port: port, r: execRunner{bin: "ssh"}}, nil
 }
@@ -95,6 +117,10 @@ func (a *adapter) baseArgs() []string {
 	if a.port != "" {
 		args = append(args, "-p", a.port)
 	}
+	// `--` ends option parsing: defence-in-depth so the host (already
+	// allowlisted and barred from a leading '-') can never be treated as
+	// an option even if validation were bypassed.
+	args = append(args, "--")
 	return append(args, a.host)
 }
 

@@ -34,9 +34,21 @@ import (
 
 // AAD strings binding each envelope to its slot (security #110 pattern).
 const (
-	dekWrapAAD  = "sync.dek"  // wraps the DEK under the master key
-	blobSealAAD = "sync.blob" // seals the config bytes under the DEK
+	dekWrapAAD = "sync.dek" // wraps the DEK under the master key
+	// blobSealAADPrefix is combined with the blob's Meta.Hash to form the
+	// blob AEAD associated data ("sync.blob:<hash>"). Binding the hash in
+	// means a storage attacker cannot atomically swap a matching
+	// (blob, meta) pair from a prior push: the AAD baked into the
+	// ciphertext no longer matches the swapped meta, so OpenBlob fails the
+	// AEAD tag check instead of silently decrypting stale config.
+	blobSealAADPrefix = "sync.blob"
 )
+
+// blobAAD derives the AEAD associated data for a blob from the meta hash
+// it is published with. SealBlob and OpenBlob MUST agree on this.
+func blobAAD(metaHash string) []byte {
+	return []byte(blobSealAADPrefix + ":" + metaHash)
+}
 
 // Adapter is one configured remote target in the sidecar.
 type Adapter struct {
@@ -174,17 +186,21 @@ func (f *File) UnwrapDEK(masterKey []byte) ([]byte, error) {
 }
 
 // SealBlob encrypts the config.toml bytes under the DEK into one opaque
-// AEAD blob suitable for handing to an adapter.
-func SealBlob(dek, configBytes []byte) ([]byte, error) {
-	return crypto.Seal(dek, configBytes, []byte(blobSealAAD))
+// AEAD blob suitable for handing to an adapter. metaHash is the
+// Meta.Hash published alongside the blob; it is bound into the AEAD
+// associated data so the (blob, meta) pair is authenticated together.
+func SealBlob(dek, configBytes []byte, metaHash string) ([]byte, error) {
+	return crypto.Seal(dek, configBytes, blobAAD(metaHash))
 }
 
-// OpenBlob decrypts a blob produced by SealBlob. A wrong DEK fails the
-// AEAD tag check and returns an error (fail-closed).
-func OpenBlob(dek, blob []byte) ([]byte, error) {
-	pt, err := crypto.Open(dek, blob, []byte(blobSealAAD))
+// OpenBlob decrypts a blob produced by SealBlob. metaHash must be the
+// hash carried in the blob's accompanying Meta; if it was tampered with
+// (or the blob/meta pair was swapped) the AEAD tag check fails and an
+// error is returned (fail-closed). A wrong DEK fails the same check.
+func OpenBlob(dek, blob []byte, metaHash string) ([]byte, error) {
+	pt, err := crypto.Open(dek, blob, blobAAD(metaHash))
 	if err != nil {
-		return nil, errors.New("cannot decrypt synced config (wrong passphrase or corrupt remote blob)")
+		return nil, errors.New("cannot decrypt synced config (wrong passphrase, corrupt remote blob, or tampered metadata)")
 	}
 	return pt, nil
 }

@@ -64,14 +64,15 @@ func TestUnwrapWrongPassphraseFailsClosed(t *testing.T) {
 func TestBlobSealOpenRoundTrip(t *testing.T) {
 	dek, _ := NewDEK()
 	plain := []byte("version = 1\n[_meta]\nsalt = \"x\"\n")
-	blob, err := SealBlob(dek, plain)
+	hash := HashConfig(plain)
+	blob, err := SealBlob(dek, plain, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(blob) == string(plain) {
 		t.Fatal("blob is not encrypted")
 	}
-	got, err := OpenBlob(dek, blob)
+	got, err := OpenBlob(dek, blob, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +81,36 @@ func TestBlobSealOpenRoundTrip(t *testing.T) {
 	}
 
 	other, _ := NewDEK()
-	if _, err := OpenBlob(other, blob); err == nil {
+	if _, err := OpenBlob(other, blob, hash); err == nil {
 		t.Fatal("expected open with wrong DEK to fail")
+	}
+}
+
+// TestBlobAADBindsMetaHash proves the meta hash is authenticated into the
+// blob's AEAD associated data: opening with a different (tampered or
+// swapped) meta hash fails the tag check even with the correct DEK.
+func TestBlobAADBindsMetaHash(t *testing.T) {
+	dek, _ := NewDEK()
+	plain := []byte("version = 1\n# real\n")
+	hash := HashConfig(plain)
+	blob, err := SealBlob(dek, plain, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A storage attacker swaps in a different meta hash (e.g. from a
+	// prior push) while keeping the blob. OpenBlob must reject it.
+	tampered := HashConfig([]byte("version = 1\n# attacker swap\n"))
+	if _, err := OpenBlob(dek, blob, tampered); err == nil {
+		t.Fatal("expected open with tampered meta hash to fail (AAD not bound)")
+	}
+	// Empty/zeroed meta hash must also fail.
+	if _, err := OpenBlob(dek, blob, ""); err == nil {
+		t.Fatal("expected open with empty meta hash to fail")
+	}
+	// Sanity: the correct hash still opens.
+	if _, err := OpenBlob(dek, blob, hash); err != nil {
+		t.Fatalf("correct meta hash should open: %v", err)
 	}
 }
 

@@ -68,7 +68,19 @@ func unlock(t *testing.T, f *syncconfig.File, pass string) (masterKey, dek []byt
 	if err != nil {
 		t.Fatal(err)
 	}
+	// CLAUDE.md: key material that lives outside the agent must be
+	// zeroed on defer. Tests run after the test body via t.Cleanup.
+	t.Cleanup(func() {
+		zeroBytes(mk)
+		zeroBytes(d)
+	})
 	return mk, d
+}
+
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 func buildFileAdapter(t *testing.T, mk []byte, ad *syncconfig.Adapter) syncadapter.Adapter {
@@ -249,5 +261,44 @@ func TestPushFenceRejectsStaleOverwrite(t *testing.T) {
 	_, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte("version = 1\n# my edit\n"), 1, false)
 	if err == nil {
 		t.Fatal("expected stale push to be refused by the fence")
+	}
+}
+
+// TestPushFenceRejectsNoBaseOverwrite: a fresh machine with no recorded
+// base, pushing to a remote that already has DIFFERENT state, must be
+// refused on a non-force push (symmetric with PullConfig's no-base
+// fence) so it cannot silently clobber the remote. --force still works.
+func TestPushFenceRejectsNoBaseOverwrite(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+
+	// Machine 1 publishes the authoritative remote state.
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	a1 := buildFileAdapter(t, mk1, &m1.Adapters[0])
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Machine 2: same passphrase, no recorded base, different local edit.
+	m2 := &syncconfig.File{
+		Version: m1.Version, Salt: m1.Salt, ArgonTime: m1.ArgonTime,
+		ArgonMemoryKiB: m1.ArgonMemoryKiB, ArgonThreads: m1.ArgonThreads,
+		WrappedDEK: m1.WrappedDEK,
+		Adapters:   []syncconfig.Adapter{{Name: "remote", Type: "file", Params: map[string]any{"path": remote}}},
+	}
+	mk2, dek2 := unlock(t, m2, samplePassphrase)
+	a2 := buildFileAdapter(t, mk2, &m2.Adapters[0])
+	if m2.Adapters[0].BaseHash != "" {
+		t.Fatal("precondition: fresh machine must have empty base")
+	}
+
+	localEdit := []byte("version = 1\n# machine 2 edit\n")
+	if _, err := syncconfig.PushConfig(context.Background(), a2, &m2.Adapters[0], dek2, localEdit, 1, false); err == nil {
+		t.Fatal("expected no-base push over existing remote to be refused")
+	}
+
+	// --force overrides the fence.
+	if _, err := syncconfig.PushConfig(context.Background(), a2, &m2.Adapters[0], dek2, localEdit, 1, true); err != nil {
+		t.Fatalf("forced push should succeed: %v", err)
 	}
 }

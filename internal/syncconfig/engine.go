@@ -41,13 +41,23 @@ func PushConfig(ctx context.Context, adapter syncadapter.Adapter, ad *Adapter, d
 		case rerr != nil:
 			return PushResult{}, fmt.Errorf("pre-push remote check failed: %w", rerr)
 		default:
-			if ad.BaseHash != "" && rmeta.Hash != ad.BaseHash && rmeta.Hash != localHash {
+			switch {
+			case ad.BaseHash == "":
+				// No recorded base (fresh machine) but the remote already
+				// has state. If local differs from remote we cannot prove
+				// local descends from it, so a non-force push would
+				// silently clobber the remote — refuse, symmetric with
+				// PullConfig's no-base fence.
+				if rmeta.Hash != localHash {
+					return PushResult{}, fmt.Errorf("remote already has config (%s) but this machine has no sync base; run `jitenv sync pull --adopt` first, or push with --force to overwrite", short(rmeta.Hash))
+				}
+			case rmeta.Hash != ad.BaseHash && rmeta.Hash != localHash:
 				return PushResult{}, fmt.Errorf("remote advanced since your last sync (remote %s != base %s); run `jitenv sync pull` first, or push with --force to overwrite", short(rmeta.Hash), short(ad.BaseHash))
 			}
 		}
 	}
 
-	blob, err := SealBlob(dek, cfgBytes)
+	blob, err := SealBlob(dek, cfgBytes, localHash)
 	if err != nil {
 		return PushResult{}, err
 	}
@@ -99,7 +109,7 @@ func PullConfig(ctx context.Context, adapter syncadapter.Adapter, ad *Adapter, d
 	case DecideDiverged, DecideNoBase:
 		return res, &DivergenceError{Decision: decision, Local: localHash, Remote: rmeta.Hash, Base: ad.BaseHash}
 	case DecideFastForward:
-		plaintext, err := OpenBlob(dek, blob)
+		plaintext, err := OpenBlob(dek, blob, rmeta.Hash)
 		if err != nil {
 			return res, err
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -369,7 +370,9 @@ func runSyncPull(cmd *cobra.Command, adapterName string, adopt bool) error {
 		fmt.Fprintf(out, "local is ahead of remote; nothing to pull. run `jitenv sync push` to publish.\n")
 		return nil
 	case syncconfig.DecideNoop:
-		_ = syncconfig.Save(syncPath, f) // persist the base anchor
+		if err := syncconfig.Save(syncPath, f); err != nil { // persist the base anchor
+			return fmt.Errorf("save sync sidecar: %w", err)
+		}
 		fmt.Fprintf(out, "already up-to-date (%s)\n", short(res.Hash))
 		return nil
 	case syncconfig.DecideFastForward:
@@ -391,12 +394,19 @@ func runSyncPull(cmd *cobra.Command, adapterName string, adopt bool) error {
 // writes them through config.AtomicSave so the agent reload hook fires
 // and on-disk perms stay 0600.
 func writePulledConfig(cfgPath string, plaintext []byte) error {
-	tmp, err := os.CreateTemp("", "jitenv-pull-*.toml")
+	// Stage the decrypted plaintext in the config directory (which is
+	// 0700), not os.TempDir() which is world-traversable — mirrors
+	// config.AtomicSave's sibling-tempfile approach.
+	tmp, err := os.CreateTemp(filepath.Dir(cfgPath), "jitenv-pull-*.toml")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
+	if err := os.Chmod(tmpName, 0600); err != nil {
+		tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(plaintext); err != nil {
 		tmp.Close()
 		return err
