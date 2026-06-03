@@ -160,8 +160,29 @@ func isValidCommandName(s string) bool {
 	return true
 }
 
-// Validate performs structural checks not covered by TOML parsing.
+// Validate performs all structural checks not covered by TOML parsing.
+// It assumes the config is decrypted: ValidatePost cross-references
+// var.source against the defined sources, which only resolves once the
+// envelopes sealed by EncryptInPlace (#235) have been opened. Callers
+// that operate on the encrypted on-disk form (e.g. `jitenv config
+// validate`, which must run without the master key) should call
+// ValidateStructure instead.
 func (c *Config) Validate() error {
+	if err := c.ValidateStructure(); err != nil {
+		return err
+	}
+	return c.ValidatePost()
+}
+
+// ValidateStructure checks shape only — every check here is safe to run
+// on the encrypted form because it tests field presence (non-empty) and
+// the never-encrypted path/glob/cwd_glob/commands fields, never the
+// decrypted content of a sealed var field. After #235, var.name/source/
+// ref/key/value are envelope strings when loaded-but-not-decrypted; an
+// envelope is still non-empty, so the "exactly one of path/glob/cwd",
+// "value exclusive with source/ref/key/extra", "name required" rules
+// all hold without the key.
+func (c *Config) ValidateStructure() error {
 	if c.Version != Version {
 		return fmt.Errorf("unsupported config version %d (want %d)", c.Version, Version)
 	}
@@ -226,6 +247,22 @@ func (c *Config) Validate() error {
 			}
 			if v.Name == "" && v.Key != "" {
 				return fmt.Errorf("mapping[%d].vars[%d]: name is required when key is set", i, j)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidatePost performs the checks that require decrypted content —
+// today just resolving each var.source to a defined source. It MUST run
+// only after DecryptInPlace; on the encrypted form var.source is an
+// envelope string that would never match a source-map key, so this
+// would spuriously reject every valid config (#235).
+func (c *Config) ValidatePost() error {
+	for i, m := range c.Mappings {
+		for j, v := range m.Vars {
+			if v.Value != "" {
+				continue
 			}
 			if _, ok := c.Sources[v.Source]; !ok {
 				return fmt.Errorf("mapping[%d].vars[%d]: source %q is not defined", i, j, v.Source)

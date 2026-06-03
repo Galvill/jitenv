@@ -54,5 +54,47 @@ func EncryptInPlace(c *Config, key []byte) error {
 			kv[k] = env
 		}
 	}
+	// vars[*] scalar + extra fields. Sealing these stops config.toml
+	// from leaking the secret topology (env var names, which source/
+	// ref/key each var pulls from, per-var lookup params, and literal
+	// values) to a passive reader (#235). An empty field stays empty:
+	// in particular an empty Name keeps the "expand the whole bag"
+	// semantics intact (a VarRef with no Name).
+	for i := range c.Mappings {
+		m := &c.Mappings[i]
+		for j := range m.Vars {
+			v := &m.Vars[j]
+			fields := []struct {
+				field string
+				ptr   *string
+			}{
+				{"name", &v.Name},
+				{"source", &v.Source},
+				{"ref", &v.Ref},
+				{"key", &v.Key},
+				{"value", &v.Value},
+			}
+			for _, f := range fields {
+				if *f.ptr == "" || crypto.IsEnvelope(*f.ptr) {
+					continue
+				}
+				env, err := crypto.EncryptField(key, *f.ptr, VarFieldAAD(i, j, f.field))
+				if err != nil {
+					return fmt.Errorf("mapping[%d].vars[%d].%s: %w", i, j, f.field, err)
+				}
+				*f.ptr = env
+			}
+			for k, ev := range v.Extra {
+				if ev == "" || crypto.IsEnvelope(ev) {
+					continue
+				}
+				env, err := crypto.EncryptField(key, ev, VarExtraAAD(i, j, k))
+				if err != nil {
+					return fmt.Errorf("mapping[%d].vars[%d].extra.%s: %w", i, j, k, err)
+				}
+				v.Extra[k] = env
+			}
+		}
+	}
 	return nil
 }

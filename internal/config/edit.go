@@ -35,6 +35,22 @@ func SecretAAD(bag, key string) string {
 	return crypto.AAD("secret", bag, key)
 }
 
+// VarFieldAAD builds the AAD context for a scalar string field of
+// mappings[mappingIdx].vars[varIdx] (e.g. "name", "source", "ref",
+// "key", "value"). Binding the slot indices means an attacker who can
+// write the config can't transplant a sealed value across var slots
+// (security #110 / #235).
+func VarFieldAAD(mappingIdx, varIdx int, field string) string {
+	return crypto.AAD("var", fmt.Sprintf("%d", mappingIdx), fmt.Sprintf("%d", varIdx), field)
+}
+
+// VarExtraAAD builds the AAD context for a value stored under
+// mappings[mappingIdx].vars[varIdx].extra.<key>. Each extra map value
+// is sealed independently and bound to its slot + key.
+func VarExtraAAD(mappingIdx, varIdx int, key string) string {
+	return crypto.AAD("var", fmt.Sprintf("%d", mappingIdx), fmt.Sprintf("%d", varIdx), "extra", key)
+}
+
 // InitNew creates a brand-new encrypted config at path. The file is written
 // atomically with 0600.
 func InitNew(path string, passphrase []byte) error {

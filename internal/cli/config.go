@@ -102,7 +102,11 @@ func newConfigValidateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.Validate(); err != nil {
+			// Structure-only: this runs without the master key, so var
+			// fields are still sealed envelopes (#235). The source-name
+			// cross-reference (ValidatePost) needs decrypted content and
+			// only runs in the unlock/agent/clone paths.
+			if err := c.ValidateStructure(); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "ok")
