@@ -248,6 +248,55 @@ eval "$(%s/jitenv hook bash)"
 	return "", -1
 }
 
+// runZsh drives the zsh hook's bare-name PATH branch. The zsh hook lives
+// in a `zle` widget bound to accept-line, which only fires inside the
+// interactive line editor — it never runs under `zsh -c`. Rather than
+// pull in a pty dependency just for this, the harness sources the hook,
+// sets BUFFER, and calls __jitenv_accept_line directly: the widget does
+// its real `whence -p` resolution + is-mapped routing and rewrites BUFFER
+// to `jitenv run <resolved>` exactly as it would interactively. The
+// trailing `zle .accept-line` errors harmlessly outside the editor (no
+// set -e), so we eval the rewritten BUFFER by hand to actually run the
+// command — the same hand-driven approach the bash tests use for
+// __jitenv_chpwd, which PROMPT_COMMAND doesn't fire under `bash -c`.
+//
+// setup runs after the hook is sourced but before the widget fires (e.g.
+// `cd <dir> && __jitenv_chpwd` to build a cwd_glob wrapper); buffer is
+// the single command line fed through the widget as its first token.
+// JITENV_CONFIG points at shellCfg.
+func (f *cpcFixture) runZsh(setup, buffer string) string {
+	f.t.Helper()
+	if _, err := exec.LookPath("zsh"); err != nil {
+		f.t.Skip("zsh not available")
+	}
+	// Source the hook, run setup, set BUFFER, run the widget (rewrites
+	// BUFFER for a mapped command; the final `zle .accept-line` fails
+	// outside the line editor, which we ignore), then eval whatever
+	// BUFFER ended up as.
+	full := fmt.Sprintf(
+		`PATH=%q:%q:$PATH
+export JITENV_CONFIG=%q
+eval "$(%s/jitenv hook zsh)"
+%s
+BUFFER=%q
+__jitenv_accept_line 2>/dev/null || true
+eval "$BUFFER"`, f.binDir, f.fakeBin, f.shellCfgPath, f.binDir, setup, buffer)
+	cmd := exec.Command("zsh", "-c", full)
+	cmd.Env = append(os.Environ(),
+		"XDG_RUNTIME_DIR="+f.runtimeDir,
+		"JITENV_HOOK_DELAY=1",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			f.t.Fatalf("zsh exited %d\noutput=%s", ee.ExitCode(), out)
+		}
+		f.t.Fatalf("zsh run failed to start: %v\noutput=%s", err, out)
+	}
+	return string(out)
+}
+
 func cwdGlobMapping(dir string) []config.Mapping {
 	return []config.Mapping{{
 		CwdGlob:  dir,
@@ -557,5 +606,57 @@ fakecmd                    # bare name → resolves to the wrapper, not double-d
 	// would run the command twice → two FOO= lines.
 	if n := strings.Count(section, "FOO="); n != 1 {
 		t.Errorf("expected exactly one FOO= line (no double dispatch); got %d:\n%s", n, section)
+	}
+}
+
+// TestPathMapping_BareNameInvocationInjects_Zsh is the zsh twin of
+// TestPathMapping_BareNameInvocationInjects (#237). GitHub's
+// ubuntu-latest CI image (where `go test -race ./...` runs the
+// !windows-tagged shell e2e suites) ships zsh, so this branch is
+// exercised in CI; it skips cleanly where zsh is absent. It drives the
+// real `whence -p` bare-name branch of the zsh accept-line widget — see
+// runZsh for why the widget is invoked directly rather than through an
+// interactive line editor.
+func TestPathMapping_BareNameInvocationInjects_Zsh(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(f.pathMappingFor())
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// fakeBin is on PATH (see runZsh), so `fakecmd` is a bare name that
+	// resolves through $PATH (via `whence -p`) to the mapped absolute
+	// file and must route through `jitenv run`.
+	out := f.runZsh("", "fakecmd")
+	t.Logf("output:\n%s", out)
+	if !strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("zsh bare-name PATH invocation: expected FOO=from-cwd; got:\n%s", out)
+	}
+}
+
+// TestCwdGlob_BareNameNotDoubleDispatched_Zsh is the zsh twin of the
+// double-dispatch guard (#237): once the cwd_glob wrapper is built it
+// sits first on $PATH, so a bare `fakecmd` resolves (via `whence -p`) to
+// the wrapper. The zsh widget must blank `resolved` for a wrap-dir hit
+// and let the wrapper shim do the single is-mapped call — so injection
+// still works and the command runs exactly once.
+func TestCwdGlob_BareNameNotDoubleDispatched_Zsh(t *testing.T) {
+	f := newCPCFixture(t)
+	mapped := cpcConfig(cwdGlobMapping(f.projA))
+	f.writeConfig(f.shellCfgPath, mapped)
+	key := f.writeConfig(f.agentCfgPath, mapped)
+	defer f.startAgent(key)()
+
+	// cd into the mapped dir and reconcile so the wrapper exists and the
+	// wrap dir is first on PATH, then drive a bare-name `fakecmd` through
+	// the widget.
+	out := f.runZsh(fmt.Sprintf("cd %q && __jitenv_chpwd", f.projA), "fakecmd")
+	t.Logf("output:\n%s", out)
+	if !strings.Contains(out, "FOO=from-cwd") {
+		t.Errorf("zsh cwd_glob bare-name: expected FOO=from-cwd via the wrapper; got:\n%s", out)
+	}
+	// A double-dispatch would run the command twice → two FOO= lines.
+	if n := strings.Count(out, "FOO="); n != 1 {
+		t.Errorf("expected exactly one FOO= line (no double dispatch); got %d:\n%s", n, out)
 	}
 }
