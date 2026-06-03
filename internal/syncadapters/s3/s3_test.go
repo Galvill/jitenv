@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 	"testing"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
@@ -192,4 +193,28 @@ func TestS3NewRequiresBucketAndKey(t *testing.T) {
 	if _, err := New(map[string]any{"bucket": "b", "key": "k", "access_key_id": "AKIA"}); err == nil {
 		t.Fatal("expected access_key_id without secret_access_key to be rejected")
 	}
+}
+
+// TestS3ClientConcurrentInitNoRace exercises the lazy client() init from
+// many goroutines so the race detector catches an unsynchronized lazy
+// build (the syncadapter.Adapter contract requires concurrency safety).
+func TestS3ClientConcurrentInitNoRace(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+
+	const n = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := a.client(context.Background()); err != nil {
+				t.Errorf("client: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
 }

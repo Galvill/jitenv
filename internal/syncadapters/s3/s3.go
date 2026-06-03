@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -70,7 +71,12 @@ type adapter struct {
 	// stays cheap and offline (mirrors how the aws source builds its
 	// client on demand).
 	newClient func(ctx context.Context) (api, error)
-	cli       api
+
+	// once guards lazy construction of cli so concurrent Push/Pull are
+	// safe (the syncadapter.Adapter contract requires concurrency safety).
+	once   sync.Once
+	cli    api
+	cliErr error
 }
 
 // New constructs an s3 adapter. Required params: "bucket" and "key".
@@ -137,17 +143,14 @@ func (a *adapter) Name() string { return typeName }
 
 func (a *adapter) metaKey() string { return a.key + ".meta.json" }
 
-// client returns the cached S3 client, building it on first use.
+// client returns the cached S3 client, building it on first use. The
+// sync.Once makes concurrent first calls race-free; a construction error
+// is cached too so a failed build is not retried mid-flight.
 func (a *adapter) client(ctx context.Context) (api, error) {
-	if a.cli != nil {
-		return a.cli, nil
-	}
-	cli, err := a.newClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	a.cli = cli
-	return cli, nil
+	a.once.Do(func() {
+		a.cli, a.cliErr = a.newClient(ctx)
+	})
+	return a.cli, a.cliErr
 }
 
 // Validate confirms the bucket is reachable and refuses a bucket that is
