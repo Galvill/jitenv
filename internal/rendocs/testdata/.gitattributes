@@ -1,0 +1,7 @@
+# Golden-file fixtures must stay LF on every platform so the renderer
+# tests (line/byte comparisons + the hardcoded "\n" narrative assertion
+# in TestNarrativeUntouched) are deterministic. Without this, Windows
+# checks these out as CRLF and the test fails on "\n" vs "\r\n". The
+# failure was latent because PR #257 (the #253 renderer) never ran
+# Windows CI; it surfaced the first time a later PR did.
+* text eol=lf

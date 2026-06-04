@@ -50,7 +50,11 @@ func TestNarrativeUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if !strings.Contains(got, "It talks\nabout v0.13.0 in prose") {
+	// Normalize CRLF so the assertion holds regardless of how the
+	// fixture was checked out (a Windows checkout would be CRLF absent
+	// the testdata .gitattributes; this keeps the test robust either way).
+	gotLF := strings.ReplaceAll(got, "\r\n", "\n")
+	if !strings.Contains(gotLF, "It talks\nabout v0.13.0 in prose") {
 		t.Errorf("narrative prose mentioning the old version was modified; got:\n%s", got)
 	}
 }
