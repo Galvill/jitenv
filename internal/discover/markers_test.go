@@ -109,6 +109,16 @@ func TestScan_LockfileSwap_YarnAndBun(t *testing.T) {
 	if !sortedEqual(bun, []string{"bun", "node", "npx"}) {
 		t.Errorf("bun case: got %v", bun)
 	}
+	// Bun 1.2+ defaults to the text-format bun.lock; it must swap npm→bun too.
+	bunText := scanCommands(t, writeFiles(t, "package.json", "bun.lock"))
+	if !sortedEqual(bunText, []string{"bun", "node", "npx"}) {
+		t.Errorf("bun.lock case: got %v", bunText)
+	}
+	for _, c := range bunText {
+		if c == "npm" {
+			t.Errorf("bun.lock case: npm should have been swapped out, got %v", bunText)
+		}
+	}
 }
 
 func TestScan_LockfileSwap_NoBaseNoSuggestion(t *testing.T) {

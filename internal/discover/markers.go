@@ -123,7 +123,7 @@ func markerHit(m marker, names []string, lower map[string]bool) (string, bool) {
 // lockfile is present:
 //   - pnpm-lock.yaml → use pnpm instead of npm
 //   - yarn.lock      → use yarn instead of npm
-//   - bun.lockb      → use bun instead of npm
+//   - bun.lock / bun.lockb → use bun instead of npm
 //   - poetry.lock    → add poetry to the Python suggestions
 //
 // The swaps only apply when the base command they replace/extend is
@@ -137,6 +137,8 @@ func applyLockfileSwaps(in []Suggestion, lower map[string]bool) []Suggestion {
 		jsSwap, jsReason = "pnpm", "pnpm-lock.yaml"
 	case lower["yarn.lock"]:
 		jsSwap, jsReason = "yarn", "yarn.lock"
+	case lower["bun.lock"]:
+		jsSwap, jsReason = "bun", "bun.lock"
 	case lower["bun.lockb"]:
 		jsSwap, jsReason = "bun", "bun.lockb"
 	}
