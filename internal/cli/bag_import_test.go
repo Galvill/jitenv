@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gv/jitenv/internal/config"
+	"github.com/gv/jitenv/internal/crypto"
 )
 
 const testPassphrase = "correct horse battery staple"
@@ -300,5 +301,123 @@ func TestBagUpsert_AskCallback(t *testing.T) {
 	}
 	if asked["Z"] {
 		t.Errorf("ask must not be called for non-colliding key Z")
+	}
+}
+
+// newLegacyImportTestConfig writes a pre-#248 (name-keyed, name-AAD-sealed)
+// config to a temp dir, seeds the named bag with a single colliding key,
+// points JITENV_CONFIG at it, and returns the config path. This is the
+// on-disk shape an older jitenv binary produced: bag NAMES are plaintext
+// TOML map keys, values are envelopes bound to NAME-based AADs, and there
+// is no _meta.name_map (so config.NeedsIDMigration == true).
+func newLegacyImportTestConfig(t *testing.T, bag, key, val string) string {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte(testPassphrase)
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("InitNew: %v", err)
+	}
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	mkey, err := config.DeriveKeyFromMeta(c, pw)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	t.Cleanup(func() {
+		for i := range mkey {
+			mkey[i] = 0
+		}
+	})
+	// Seal the seed value under the LEGACY name-based AAD (the bag NAME is
+	// the first coordinate, matching what a pre-#248 binary wrote).
+	sealed, err := crypto.EncryptField(mkey, val, config.SecretAAD(bag, key))
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	c.Sources = map[string]config.SourceConfig{"local": {Type: "local"}}
+	c.Secrets = map[string]map[string]string{bag: {key: sealed}}
+	// config.Save writes the struct verbatim (no re-encrypt / no ID minting),
+	// preserving the legacy name-keyed shape on disk.
+	if err := config.Save(cfgPath, c); err != nil {
+		t.Fatalf("save legacy: %v", err)
+	}
+	// Sanity: this really is a legacy config that would trigger migration.
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !config.NeedsIDMigration(reloaded) {
+		t.Fatal("fixture should be a legacy config needing migration")
+	}
+	t.Setenv("JITENV_CONFIG", cfgPath)
+	return cfgPath
+}
+
+// TestBagImport_DryRun_LegacyConfig_NoSideEffects locks in the #254
+// dry-run contract against a LEGACY (pre-#248) config: a dry-run must
+// neither run the opaque-ID migration (which would rewrite the config and
+// drop a .pre-id-migration.bak) nor write anything else. After the run the
+// on-disk config.toml must be byte-identical and no backup may exist.
+func TestBagImport_DryRun_LegacyConfig_NoSideEffects(t *testing.T) {
+	cfgPath := newLegacyImportTestConfig(t, "prod", "A", "old")
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runImport(t, "B=2\n", "prod", "--stdin", "--dry-run")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !strings.Contains(out, "dry-run") || !strings.Contains(out, "not written") {
+		t.Errorf("summary = %q", out)
+	}
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("dry-run must not modify a legacy config on disk")
+	}
+	if _, err := os.Stat(cfgPath + config.MigrationBackupSuffix); !os.IsNotExist(err) {
+		t.Errorf("dry-run must not create a %s backup (stat err: %v)",
+			config.MigrationBackupSuffix, err)
+	}
+}
+
+// TestBagImport_DryRun_OnCollisionAsk_NoTTY locks in the #254 fix that
+// --on-collision=ask under --dry-run does NOT read from the tty: the
+// import must complete without any interactive prompt and report the
+// colliding key as "would overwrite" in the summary. askOverwrite reads
+// from /dev/tty, which is unavailable in tests, so if dry-run reached it
+// the command would hang or error — proving the prompt is bypassed.
+func TestBagImport_DryRun_OnCollisionAsk_NoTTY(t *testing.T) {
+	cfgPath := newImportTestConfig(t, map[string]map[string]string{
+		"prod": {"A": "old"},
+	})
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A=new collides with the seeded A; B=2 is new. Under ask+dry-run the
+	// collision is REPORTED as "would overwrite", with no tty interaction.
+	out, _, err := runImport(t, "A=new\nB=2\n", "prod", "--stdin", "--on-collision=ask", "--dry-run")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !strings.Contains(out, "2 keys (1 new, 1 overwritten, 0 skipped)") {
+		t.Errorf("dry-run ask summary = %q (want collision reported as would-overwrite)", out)
+	}
+	if !strings.Contains(out, "dry-run") || !strings.Contains(out, "not written") {
+		t.Errorf("summary = %q", out)
+	}
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("dry-run must not modify the config")
 	}
 }

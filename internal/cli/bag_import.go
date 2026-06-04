@@ -132,6 +132,27 @@ func runBagImport(cmd *cobra.Command, opts importOpts) error {
 	defer zeroBytes(key)
 	defer lockKey(key)()
 
+	// Dry-run must be byte-for-byte side-effect-free: no opaque-ID
+	// migration (which would write the migrated config + a
+	// .pre-id-migration.bak), no save, and no TTY prompts. We decrypt the
+	// config IN MEMORY ONLY to read the target bag's existing keys, then
+	// report what WOULD change. A legacy (pre-#248) config decrypts under
+	// its name-based AADs into a name-keyed cfg.Secrets — exactly the
+	// shape bagUpsert's collision check needs — so no in-memory migration
+	// is required for the report either.
+	if opts.dryRun {
+		if err := config.DecryptInPlace(cfg, key); err != nil {
+			return err
+		}
+		// Under --on-collision=ask, dry-run must NOT prompt: report every
+		// collision as "would overwrite" instead of reading from the tty.
+		stats := bagUpsert(cfg, opts.bag, pairs, policy, func(string) bool { return true })
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"dry-run: would import %d keys (%d new, %d overwritten, %d skipped) into bag %q (config not written)\n",
+			stats.Total(), stats.Added, stats.Overwritten, stats.Skipped, opts.bag)
+		return nil
+	}
+
 	// One-shot opaque-ID migration (#248) so a legacy config gets the
 	// sealed name_map + backup before we mint a new bag/keys into it,
 	// matching the clone/unlock paths.
@@ -151,13 +172,6 @@ func runBagImport(cmd *cobra.Command, opts importOpts) error {
 	stats := bagUpsert(cfg, opts.bag, pairs, policy, func(k string) bool {
 		return askOverwrite(cmd, opts.bag, k)
 	})
-
-	if opts.dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(),
-			"dry-run: would import %d keys (%d new, %d overwritten, %d skipped) into bag %q (config not written)\n",
-			stats.Total(), stats.Added, stats.Overwritten, stats.Skipped, opts.bag)
-		return nil
-	}
 
 	// Ensure a local source exists to expose the bag (mirrors clone).
 	if cfg.Sources == nil {
