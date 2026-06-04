@@ -6,14 +6,23 @@ those answer 80% of "why isn't it working".
 
 ## "Agent unreachable" — red countdown on every command
 
-Your shell hook is installed, but the agent isn't running.
-`jitenv unlock`, type your passphrase, done. If unlock itself fails
+Your shell hook is installed, but the agent isn't running. You have
+three options at the countdown prompt without leaving the command:
+
+- **`u`** — unlock inline. jitenv prompts for your passphrase, starts
+  the agent in the background, re-fetches the env vars, and execs your
+  command *with* them injected. This is the fast path.
+- **Enter** — continue the command now, with no env injection.
+- **Ctrl+C** — abort the command.
+
+Or just run `jitenv unlock` ahead of time. If unlock itself fails
 with "agent did not start within 3s", read the agent log — by
 default it's at `${XDG_RUNTIME_DIR}/jitenv/agent.log`, and at
 `/tmp/jitenv-<uid>/agent.log` if `XDG_RUNTIME_DIR` is unset.
 
 To temporarily silence the warning while you debug, `JITENV_HOOK_DELAY=0`
-in the shell.
+in the shell. The inline `[u]` prompt is only offered on a real TTY;
+piped or non-interactive invocations skip the countdown entirely.
 
 ## Hook installed, but mapped commands aren't intercepted
 
@@ -46,20 +55,41 @@ changes without a relock. Hand-edits skip that ping. Either:
 - `jitenv lock && jitenv unlock`.
 
 Note that hand-editing the config is fragile — sensitive values must
-be wrapped in `enc:v1:` envelopes encrypted under the current master
-key, which the TUI does for you on every save.
+be wrapped in `enc:v2:` envelopes encrypted under the current master
+key, and source/bag/key *names* are stored as opaque IDs resolved
+through a sealed `[_meta].name_map`. The TUI does all of this for you
+on every save, which is why it's the supported edit path.
 
 ## Wrong config file is being loaded
 
-`config.Resolve` checks in this order:
+`config.Resolve` checks in this order (Unix):
 
 1. `$JITENV_CONFIG` if set.
 2. `$XDG_CONFIG_HOME/jitenv/config.toml` if `XDG_CONFIG_HOME` is set.
 3. `~/.config/jitenv/config.toml` otherwise.
 
+On Windows the order is `%JITENV_CONFIG%` →
+`%LOCALAPPDATA%\jitenv\config.toml` →
+`%USERPROFILE%\AppData\Local\jitenv\config.toml`, with the legacy
+roaming `%APPDATA%\jitenv\config.toml` consulted read-only as a
+fallback so older installs upgrade in place.
+
 If you run jitenv with `JITENV_CONFIG=/path/to/foo.toml`, it sticks
 to that file regardless of XDG. Useful for per-project configs
 or for testing — `unset JITENV_CONFIG` to fall back.
+
+## "jitenv keeps telling me a new version is available"
+
+On hook load each shell tab fires a fire-and-forget background fetch
+of the latest GitHub release tag, caches it for 24 hours, and prints
+a one-line stderr notice if a newer release exists. No telemetry is
+sent and only the tag name is read. To turn it off:
+
+- `JITENV_NO_VERSION_CHECK=1` for a single shell session,
+- `[agent] version_check = false` in `config.toml` for the user, or
+- the `CI` env var (auto-skips — matches every mainstream CI).
+
+`dev`/snapshot builds skip the check automatically.
 
 ## Forgot the passphrase
 

@@ -1,0 +1,85 @@
+name: website-update
+
+# Refreshes the version-pinned spans in the static site under docs/ on
+# each STABLE release (#253). It substitutes ONLY the marker-bounded
+# spans (see internal/rendocs) — hand-written narrative is never touched
+# — then commits + pushes the result directly to main with a
+# `[skip ci]` message so it doesn't loop back through CI.
+#
+# Stable-only: prereleases / RC tags are skipped (same gate the
+# chocolatey / macos-release workflows use). Manual re-runs are possible
+# via workflow_dispatch with an explicit tag.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to render (e.g. v0.14.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website-update
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    # Stable-only. A workflow_dispatch run is always allowed (the caller
+    # supplies the tag); a release-triggered run is skipped for
+    # prereleases / RC tags. Gate on BOTH the prerelease flag AND the
+    # tag-name pattern: a stable tag accidentally published with
+    # prerelease:true is still recognized by name, and a '-' in a SemVer
+    # tag (e.g. -rc.1) marks a prerelease regardless of the flag. The Go
+    # step's IsStableTag remains the final authority (defense in depth).
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !contains(github.event.release.tag_name, '-')) }}
+    env:
+      # For a release event the tag comes from the payload; for a manual
+      # run it comes from the dispatch input.
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      # Check out main with the same fine-grained PAT release-please.yml
+      # uses, so the push below is authored by a user/PAT (and can land
+      # on main) rather than the recursion-guarded GITHUB_TOKEN.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Render version-pinned docs spans
+        run: |
+          echo "Rendering docs for tag: ${TAG}"
+          go run ./cmd/render-docs -tag "${TAG}" -docs docs
+
+      - name: Summarize diff
+        id: diff
+        run: |
+          if git diff --quiet -- docs; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No docs changes for ${TAG} — nothing to commit."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "----- docs diff -----"
+            git --no-pager diff --stat -- docs
+            git --no-pager diff -- docs
+          fi
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs
+          git commit -m "docs(website): refresh version pins for ${TAG} [skip ci]"
+          git push origin HEAD:main
+          echo "Pushed website version-pin refresh for ${TAG} to main."

@@ -32,9 +32,9 @@ type Constructor func(cfg map[string]any) (Source, error)
 ```
 
 `cfg` is the contents of `[sources.<name>.params]` after envelope
-decryption — sensitive params arrive as plaintext strings, not
-`enc:v1:` envelopes, because `crypto.DecryptStringsInPlace` walks the
-config before construction.
+decryption — params arrive as plaintext strings, not `enc:v2:`
+envelopes, because the config decrypt pass walks the params block
+before construction.
 
 Optionally implement `Schemed`:
 
@@ -83,23 +83,76 @@ source whose params need to feel polished in the UI.
    so a single line here makes the source available everywhere.
 
 4. **Implement `Schema()` if you want a polished UI.** Mark sensitive
-   fields with `Sensitive: true` so the TUI masks them and the saver
-   wraps them in `enc:v1:` envelopes on disk.
+   fields with `Sensitive: true` so the TUI masks them. Note that
+   *every* param is encrypted on disk regardless — `Sensitive` only
+   drives UI masking, not whether the value is sealed (see below).
 
 5. **Write tests.** The existing `local` source has the simplest
-   shape; `aws` shows how to mock the SDK for unit tests.
+   shape; `aws` and `vault` show how to mock the backend for unit
+   tests.
 
 ## Sensitive fields and encryption
 
-Mark a `ParamField` `Sensitive: true` to:
+**Encrypt-by-default (#112).** On save, the config encrypter seals
+*every* non-empty, non-envelope string in a source's `params` map —
+whether or not the schema flagged it `Sensitive`. So a source that
+ships no `Schema()` at all (a generic key/value source) still gets all
+of its param values sealed; you never have to remember to mark a field
+to keep it off disk in plaintext. The `Sensitive` bit on a
+`ParamField` only controls **UI masking** in the TUI.
 
-- Mask its value in the TUI.
-- Have the saver re-encrypt it as `enc:v1:` on every save (so the
-  on-disk form stays a fresh ciphertext under the master key).
-
-The agent's `crypto.DecryptStringsInPlace` walks the whole `params`
-map and replaces any `enc:v1:` string with its plaintext before your
+Each sealed value is an `enc:v2:` envelope bound to a per-field
+associated-data string derived from the source's opaque ID and the
+param key (`src.<id>.<param>`), so a ciphertext can't be transplanted
+between fields. The agent's decrypt pass walks the whole `params` map
+and replaces any envelope string with its plaintext before your
 constructor sees it. You don't need per-source crypto code.
+
+## Worked example: the `vault` source
+
+The `vault` source (`internal/sources/vault`) is a good template for a
+network-backed backend with cross-field validation:
+
+```toml
+[sources.prod_vault]
+type = "vault"
+[sources.prod_vault.params]
+address     = "https://vault.example.com:8200"
+auth_method = "approle"
+role_id     = "db_role"
+secret_id   = "enc:v2:…"   # sealed on disk
+mount       = "secret"
+kv_version  = "v2"
+```
+
+Then reference a KV path from a mapping. `ref` is the path under the
+mount; an empty `key` expands the whole secret into one env var per
+field (the same "expand the whole bag" shape the `local` source uses):
+
+```toml
+[[mappings]]
+path = "/home/me/scripts/migrate.sh"
+[[mappings.vars]]
+source = "prod_vault"
+ref    = "myapp/prod"      # reads secret/data/myapp/prod for kv v2
+# name + key omitted → every field of the secret becomes its own env var
+```
+
+What the `vault` package demonstrates for your own source:
+
+- **A `Schema()` with enums and a sensitive field** — `auth_method`
+  is an `Enum: ["token", "approle"]`; `token` and `secret_id` are
+  `Sensitive: true`.
+- **Cross-field validation the per-field `Required` flag can't
+  express** — e.g. "`token` is required when `auth_method=token`".
+  `vault` does this in a `validateStatic()` called from its
+  constructor.
+- **A cheap, side-effect-free `Validate()`** — it authenticates
+  (and caches the client) without reading any secret, which is what
+  `jitenv sources test` invokes.
+- **Defensive `Fetch()`** — it rejects `..` path-traversal refs before
+  hitting the network and stringifies non-string values so the
+  returned map is always `map[string]string`.
 
 ## Special: the `local` source and `bagSink`
 
