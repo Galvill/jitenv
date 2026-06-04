@@ -21,18 +21,25 @@ const verifySentinel = "jitenv-ok"
 const metaVerifyAAD = "meta.verify"
 
 // SourceParamAAD builds the AAD context for a value stored under
-// [sources.<name>.params.<key>]. Both the TUI save pipeline and the
+// [sources.<sourceID>.params.<key>]. Both the TUI save pipeline and the
 // agent's resolver must agree on this exact string; the dotted form
 // matches what DecryptStringsInPlace produces when fed ctx=
-// "src."+name.
-func SourceParamAAD(sourceName, paramKey string) string {
-	return crypto.AAD("src", sourceName, paramKey)
+// "src."+sourceID.
+//
+// Post-#248 the first coordinate is the source's opaque ID (s_xxxxxx),
+// not its human name — the ID is stable over the config's lifetime, so
+// a rename updates only the sealed name_map and never has to re-seal
+// every param envelope.
+func SourceParamAAD(sourceID, paramKey string) string {
+	return crypto.AAD("src", sourceID, paramKey)
 }
 
 // SecretAAD builds the AAD context for a value stored under
-// [secrets.<bag>.<key>].
-func SecretAAD(bag, key string) string {
-	return crypto.AAD("secret", bag, key)
+// [secrets.<bagID>.<keyID>]. Post-#248 both coordinates are opaque IDs
+// (b_xxxxxx / k_xxxxxx) rather than the bag / key names, for the same
+// rename-stability reason as SourceParamAAD.
+func SecretAAD(bagID, keyID string) string {
+	return crypto.AAD("secret", bagID, keyID)
 }
 
 // VarFieldAAD builds the AAD context for a scalar string field of
@@ -154,8 +161,20 @@ func atomicSave(path string, c *Config) error {
 }
 
 // AtomicSave is the exported variant for callers outside this package
-// (e.g. the TUI).
-func AtomicSave(path string, c *Config) error { return atomicSave(path, c) }
+// (e.g. the TUI). On a successful write it also consumes the pre-#248
+// migration backup escape hatch (#248): the FIRST config-modifying save
+// after a migration unlinks config.toml.pre-id-migration.bak. The
+// migration's own write goes through the unexported atomicSave so it
+// keeps the backup it just created — only the *next* user-facing save
+// removes it. A save that didn't follow a migration simply finds no
+// backup (no-op).
+func AtomicSave(path string, c *Config) error {
+	if err := atomicSave(path, c); err != nil {
+		return err
+	}
+	removeMigrationBackup(path)
+	return nil
+}
 
 func zero(b []byte) {
 	for i := range b {
