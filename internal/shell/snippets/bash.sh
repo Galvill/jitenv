@@ -99,10 +99,28 @@ __jitenv_chpwd() {
     [[ $rc -eq 10 ]] && hash -r 2>/dev/null
     __JITENV_LAST_PWD="$PWD"
 }
+# Prompt latch. The DEBUG trap below fires for EVERY simple command
+# under `extdebug` (which turns on functrace) — including the commands
+# bash runs *inside* PROMPT_COMMAND while redrawing the prompt (a
+# git-prompt's `git rev-parse …` / `[[ … ]]`, our own `jitenv __chpwd`,
+# etc.). Those aren't commands the user typed, so routing them through
+# `jitenv is-mapped` is wrong — and since the bare-name PATH branch
+# (issue #237) forks `jitenv is-mapped` per command, it turned every
+# prompt redraw into a fork storm (one `jitenv` spawn per prompt-internal
+# command, every prompt). A marker prepended to PROMPT_COMMAND sets the
+# latch and one appended clears it, so the trap skips everything
+# bracketed by them while still intercepting interactively-typed
+# commands. (issue #258)
+__jitenv_prompt_begin() { __JITENV_IN_PROMPT=1; }
+__jitenv_prompt_end()   { __JITENV_IN_PROMPT=; }
+
 # Run once at hook-load time so the wrapper dir is populated before
-# the first command in this shell.
+# the first command in this shell. Bracketed by the latch so the
+# chpwd reconcile's own internal commands don't trip the trap.
+__jitenv_prompt_begin
 __jitenv_chpwd
-PROMPT_COMMAND="__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+__jitenv_prompt_end
+PROMPT_COMMAND="__jitenv_prompt_begin;__jitenv_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__jitenv_prompt_end"
 
 # Version-check (#136): fire-and-forget background HTTP fetch
 # refreshes a 24h-cached sidecar at $XDG_CACHE_HOME/jitenv/
@@ -136,6 +154,15 @@ __jitenv_log() {
 
 __jitenv_debug_trap() {
     [[ -n "${__JITENV_REENTRY:-}" ]] && return 0
+
+    # Skip every command bash runs while redrawing the prompt:
+    # PROMPT_COMMAND itself plus the user's git-prompt / precmd machinery,
+    # which `extdebug`'s functrace makes the DEBUG trap fire on. The latch
+    # is set by __jitenv_prompt_begin / cleared by __jitenv_prompt_end,
+    # which bracket PROMPT_COMMAND. Without it the trap forks
+    # `jitenv is-mapped` for every prompt-internal command on every
+    # prompt (issue #258).
+    [[ -n "${__JITENV_IN_PROMPT:-}" ]] && return 0
 
     # Skip while bash is running a programmable-completion function —
     # the DEBUG trap fires on commands inside compfuncs too, and we
