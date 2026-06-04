@@ -2,6 +2,7 @@ package rendocs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,7 @@ func TestNarrativeUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if !strings.Contains(got, "talks\nabout v0.13.0 in prose") {
+	if !strings.Contains(got, "It talks\nabout v0.13.0 in prose") {
 		t.Errorf("narrative prose mentioning the old version was modified; got:\n%s", got)
 	}
 }
@@ -124,27 +125,73 @@ func TestChangedFraction(t *testing.T) {
 	}
 }
 
-// TestSafetyBailWiring asserts the >50% guard is wired into RenderFile.
-// A normal marker swap never trips it (by design the metric only counts
-// bytes of the ORIGINAL that were rewritten — see lineEditBytes), so we
-// assert the legit path does NOT bail, then assert the threshold + error
-// type directly via the metric the guard consults.
+// TestSafetyBailWiring asserts the >50% guard is actually wired into
+// RenderFile by driving it down the bail branch: a tiny file whose marked
+// span holds a long original inner string is rewritten to the short tag,
+// so the rewritten bytes dominate the file and changedFraction > 0.5.
 func TestSafetyBailWiring(t *testing.T) {
 	// Legit edit: must NOT bail.
 	in := readFixture(t, "quickstart.input.md")
 	if _, _, err := RenderFile("quickstart.md", in, Release{Tag: fixtureTag}); err != nil {
 		t.Fatalf("legit render unexpectedly bailed: %v", err)
 	}
-	// The guard fires when changedFraction > 0.5. Confirm a full rewrite
-	// crosses the threshold the guard checks.
-	full := changedFraction("aaaa\nbbbb\ncccc\n", "zzzz\nwwww\nqqqq\n")
-	if full <= 0.5 {
-		t.Fatalf("full-rewrite fraction %v did not exceed the 0.5 guard", full)
+
+	// Bail path: a marked span whose original inner text is long relative
+	// to the whole file. Replacing it with the short tag rewrites the
+	// majority of the file's bytes, so the guard must fire. This is what a
+	// marker-handling bug looks like in practice.
+	inner := strings.Repeat("Z", 100)
+	content := "<!-- VERSION:start -->" + inner + "<!-- VERSION:end -->\n"
+	rendered, changed, err := RenderFile("docs/x.md", content, Release{Tag: fixtureTag})
+	if err == nil {
+		t.Fatalf("expected RenderFile to bail with TooLargeError, got changed=%v rendered=%q", changed, rendered)
+	}
+	var tle *TooLargeError
+	if !errors.As(err, &tle) {
+		t.Fatalf("expected *TooLargeError, got %T: %v", err, err)
+	}
+	if tle.ChangedFrac <= 0.5 {
+		t.Errorf("TooLargeError.ChangedFrac = %v, want > 0.5", tle.ChangedFrac)
+	}
+	// On bail RenderFile must NOT return the mutated content.
+	if rendered != "" || changed {
+		t.Errorf("bail returned content; rendered=%q changed=%v", rendered, changed)
 	}
 	// And the error type formats sensibly.
-	e := &TooLargeError{Path: "docs/x.md", ChangedFrac: full}
-	if !strings.Contains(e.Error(), "docs/x.md") || !strings.Contains(e.Error(), "%") {
-		t.Errorf("TooLargeError.Error() = %q", e.Error())
+	if !strings.Contains(tle.Error(), "docs/x.md") || !strings.Contains(tle.Error(), "%") {
+		t.Errorf("TooLargeError.Error() = %q", tle.Error())
+	}
+}
+
+// TestRenderMultilineSpan verifies the (?s) flag: a version string that a
+// human has moved onto its own line (markers and content split across
+// newlines) is still updated.
+func TestRenderMultilineSpan(t *testing.T) {
+	content := "intro\n<!-- VERSION:start -->\nv0.13.0\n<!-- VERSION:end -->\noutro\n"
+	got, err := Render(content, Release{Tag: fixtureTag}, ".md")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	want := "intro\n<!-- VERSION:start -->v0.14.0<!-- VERSION:end -->\noutro\n"
+	if got != want {
+		t.Errorf("multiline span not updated:\n got: %q\nwant: %q", got, want)
+	}
+	if strings.Contains(got, "v0.13.0") {
+		t.Errorf("old version survived in multiline span: %q", got)
+	}
+}
+
+// TestRenderUnbalancedMarkers verifies a start marker with no matching
+// end (a mangled edit) fails loudly instead of silently no-op'ing.
+func TestRenderUnbalancedMarkers(t *testing.T) {
+	content := "intro\n<!-- VERSION:start -->v0.13.0\noutro\n" // no VERSION:end
+	if _, err := Render(content, Release{Tag: fixtureTag}, ".md"); err == nil {
+		t.Fatal("expected Render to reject unbalanced markers, got nil")
+	}
+	// An end with no start is equally malformed.
+	content2 := "intro\nv0.13.0<!-- VERSION:end -->\noutro\n"
+	if _, err := Render(content2, Release{Tag: fixtureTag}, ".md"); err == nil {
+		t.Fatal("expected Render to reject a lone end marker, got nil")
 	}
 }
 

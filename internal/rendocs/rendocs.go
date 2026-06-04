@@ -94,16 +94,37 @@ func spans() []span {
 func Render(content string, r Release, ext string) (string, error) {
 	out := content
 	for _, s := range spans() {
+		// (?s) lets "." cross newlines so a span survives a human edit
+		// that puts the version string on its own line.
 		re, err := regexp.Compile(
-			regexp.QuoteMeta(s.start) + "(.*?)" + regexp.QuoteMeta(s.end),
+			"(?s)" + regexp.QuoteMeta(s.start) + "(.*?)" + regexp.QuoteMeta(s.end),
 		)
 		if err != nil {
+			return "", err
+		}
+		// Catch malformed edits loudly: a start marker with no matching
+		// end (or vice versa) means a human mangled the markers. Silently
+		// no-op'ing would let stale docs ship with no signal, so fail.
+		if err := checkBalanced(out, s); err != nil {
 			return "", err
 		}
 		repl := s.start + s.replace(r, ext) + s.end
 		out = re.ReplaceAllLiteralString(out, repl)
 	}
 	return out, nil
+}
+
+// checkBalanced reports an error if content has an unequal number of a
+// span's start and end markers — an unbalanced edit the renderer must
+// not silently skip.
+func checkBalanced(content string, s span) error {
+	starts := strings.Count(content, s.start)
+	ends := strings.Count(content, s.end)
+	if starts != ends {
+		return fmt.Errorf("rendocs: unbalanced markers for %q: %d start, %d end",
+			s.start, starts, ends)
+	}
+	return nil
 }
 
 // TooLargeError is returned when a render would change more bytes than

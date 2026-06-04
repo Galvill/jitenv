@@ -32,8 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     # Stable-only. A workflow_dispatch run is always allowed (the caller
     # supplies the tag); a release-triggered run is skipped for
-    # prereleases / RC tags.
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    # prereleases / RC tags. Gate on BOTH the prerelease flag AND the
+    # tag-name pattern: a stable tag accidentally published with
+    # prerelease:true is still recognized by name, and a '-' in a SemVer
+    # tag (e.g. -rc.1) marks a prerelease regardless of the flag. The Go
+    # step's IsStableTag remains the final authority (defense in depth).
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !contains(github.event.release.tag_name, '-')) }}
     env:
       # For a release event the tag comes from the payload; for a manual
       # run it comes from the dispatch input.
