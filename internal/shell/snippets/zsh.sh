@@ -20,6 +20,9 @@ export __JITENV_SESSION_NONCE
 
 __JITENV_RUNTIME_DIR={{RuntimeDir}}
 __JITENV_CFG_PATH={{ConfigPath}}
+# Hot-path binary: lightweight `jitenv-hook` when installed (≈1.5ms
+# startup), else bare `jitenv`. See bash.sh for the rationale.
+__JITENV_BIN={{HookBin}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # See bash.sh — gates env injection in the shim so vars don't leak
 # into children of unmapped commands (issue #52).
@@ -91,7 +94,7 @@ __jitenv_chpwd() {
     # startup file (e.g. ~/.zprofile prepends) shoved it back (#224).
     __jitenv_ensure_path
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
-    jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    "$__JITENV_BIN" __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
     # Exit 10 means a wrapper was added or removed → rebuild zsh's
     # command hash table so the change takes effect immediately. Without
     # it, a wrapper added for an already-run command stays masked by the
@@ -190,7 +193,7 @@ __jitenv_accept_line() {
         esac
         if [[ -n "$resolved" && -f "$resolved" ]] && __jitenv_anchor_match "$resolved"; then
             __jitenv_log "candidate cmd=[$BUFFER] resolved=[$resolved]"
-            jitenv is-mapped "$resolved" >/dev/null 2>&1
+            "$__JITENV_BIN" is-mapped "$resolved" >/dev/null 2>&1
             local rc=$?
             __jitenv_log "is-mapped rc=$rc"
             case "$rc" in
@@ -203,7 +206,7 @@ __jitenv_accept_line() {
                     # so a filename containing `"`, `$`, backtick, or
                     # other zsh-active characters (legal on Linux/macOS)
                     # can't break BUFFER's quoting (security #123).
-                    BUFFER="jitenv run ${(q+)resolved}$rest"
+                    BUFFER="${(q+)__JITENV_BIN} run ${(q+)resolved}$rest"
                     ;;
                 *)
                     # rc=1 (not mapped) or rc=2 (config unreadable) →

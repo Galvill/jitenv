@@ -26,6 +26,11 @@ export __JITENV_SESSION_NONCE
 
 __JITENV_RUNTIME_DIR={{RuntimeDir}}
 __JITENV_CFG_PATH={{ConfigPath}}
+# Hot-path binary: the lightweight `jitenv-hook` when installed (≈1.5ms
+# startup), else bare `jitenv` (≈50ms — it links the AWS SDK / net-http
+# graph). Baked by `jitenv hook bash`; __chpwd / is-mapped / run go
+# through it, the once-per-load version check stays on full `jitenv`.
+__JITENV_BIN={{HookBin}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # Recorded so the shim can tell "this shell typed the command" from
 # "an unmapped descendant spawned the wrapped binary"; only the former
@@ -109,7 +114,7 @@ __jitenv_chpwd() {
     # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
     # hide debug diagnostics + a "jitenv: command not found"
     # if the binary ever falls off $PATH mid-session.
-    jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    "$__JITENV_BIN" __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
     # Exit 10 means a wrapper was added or removed. Clear bash's
     # command-hash table so the change takes effect immediately: bash
     # caches command→path lookups, so a wrapper added for a command that
@@ -238,7 +243,7 @@ __jitenv_debug_trap() {
     fi
 
     __jitenv_log "candidate cmd=[$cmd] resolved=[$resolved]"
-    jitenv is-mapped "$resolved" >/dev/null 2>&1
+    "$__JITENV_BIN" is-mapped "$resolved" >/dev/null 2>&1
     local rc=$?
     __jitenv_log "is-mapped rc=$rc"
     case "$rc" in
@@ -253,9 +258,10 @@ __jitenv_debug_trap() {
             # so a filename containing `"`, `$`, backtick, or other
             # bash-active characters (legal on Linux) can't break the
             # eval string's quoting (security #123).
-            local quoted_resolved
+            local quoted_resolved quoted_bin
             printf -v quoted_resolved '%q' "$resolved"
-            eval "jitenv run $quoted_resolved$rest"
+            printf -v quoted_bin '%q' "$__JITENV_BIN"
+            eval "$quoted_bin run $quoted_resolved$rest"
             unset __JITENV_REENTRY
             return 1
             ;;

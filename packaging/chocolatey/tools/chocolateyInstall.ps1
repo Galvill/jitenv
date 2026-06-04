@@ -4,8 +4,11 @@ $ErrorActionPreference = 'Stop'
 # GitHub and verify its SHA256 before extracting. __URL64__ /
 # __CHECKSUM64__ are rendered at pack time by chocolatey.yml from the
 # published release + its SHA256SUMS asset. Extracting into $toolsDir
-# lets chocolatey's auto-shim put BOTH jitenv.exe and jitenv-tui.exe on
-# PATH (the latter is the re-exec target for `jitenv config`, #182).
+# lets chocolatey's auto-shim put jitenv.exe, jitenv-hook.exe and
+# jitenv-tui.exe on PATH (jitenv-hook is the lightweight hot-path binary
+# the shell hook spawns; jitenv-tui is the re-exec target for
+# `jitenv config`, #182). Whatever .exe files the release zip carries are
+# extracted into $toolsDir and shimmed automatically.
 
 $packageName = 'jitenv'
 $toolsDir    = Split-Path -Parent $MyInvocation.MyCommand.Definition

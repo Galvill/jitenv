@@ -17,18 +17,22 @@ LDFLAGS := -s -w \
 
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/jitenv
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN)-hook ./cmd/jitenv-hook
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN)-tui ./cmd/jitenv-tui
 
 # Cross-compile the Windows binaries. The TUI ships as a separate
 # binary (#182 bug B): the main jitenv binary stays free of
 # Bubble Tea / Lip Gloss imports so it doesn't query the terminal
-# on every invocation.
+# on every invocation. jitenv-hook is the lightweight hot-path binary
+# (no AWS SDK / net-http) the shell hook spawns per prompt.
 build-windows:
 	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN).exe ./cmd/jitenv
+	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN)-hook.exe ./cmd/jitenv-hook
 	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN)-tui.exe ./cmd/jitenv-tui
 
 install: build
 	install -Dm0755 bin/$(BIN) $(PREFIX)/bin/$(BIN)
+	install -Dm0755 bin/$(BIN)-hook $(PREFIX)/bin/$(BIN)-hook
 	install -Dm0755 bin/$(BIN)-tui $(PREFIX)/bin/$(BIN)-tui
 
 test:

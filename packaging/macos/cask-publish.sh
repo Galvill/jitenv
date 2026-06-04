@@ -74,6 +74,7 @@ cask "${CASK_NAME}" do
   homepage "https://github.com/Galvill/jitenv"
 
   binary "jitenv"
+  binary "jitenv-hook"
   binary "jitenv-tui"
 end
 EOF
