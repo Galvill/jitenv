@@ -125,12 +125,16 @@ func TestCommandsList_Add(t *testing.T) {
 	r := makeRoot(commandsFixture())
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
 
-	// Sentinel row is selected by default.
+	// Discover sentinel is selected by default; move to the Add row.
 	if scr.cursor != 0 {
 		t.Fatalf("expected cursor 0, got %d", scr.cursor)
 	}
+	scr.Update(tea.KeyMsg{Type: tea.KeyDown}) // → "< Add command >"
+	if scr.cursor != 1 {
+		t.Fatalf("expected cursor 1 on Add sentinel, got %d", scr.cursor)
+	}
 
-	// Enter on the sentinel pushes an inputScreen for "add command".
+	// Enter on the Add sentinel pushes an inputScreen for "add command".
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	is := findInputScreen(drainCmd(cmd))
 	if is == nil {
@@ -163,6 +167,7 @@ func TestCommandsList_Add_RejectsEmpty(t *testing.T) {
 	r := makeRoot(commandsFixture())
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
 
+	scr.cursor = 1 // "< Add command >"
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	is := findInputScreen(drainCmd(cmd))
 	if is == nil {
@@ -209,6 +214,7 @@ func TestCommandsList_Add_RejectsDuplicate(t *testing.T) {
 	r := makeRoot(commandsFixture())
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
 
+	scr.cursor = 1 // "< Add command >"
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	is := findInputScreen(drainCmd(cmd))
 	if is == nil {
@@ -230,11 +236,13 @@ func TestCommandsList_Edit(t *testing.T) {
 	r.cfg.Mappings[0].Commands = []string{"npm", "yarn"}
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
 
-	// Move cursor onto the second entry (yarn).
+	// Move cursor onto the second entry (yarn): 2 sentinels + 2 entries,
+	// yarn is the last row at index numSentinels+1 = 3.
 	scr.Update(tea.KeyMsg{Type: tea.KeyDown})
 	scr.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if scr.cursor != 2 {
-		t.Fatalf("cursor: %d, want 2", scr.cursor)
+	scr.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if scr.cursor != 3 {
+		t.Fatalf("cursor: %d, want 3", scr.cursor)
 	}
 
 	// Enter opens the popup menu.
@@ -270,7 +278,7 @@ func TestCommandsList_Edit_RejectsDuplicate(t *testing.T) {
 	r := makeRoot(commandsFixture())
 	r.cfg.Mappings[0].Commands = []string{"npm", "yarn"}
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
-	scr.cursor = 2 // yarn
+	scr.cursor = 3 // yarn (2 sentinels + entry index 1)
 
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm := findPopupMenu(drainCmd(cmd))
@@ -296,7 +304,7 @@ func TestCommandsList_Delete(t *testing.T) {
 	r := makeRoot(commandsFixture())
 	r.cfg.Mappings[0].Commands = []string{"npm", "yarn"}
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
-	scr.cursor = 1 // npm
+	scr.cursor = 2 // npm (first entry after 2 sentinels)
 
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm := findPopupMenu(drainCmd(cmd))
@@ -323,7 +331,7 @@ func TestCommandsList_Delete_NoConfirmKeepsList(t *testing.T) {
 	r := makeRoot(commandsFixture())
 	r.cfg.Mappings[0].Commands = []string{"npm", "yarn"}
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
-	scr.cursor = 1
+	scr.cursor = 2 // npm (first entry after 2 sentinels)
 
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm := findPopupMenu(drainCmd(cmd))
@@ -374,7 +382,8 @@ func TestCommandsList_TomlRoundTrip(t *testing.T) {
 	r := makeRoot(c)
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
 
-	// Add: yarn.
+	// Add: yarn (cursor 1 is the "< Add command >" sentinel).
+	scr.cursor = 1
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	is := findInputScreen(drainCmd(cmd))
 	if is == nil {
@@ -384,7 +393,7 @@ func TestCommandsList_TomlRoundTrip(t *testing.T) {
 	drainCmd(is.commit())
 
 	// Add: python3.
-	scr.cursor = 0
+	scr.cursor = 1
 	_, cmd = scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	is = findInputScreen(drainCmd(cmd))
 	is.input.SetValue("python3")
@@ -394,16 +403,17 @@ func TestCommandsList_TomlRoundTrip(t *testing.T) {
 		t.Fatalf("after add: %v", got)
 	}
 
-	// Edit "yarn" → "pnpm".
-	scr.cursor = 2
+	// Edit "yarn" → "pnpm" (entries start at cursor numSentinels=2, so
+	// yarn is at cursor 3).
+	scr.cursor = 3
 	_, cmd = scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm := findPopupMenu(drainCmd(cmd))
 	is = findInputScreen(drainCmd(pm.onChoose("Edit")))
 	is.input.SetValue("pnpm")
 	drainCmd(is.commit())
 
-	// Delete "npm".
-	scr.cursor = 1
+	// Delete "npm" (first entry, cursor 2).
+	scr.cursor = 2
 	_, cmd = scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm = findPopupMenu(drainCmd(cmd))
 	cs := findConfirm(drainCmd(pm.onChoose("Delete")))
@@ -451,7 +461,7 @@ func TestCommandsList_EmptyListStillRejectedByValidate(t *testing.T) {
 	c.Version = config.Version
 	r := makeRoot(c)
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
-	scr.cursor = 1 // the only entry
+	scr.cursor = 2 // the only entry (after 2 sentinels)
 
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm := findPopupMenu(drainCmd(cmd))

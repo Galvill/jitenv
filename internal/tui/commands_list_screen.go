@@ -7,14 +7,26 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gv/jitenv/internal/config"
+	"github.com/gv/jitenv/internal/discover"
 )
+
+// Two top sentinels precede the command entries:
+//
+//	cursor 0 → "< Discover from folder… >"
+//	cursor 1 → "< Add command >"
+//	cursor 2..n+1 → existing commands (entry index = cursor-2)
+//
+// numSentinels keeps the off-by-two cursor math honest in one place.
+const numSentinels = 2
 
 // commandsListScreen edits the per-mapping cwd_glob commands list.
 //
 // Storage: cfg.Mappings[idx].Commands is a []string of bare command
-// names. UX mirrors arnListScreen: a "< Add command >" sentinel at the
-// top, existing commands underneath; Enter on an existing row opens an
-// Edit/Delete popup.
+// names. UX mirrors arnListScreen: two sentinels at the top
+// ("< Discover from folder… >" then "< Add command >"), existing
+// commands underneath; Enter on an existing row opens an Edit/Delete
+// popup. Discover scans a chosen folder for project markers and offers
+// the matched commands as a pre-checked checkbox list.
 type commandsListScreen struct {
 	root   *rootModel
 	idx    int
@@ -36,7 +48,7 @@ func (s *commandsListScreen) refresh() {
 		s.cursor = 0
 		return
 	}
-	if max := len(mp.Commands); s.cursor > max {
+	if max := len(mp.Commands) + numSentinels - 1; s.cursor > max {
 		s.cursor = max
 	}
 }
@@ -68,7 +80,12 @@ directory, so running e.g. "npm" from the cwd routes through
 Pick "< Add command >" to append a new entry; selecting an existing
 row opens Edit / Delete. Empty names are rejected and duplicates
 are flagged. The list must be non-empty for a cwd_glob mapping —
-saving an empty list will fail validation.`
+saving an empty list will fail validation.
+
+Pick "< Discover from folder… >" to choose a folder and let jitenv
+scan it for project markers (package.json → npm, Dockerfile →
+docker, …). Matched commands are offered pre-checked; confirming
+appends them, skipping any already in the list.`
 }
 
 func (s *commandsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
@@ -76,12 +93,18 @@ func (s *commandsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.refresh()
 		return s, nil
 	}
+	// pathPickedMsg arrives from the folder picker launched by
+	// openDiscoverFolder; it carries the folder to scan. The picker has
+	// already popped itself, so this screen is back on top of the stack.
+	if pm, ok := msg.(pathPickedMsg); ok {
+		return s, s.openDiscoverList(pm.path)
+	}
 	mp := s.mp()
 	if mp == nil {
 		return s, nil
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
-		total := len(mp.Commands) + 1 // sentinel + entries
+		total := len(mp.Commands) + numSentinels // sentinels + entries
 		switch k.String() {
 		case "up", "k":
 			if s.cursor > 0 {
@@ -92,7 +115,10 @@ func (s *commandsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.cursor++
 			}
 		case "enter":
-			if s.cursor == 0 {
+			switch s.cursor {
+			case 0:
+				return s, s.openDiscoverFolder()
+			case 1:
 				return s, s.openAddInput()
 			}
 			return s, s.openEntryMenu()
@@ -101,6 +127,46 @@ func (s *commandsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 	}
 	return s, nil
+}
+
+// openDiscoverFolder pushes the file browser in folder-select mode. On
+// commit it emits a pathPickedMsg that this screen's Update routes to
+// openDiscoverList.
+func (s *commandsListScreen) openDiscoverFolder() tea.Cmd {
+	return emit(pushMsg{s: newFilePickerScreen(s.root, pickDir, pickerStartDir(""))})
+}
+
+// openDiscoverList scans folder for project markers and pushes the
+// pre-checked checkbox screen. When nothing matches it still pushes the
+// screen (which renders an explanatory empty state) so the user gets
+// feedback rather than a silent no-op.
+func (s *commandsListScreen) openDiscoverList(folder string) tea.Cmd {
+	sugs := discover.Scan(folder)
+	return emit(pushMsg{s: newDiscoverCommandsScreen(s.root, s, folder, sugs)})
+}
+
+// appendDiscovered appends each command in cmds that isn't already
+// present (via hasCommand) and returns how many were actually added.
+// This is the SAME dedup path the manual add flow uses, so discover can
+// never introduce duplicates.
+func (s *commandsListScreen) appendDiscovered(cmds []string) int {
+	mp := s.mp()
+	if mp == nil {
+		return 0
+	}
+	added := 0
+	for _, c := range cmds {
+		c = strings.TrimSpace(c)
+		if c == "" || hasCommand(mp.Commands, c) {
+			continue
+		}
+		mp.Commands = append(mp.Commands, c)
+		added++
+	}
+	if added > 0 {
+		s.refresh()
+	}
+	return added
 }
 
 func (s *commandsListScreen) openAddInput() tea.Cmd {
@@ -133,7 +199,7 @@ func (s *commandsListScreen) openEntryMenu() tea.Cmd {
 	if mp == nil {
 		return nil
 	}
-	idx := s.cursor - 1
+	idx := s.cursor - numSentinels
 	if idx < 0 || idx >= len(mp.Commands) {
 		return nil
 	}
@@ -209,15 +275,17 @@ func (s *commandsListScreen) View() string {
 	}
 	b.WriteString(labelStyle.Render(heading) + "\n\n")
 
-	sentinel := "< Add command >"
-	if s.cursor == 0 {
-		b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
-	} else {
-		b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+	// Two top sentinels: discover (cursor 0) then add (cursor 1).
+	for i, sentinel := range []string{"< Discover from folder… >", "< Add command >"} {
+		if s.cursor == i {
+			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(sentinel) + "\n")
+		} else {
+			b.WriteString("   " + listItemStyle.Render(sentinel) + "\n")
+		}
 	}
 
 	if len(mp.Commands) == 0 {
-		b.WriteString("\n" + dimText("No commands yet. Pick the row above to add one.") + "\n")
+		b.WriteString("\n" + dimText("No commands yet. Add one, or discover them from a folder above.") + "\n")
 		b.WriteString(dimText("Each command is wrapped by a per-shell symlink while you're") + "\n")
 		b.WriteString(dimText("inside the matching cwd; running it routes through jitenv run.") + "\n")
 		return b.String()
@@ -225,7 +293,7 @@ func (s *commandsListScreen) View() string {
 
 	for i, c := range mp.Commands {
 		row := truncate(c, 60)
-		if i+1 == s.cursor {
+		if i+numSentinels == s.cursor {
 			b.WriteString(" " + labelStyle.Render("▶ ") + listItemFocusedStyle.Render(row) + "\n")
 		} else {
 			b.WriteString("   " + listItemStyle.Render(row) + "\n")
