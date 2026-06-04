@@ -20,13 +20,49 @@ exec'd child's `/proc/<pid>/environ`.
   `config.toml` `_meta.salt`. Re-deriving the key from the same
   passphrase + salt always produces the same 32-byte key.
 - **AEAD.** XChaCha20-Poly1305 from `golang.org/x/crypto/chacha20poly1305`.
-  Sensitive values are stored as `enc:v1:<base64(nonce ‖ ciphertext)>`
+  Sensitive values are stored as `enc:v2:<base64(nonce ‖ ciphertext)>`
   envelopes in `config.toml`. The 24-byte nonce is freshly randomized
-  per encrypt — never reused across saves.
+  per encrypt — never reused across saves. Legacy `enc:v1:` envelopes
+  (pre-AAD) are still accepted on read and rewritten to `enc:v2:` on
+  the next save, so older configs keep working.
+- **Associated data (AAD) binding.** Every `enc:v2:` envelope is sealed
+  with a canonical associated-data string derived from *where* the
+  value lives in the config — e.g. `src.<id>.secret_access_key`,
+  `secret.<bagID>.<keyID>`, `mapping[i].vars[j].name`. The AEAD tag
+  check fails if a ciphertext is transplanted from one slot to another,
+  so an attacker who can write to `config.toml` can't move a sealed
+  value into a different field and have the agent hand the wrong
+  plaintext to the wrong consumer. See `crypto.AAD` /
+  `crypto.EncryptField` (#110).
 - **Passphrase verification.** `_meta.verify` is a fixed sentinel
   encrypted under the master key during `jitenv config init`. Each
   `jitenv unlock` re-derives the key and decrypts it; failure means
   the wrong passphrase.
+
+## What gets sealed (not just the secret values)
+
+jitenv encrypts more than the obvious secret material:
+
+- **Source params and bag values** — the original case: anything
+  marked sensitive in a source's params block, and every value under
+  `[secrets.<bag>]`.
+- **Variable-reference fields (#235).** Each `VarRef`'s scalar fields —
+  the env var `name`, `source`, `ref`, `key`, inline `value`, plus any
+  `extra` map entries — are sealed individually. The mapping's
+  *shape* (which file/glob, how many vars) is visible on disk, but the
+  env-var names and the keys they pull are not leaked in plaintext.
+- **Source / bag / key NAMES (#248).** The human-facing names live only
+  inside a sealed `[_meta].name_map`. On disk the TOML is rekeyed by
+  random opaque IDs (`s_…` for sources, `b_…` for bags, `k_…` for
+  keys); the AADs above are built from those IDs, not the names. So a
+  config left on disk reveals neither your secret values nor the names
+  you gave your sources, bags, and keys. The IDs are stable across
+  no-op saves (the prior `name_map` is reused) so re-saving an
+  unchanged config produces no spurious diff.
+
+`config.EncryptInPlace` / `DecryptInPlace` own this translation; an
+older (pre-#248) jitenv binary cannot read an opaque-ID config, so the
+migration writes a backup of the original before rekeying.
 
 ## Key handling
 
@@ -62,7 +98,9 @@ the fallback is `/tmp/jitenv-<uid>/`, also mode 0700.
 
 ## What the on-disk file looks like
 
-`config.toml` (mode 0600) contains:
+`config.toml` (mode 0600). Note that names are opaque IDs and every
+sensitive field — including the `vars[*]` scalars — is a sealed
+`enc:v2:` envelope:
 
 ```toml
 version = 1
@@ -72,24 +110,30 @@ kdf = "argon2id"
 argon_time       = 3
 argon_memory_kib = 65536
 argon_threads    = 4
-salt   = "base64-of-16-bytes"
-verify = "enc:v1:base64-of-nonce-and-ciphertext"
+salt     = "base64-of-16-bytes"
+verify   = "enc:v2:base64-of-nonce-and-ciphertext"
+name_map = "enc:v2:…"   # sealed source/bag/key ID↔name dictionary (#248)
 
-[sources.local]
+[sources.s_7f3a]          # ID, not "local"
 type = "local"
 
-[secrets.stripe]
-STRIPE_PK = "enc:v1:…"
-STRIPE_SK = "enc:v1:…"
+[secrets.b_91c2]          # ID, not "stripe"
+k_4d10 = "enc:v2:…"       # key ID → sealed value
+k_8e22 = "enc:v2:…"
 
 [[mappings]]
-path = "/home/me/scripts/deploy.sh"
+path = "/home/me/scripts/deploy.sh"   # path/glob shape stays visible
 [[mappings.vars]]
-name   = "STRIPE_SK"
-source = "local"
-ref    = "stripe"
-key    = "STRIPE_SK"
+name   = "enc:v2:…"       # env var name, sealed (#235)
+source = "enc:v2:…"
+ref    = "enc:v2:…"
+key    = "enc:v2:…"
 ```
+
+The mapping *target* (the file path or glob) is intentionally left in
+plaintext — the resolver matches against it on every command and it
+isn't itself secret material. Everything that identifies *what secret
+goes where* is sealed.
 
 Atomic save via `config.AtomicSave` (sibling tempfile + rename, mode
 0600) so the file is never half-written.

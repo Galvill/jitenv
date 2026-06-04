@@ -9,8 +9,9 @@ Four nouns:
 
 - **Source** — a backend that yields secret material. The first-party
   source is `local` (encrypted bags inside `config.toml`); `aws` (AWS
-  Secrets Manager) is also compiled in. New sources plug into
-  `pkg/source` — see [source-plugins.md](source-plugins.md).
+  Secrets Manager) and `vault` (HashiCorp Vault KV v1/v2) are also
+  compiled in. New sources plug into `pkg/source` — see
+  [source-plugins.md](source-plugins.md).
 - **Bag** — for the `local` source only, a named group of `KEY = value`
   pairs. Bags are how you organize related secrets ("stripe", "db",
   "ci"). They live under `[secrets.<bagname>]` in `config.toml` and
@@ -22,6 +23,11 @@ Four nouns:
 - **VarRef** — one entry inside a mapping's `vars` array, naming an
   env var to inject and where to fetch it from.
 
+This is the *logical* shape, with names shown for readability. On
+disk the names are stored as opaque IDs in a sealed `name_map` and the
+sensitive values are `enc:v2:` envelopes — see
+[security.md](security.md) for the real on-disk form.
+
 ```toml
 # Sources are declared once.
 [sources.local]
@@ -32,12 +38,12 @@ type = "aws"
 [sources.prod_aws.params]
 region          = "us-east-1"
 access_key_id   = "AKIA…"
-secret_access_key = "enc:v1:…"   # encrypted at rest
+secret_access_key = "enc:v2:…"   # encrypted at rest
 
 # Bags hold local secret values.
 [secrets.stripe]
-STRIPE_PK = "enc:v1:…"
-STRIPE_SK = "enc:v1:…"
+STRIPE_PK = "enc:v2:…"
+STRIPE_SK = "enc:v2:…"
 
 # Mappings tie a file (or glob) to env vars.
 [[mappings]]

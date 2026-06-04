@@ -35,18 +35,47 @@ echo "$DATABASE_URL"       # empty in your shell &mdash; it never saw the value<
 
     <h3>Features</h3>
     <ul class="features">
-      <li>Per-file env injection via shell hooks (bash + zsh).</li>
-      <li>Encrypted at rest with XChaCha20-Poly1305 + Argon2id.</li>
+      <li>Per-file env injection via shell hooks (bash + zsh + PowerShell&nbsp;7).</li>
+      <li>Encrypted at rest with XChaCha20-Poly1305 + Argon2id; even the
+        source, bag, and key <em>names</em> are sealed on disk.</li>
       <li>Long-lived per-user agent; secrets stay out of the parent shell.</li>
-      <li>Pluggable source backends: <code>local</code> (encrypted bags) and AWS Secrets Manager.</li>
-      <li>Exact-path and glob mappings, with whole-bag expansion.</li>
-      <li>TUI for managing config without hand-editing TOML.</li>
-      <li>Linux and macOS support.</li>
+      <li>Pluggable source backends: <code>local</code> (encrypted bags),
+        <code>aws</code> (AWS Secrets Manager), and <code>vault</code>
+        (HashiCorp Vault KV v1/v2).</li>
+      <li>Exact-path, <code>glob</code>, and directory-scoped
+        <code>cwd_glob</code> mappings, with whole-bag expansion.</li>
+      <li>TUI for managing config without hand-editing TOML &mdash; with a
+        built-in file browser for picking mapping targets.</li>
+      <li>Linux, macOS, and Windows support.</li>
+    </ul>
+
+    <h3>Highlights</h3>
+    <ul class="features">
+      <li><strong><code>jitenv clone</code></strong> &mdash; clone a private
+        HTTPS repo, capture its PAT once, store it encrypted, and wire a
+        <code>cwd_glob</code> mapping so <code>git</code> inside the tree
+        sees the token via <code>GIT_ASKPASS</code> &mdash; never written to
+        <code>.git/config</code> or <code>~/.netrc</code>.</li>
+      <li><strong><code>cwd_glob</code> mappings</strong> &mdash; scope
+        secrets to a directory. Inside a matched tree, a per-shell wrapper
+        injects env vars into the listed <code>commands</code>
+        (e.g. <code>npm</code>, <code>git</code>) at exec time.</li>
+      <li><strong><code>jitenv sync</code></strong> &mdash; push/pull the
+        encrypted config to a pluggable remote (SSH, file) with
+        last-writer-wins and a divergence fence. The remote only ever sees
+        one opaque AEAD blob &mdash; never plaintext.</li>
     </ul>
   </section>
 
   <section id="downloads">
     <h2>Download</h2>
+
+    <p>
+      Stable release:
+      <strong><!-- VERSION:start -->v0.13.0<!-- VERSION:end --></strong>.
+      Pre-built, cosign-signed binaries are published on every tag by
+      goreleaser.
+    </p>
 
     <h3>Pre-built binaries</h3>
     <p>
@@ -55,15 +84,30 @@ echo "$DATABASE_URL"       # empty in your shell &mdash; it never saw the value<
       for:
     </p>
     <ul>
-      <li><code>linux/amd64</code> &mdash; <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
-      <li><code>linux/arm64</code> &mdash; <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
+      <li><code>linux/amd64</code> &amp; <code>linux/arm64</code> &mdash; <code>.tar.gz</code>, <code>.deb</code>, <code>.rpm</code></li>
+      <li><code>darwin/amd64</code> &amp; <code>darwin/arm64</code> &mdash; <code>.tar.gz</code> (Developer&nbsp;ID code-signed + notarized)</li>
+      <li><code>windows/amd64</code> &amp; <code>windows/arm64</code> &mdash; <code>.zip</code></li>
     </ul>
+
+    <h3>macOS &mdash; Homebrew</h3>
+    <pre><code>brew install Galvill/jitenv/jitenv</code></pre>
     <p>
-      macOS (darwin/amd64 and darwin/arm64) is supported in code; binary
-      releases are not yet published, so install via <code>go install</code>
-      or build from source (below). After installing, activate the shell
-      hook once:
+      A Homebrew cask that downloads the notarized tarball for your arch.
+      It ships from a separate post-publish workflow (Apple's notarization
+      latency never blocks the Linux/Windows artifacts), so it typically
+      lands within ~30&nbsp;minutes of a new release.
     </p>
+
+    <h3>Windows &mdash; Chocolatey</h3>
+    <pre><code>choco install jitenv</code></pre>
+    <p>
+      Fetches the official <code>windows_amd64</code> release zip,
+      SHA256-verifies it, and shims both <code>jitenv.exe</code> and
+      <code>jitenv-tui.exe</code> onto <code>%PATH%</code>. PowerShell&nbsp;7+
+      is required for the hook.
+    </p>
+
+    <h3>Activate the shell hook (once)</h3>
     <pre><code>jitenv hook install
 exec $SHELL</code></pre>
 
@@ -98,6 +142,9 @@ make install</code></pre>
       <a href="https://github.com/Galvill/jitenv/blob/main/LICENSE">MIT licensed</a>.
       Source for this site lives in
       <a href="https://github.com/Galvill/jitenv/tree/main/docs"><code>/docs</code></a>.
+    </p>
+    <p class="version-footer">
+      Docs current as of <!-- VERSION:asof:start -->v0.13.0<!-- VERSION:asof:end -->.
     </p>
   </div>
 </footer>
