@@ -91,9 +91,13 @@ func newInputScreen(r *rootModel, opts inputOpts, onCommit func(string) tea.Cmd)
 	}
 }
 
-func (s *inputScreen) Title() string  { return s.title }
-func (s *inputScreen) Status() string { return defaultFormStatus }
-func (s *inputScreen) Init() tea.Cmd  { return nil }
+func (s *inputScreen) Title() string { return s.title }
+
+// capturesText opts this screen out of the root's global 'w' (browse
+// warnings) shortcut while the user is editing a free-text field (#251).
+func (s *inputScreen) capturesText() bool { return true }
+func (s *inputScreen) Status() string     { return defaultFormStatus }
+func (s *inputScreen) Init() tea.Cmd      { return nil }
 
 func (s *inputScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	// pathPickedMsg comes from filePickerScreen via tea.Sequence

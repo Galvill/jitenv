@@ -600,3 +600,110 @@ func TestRunRejectsStaleInjectedMarker(t *testing.T) {
 		t.Errorf("expected agent-down warning (stale marker should NOT bypass); stderr=%q", stderr.String())
 	}
 }
+
+// TestRunCollisionConfigStillRuns is the #251 advisory-only regression:
+// a mapping that sets the SAME env var name from two different sources
+// must still RUN end-to-end (collision detection is a warning, never a
+// behavioral block). It also pins the documented last-wins semantics —
+// the later var in declaration order wins at fetch time — so the warning
+// message ("vars[1] wins at fetch time") matches what actually happens.
+func TestRunCollisionConfigStillRuns(t *testing.T) {
+	bin := buildBinary(t)
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "show.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf 'DB=%s\\n' \"$DATABASE_URL\"\n"), 0755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	pw := []byte("hunter2-collision")
+	if err := config.InitNew(cfgPath, pw); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	key, err := config.DeriveKeyFromMeta(cfg, pw)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
+	// Two distinct sources both offer a DATABASE_URL; the mapping wires
+	// both into the same env var name. This is the collision #251 warns
+	// about. The later var (from "second") must win.
+	cfg.Sources = map[string]config.SourceConfig{
+		"first":  {Type: "noop", Params: map[string]any{"db": "postgres://FIRST"}},
+		"second": {Type: "noop", Params: map[string]any{"db": "postgres://SECOND"}},
+	}
+	cfg.Mappings = []config.Mapping{
+		{Path: scriptPath, Vars: []config.VarRef{
+			{Name: "DATABASE_URL", Source: "first", Ref: "db"},
+			{Name: "DATABASE_URL", Source: "second", Ref: "db"},
+		}},
+	}
+
+	// Sanity: the decrypted config reports exactly one collision warning,
+	// and it survives validation (advisory only).
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("collision config failed validation (must be advisory): %v", err)
+	}
+	if n := len(cfg.Warnings()); n != 1 {
+		t.Fatalf("Warnings() = %d, want 1", n)
+	}
+
+	if err := config.EncryptInPlace(cfg, key); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := config.AtomicSave(cfgPath, cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runtimeDir := shortRuntimeDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	paths, _ := agent.DefaultPaths()
+
+	pr, pw2, _ := os.Pipe()
+	daemon := exec.Command(bin, "__agent", "--key-fd=3", "--config="+cfgPath, "--idle=10s")
+	daemon.ExtraFiles = []*os.File{pr}
+	daemon.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	daemon.Stdout = os.Stdout
+	daemon.Stderr = os.Stderr
+	if err := daemon.Start(); err != nil {
+		t.Fatalf("daemon start: %v", err)
+	}
+	pr.Close()
+	if _, err := pw2.Write(key); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	pw2.Close()
+	defer func() { _ = daemon.Process.Kill() }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	cli := agent.NewClient(paths.Socket)
+	for time.Now().Before(deadline) {
+		if _, err := cli.Status(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	subprocEnv := append(filterEnvKeys(os.Environ(), "CI", "JITENV_NO_NOTICE"),
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"JITENV_CONFIG="+cfgPath,
+	)
+	cmd := exec.Command(bin, "run", scriptPath)
+	cmd.Env = subprocEnv
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run: %v\noutput=%s", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	if !strings.Contains(got, "DB=postgres://SECOND") {
+		t.Fatalf("last-wins broken; want DATABASE_URL from \"second\", got:\n%s", got)
+	}
+	if strings.Contains(got, "postgres://FIRST") {
+		t.Fatalf("earlier collision var should be shadowed, but FIRST appeared:\n%s", got)
+	}
+}

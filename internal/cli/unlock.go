@@ -64,6 +64,18 @@ func newUnlockCmd() *cobra.Command {
 			}
 			idle := parseIdle(cfg.Agent.IdleTimeout)
 
+			// Surface intra-mapping env-var collision warnings (#251)
+			// once at unlock time. Decrypt a throwaway copy so we have
+			// the ID→name-translated view; the spawned daemon also logs
+			// these on its own first load, but the user reads stderr
+			// here, not agent.log. Best-effort: a decrypt failure here
+			// is non-fatal (the daemon will surface real load errors).
+			if wcfg, werr := config.Load(cfgPath); werr == nil {
+				if config.DecryptInPlace(wcfg, key) == nil {
+					emitConfigWarnings(cmd.ErrOrStderr(), wcfg)
+				}
+			}
+
 			if unlockForeground {
 				// Build a real resolver so the foreground agent
 				// actually injects secrets — previously it was started

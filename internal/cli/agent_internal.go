@@ -59,6 +59,21 @@ func newAgentInternalCmd() *cobra.Command {
 				return err
 			}
 
+			// Emit intra-mapping env-var collision warnings (#251) once,
+			// on the daemon's FIRST config load after spawn — not per
+			// fetch request and not on every reload. slog goes to
+			// agent.log; the user-facing copy is printed by `jitenv
+			// unlock`. A re-load + re-decrypt here is cheap relative to
+			// the daemon lifetime and keeps the loadAndBuild closure (also
+			// used on reload) free of side effects.
+			if wcfg, werr := config.Load(cfgArg); werr == nil {
+				if config.DecryptInPlace(wcfg, key) == nil {
+					for _, warn := range wcfg.Warnings() {
+						slog.Warn("config collision", "detail", warn.String())
+					}
+				}
+			}
+
 			paths, err := agent.DefaultPaths()
 			if err != nil {
 				return err

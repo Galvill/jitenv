@@ -23,6 +23,11 @@ func saveCmd(r *rootModel) tea.Cmd {
 			if err := out.Validate(); err != nil {
 				return errorMsg(fmt.Sprintf("validate: %v", err))
 			}
+			// Compute advisory collision warnings (#251) on the still-
+			// decrypted clone, BEFORE encryptForSave seals var.name/source
+			// into envelopes that Warnings() couldn't read. Warnings never
+			// block the save.
+			warnings := out.Warnings()
 			if err := encryptForSave(out, r.key); err != nil {
 				return errorMsg(fmt.Sprintf("encrypt: %v", err))
 			}
@@ -34,7 +39,7 @@ func saveCmd(r *rootModel) tea.Cmd {
 			// config so a subsequent rename/save reuses the same IDs
 			// instead of minting new ones (#248 ID stability).
 			r.cfg.IDMap = out.IDMap
-			return savedMsg{}
+			return savedMsg{warnings: warnings}
 		},
 		func() tea.Msg {
 			_ = pingAgentReload()

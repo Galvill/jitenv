@@ -205,6 +205,11 @@ func runClone(cmd *cobra.Command, args []string, tokenStdin bool, bagOverride st
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("internal: generated config is invalid: %w", err)
 	}
+	// Surface intra-mapping env-var collision warnings (#251) on the
+	// decrypted, ID→name-translated config BEFORE re-encrypting for
+	// save. Advisory only — the clone already succeeded; this never
+	// blocks the write.
+	emitConfigWarnings(cmd.ErrOrStderr(), cfg)
 	if err := saveAndReencrypt(cfgPath, cfg, key); err != nil {
 		return err
 	}

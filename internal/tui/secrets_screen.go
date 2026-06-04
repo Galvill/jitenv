@@ -458,6 +458,10 @@ func (s *kvEditScreen) Title() string {
 func (s *kvEditScreen) Status() string { return defaultFormStatus }
 func (s *kvEditScreen) Init() tea.Cmd  { return nil }
 
+// capturesText opts out of the root's global 'w' shortcut while editing
+// (#251).
+func (s *kvEditScreen) capturesText() bool { return true }
+
 func (s *kvEditScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {

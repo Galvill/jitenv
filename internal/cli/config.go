@@ -89,10 +89,25 @@ func newConfigShowCmd() *cobra.Command {
 }
 
 func newConfigValidateCmd() *cobra.Command {
-	return &cobra.Command{
+	var strict bool
+	c := &cobra.Command{
 		Use:   "validate",
 		Short: "Parse and structurally validate the config",
-		Args:  cobra.NoArgs,
+		Long: `Parse and structurally validate the config.
+
+The structural check (shape, required fields, command-name safety) runs
+WITHOUT the master key, so it stays CI-friendly: no secret is decrypted.
+
+Advisory collision warnings (#251 — two vars in one mapping setting the
+same env var name, where the later one silently wins) require the
+decrypted view, so they are only computed when a passphrase is provided
+on a TTY. In a non-interactive context (no controlling terminal) the
+command skips the passphrase prompt and emits structural results only.
+
+Warnings never fail the command on their own; pass --strict to escalate
+any warning to a non-zero exit (useful in CI once a passphrase is
+available, e.g. via an expect-style wrapper).`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := config.Resolve(configPath)
 			if err != nil {
@@ -110,9 +125,40 @@ func newConfigValidateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "ok")
-			return nil
+
+			// Collision warnings (#251) need the decrypted, ID→name
+			// translated view. Only attempt the passphrase prompt on a
+			// TTY so the no-key structural check (CI's bread and butter)
+			// keeps working unprompted. If we can't decrypt, we simply
+			// don't emit warnings — never an error.
+			if !crypto.HasTerminal() {
+				return nil
+			}
+			pw, err := crypto.PromptPassphrase("jitenv config validate passphrase (warnings; Enter to skip): ", false)
+			if err != nil {
+				// Treat a prompt failure / cancellation as "skip
+				// warnings" — structural validation already passed.
+				return nil
+			}
+			defer zeroBytes(pw)
+			if len(pw) == 0 {
+				return nil
+			}
+			key, err := config.DeriveKeyFromMeta(c, pw)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not decrypt to compute warnings: %v\n", err)
+				return nil
+			}
+			defer zeroBytes(key)
+			if err := config.DecryptInPlace(c, key); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not decrypt to compute warnings: %v\n", err)
+				return nil
+			}
+			return reportConfigWarnings(cmd.ErrOrStderr(), c, strict)
 		},
 	}
+	c.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any advisory warning is found (requires a passphrase to compute)")
+	return c
 }
 
 func runConfigTUI() error {

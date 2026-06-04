@@ -408,6 +408,10 @@ func (s *sourceParamsScreen) Status() string { return defaultFormStatus }
 
 func (s *sourceParamsScreen) Init() tea.Cmd { return nil }
 
+// capturesText opts out of the root's global 'w' shortcut while a source
+// params form field is focused (#251).
+func (s *sourceParamsScreen) capturesText() bool { return true }
+
 func (s *sourceParamsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
