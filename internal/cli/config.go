@@ -132,6 +132,17 @@ available, e.g. via an expect-style wrapper).`,
 			// keeps working unprompted. If we can't decrypt, we simply
 			// don't emit warnings — never an error.
 			if !crypto.HasTerminal() {
+				// The Long help advertises --strict for CI use, so a
+				// caller who passes it deserves to know the strict
+				// check could not run here: with no TTY we can't prompt
+				// for the passphrase, so collision warnings were never
+				// computed. Exit code stays as the no-TTY path's (0) —
+				// the warnings genuinely couldn't be evaluated, so the
+				// right behavior is to tell the user, not hard-fail.
+				if strict {
+					fmt.Fprintln(cmd.ErrOrStderr(),
+						"note: --strict ignored: no TTY available to prompt for the passphrase, so collision warnings were not evaluated")
+				}
 				return nil
 			}
 			pw, err := crypto.PromptPassphrase("jitenv config validate passphrase (warnings; Enter to skip): ", false)
