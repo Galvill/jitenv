@@ -76,6 +76,10 @@ func (s *bagBulkImportScreen) Status() string { return defaultFormStatus }
 
 func (s *bagBulkImportScreen) Init() tea.Cmd { return textarea.Blink }
 
+// capturesText opts out of the root's global 'w' shortcut while the
+// bulk-import textarea is focused (#251).
+func (s *bagBulkImportScreen) capturesText() bool { return true }
+
 func (s *bagBulkImportScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if s.phase == phasePreview {
 		return s.updatePreview(msg)

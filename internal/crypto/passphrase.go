@@ -5,9 +5,20 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"os"
 
 	"golang.org/x/term"
 )
+
+// HasTerminal reports whether there is a controlling terminal available
+// for an interactive passphrase prompt. Callers that want to OPTIONALLY
+// prompt (e.g. `jitenv config validate`, which must stay CI-friendly
+// without a key) check this first so a non-interactive context skips the
+// prompt entirely rather than blocking on /dev/tty. It probes stdin and
+// stdout; CI runners and piped invocations report false.
+func HasTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) || term.IsTerminal(int(os.Stdout.Fd()))
+}
 
 // zeroPassphrase overwrites the bytes of a passphrase slice in place.
 // Used everywhere PromptPassphrase abandons a buffer (mismatched

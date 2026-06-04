@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gv/jitenv/internal/config"
@@ -30,6 +32,12 @@ type rootModel struct {
 
 	flash    string // transient overlay: temporary message in the title bar
 	flashErr bool
+
+	// lastWarnings holds the advisory collision warnings (#251) from the
+	// most recent save, so the user can press 'w' to browse the detail
+	// behind a "saved (N warning(s))" flash. Empty when the last save was
+	// clean.
+	lastWarnings []config.Warning
 
 	// footerHint is a one-line context label rendered in the
 	// footer when non-empty. Used by RunWithMappingTemplate (#179)
@@ -104,9 +112,27 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case savedMsg:
 		r.dirty = false
 		r.savedSinceLastReload = true
-		r.flash = "saved"
+		r.lastWarnings = msg.warnings
+		if n := len(msg.warnings); n > 0 {
+			r.flash = fmt.Sprintf("saved (%d warning%s) — press w to view", n, plural(n))
+		} else {
+			r.flash = "saved"
+		}
 		r.flashErr = false
 		return r, nil
+	}
+
+	// 'w' opens the collision-warnings detail for the most recent save.
+	// Handled here (not per-screen) so it works from any screen, but
+	// suppressed when the top screen captures free-text input (so a
+	// literal 'w' in a field isn't stolen) and only when there are
+	// warnings to show. The warnings screen itself captures text=false,
+	// so pressing 'w' again while viewing is a no-op (already on it).
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "w" && len(r.lastWarnings) > 0 && !screenCapturesText(r.top()) {
+		if _, onWarnings := r.top().(*warningsScreen); !onWarnings {
+			r.push(newWarningsScreen(r, r.lastWarnings))
+			return r, r.top().Init()
+		}
 	}
 
 	if len(r.stack) == 0 {
@@ -161,8 +187,33 @@ type popMsg struct{}
 type popUntilMsg struct{ pred func(screen) bool }
 type pushMsg struct{ s screen }
 type dirtyMsg struct{}
-type savedMsg struct{}
+
+// savedMsg signals a successful save. warnings carries the advisory
+// collision diagnostics (#251) computed on the decrypted snapshot so the
+// root can flash "saved (N warning(s))" and let the user browse them.
+type savedMsg struct{ warnings []config.Warning }
 type statusMsg string
 type errorMsg string
 
 func emit(msg tea.Msg) tea.Cmd { return func() tea.Msg { return msg } }
+
+// textCapturingScreen is implemented by screens that own a focused
+// free-text field. They opt in so the root model can suppress its global
+// single-letter shortcut ('w' → warnings) while the user is typing,
+// rather than stealing the keystroke. Screens that only navigate lists
+// don't implement it.
+type textCapturingScreen interface {
+	capturesText() bool
+}
+
+func screenCapturesText(s screen) bool {
+	t, ok := s.(textCapturingScreen)
+	return ok && t.capturesText()
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}

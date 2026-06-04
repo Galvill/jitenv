@@ -267,6 +267,10 @@ func (s *mappingFormScreen) Title() string {
 func (s *mappingFormScreen) Status() string { return renderHelpStatus() }
 func (s *mappingFormScreen) Init() tea.Cmd  { return nil }
 
+// capturesText opts out of the root's global 'w' shortcut while a
+// mapping form field is focused (#251).
+func (s *mappingFormScreen) capturesText() bool { return true }
+
 func (s *mappingFormScreen) HelpKeys() []helpEntry { return commonNavKeys() }
 func (s *mappingFormScreen) HelpText() string {
 	return `kind:       "path" matches one exact filesystem path.

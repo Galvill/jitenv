@@ -86,6 +86,11 @@ func (s *filePickerScreen) Status() string { return defaultFormStatus }
 
 func (s *filePickerScreen) Init() tea.Cmd { return s.fp.Init() }
 
+// capturesText opts out of the root's global 'w' shortcut so a keypress
+// reaches the picker (which may filter) rather than opening warnings
+// (#251).
+func (s *filePickerScreen) capturesText() bool { return true }
+
 func (s *filePickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
