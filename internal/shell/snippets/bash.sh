@@ -68,6 +68,30 @@ __jitenv_cfg_path() {
         printf '%s' "$__JITENV_CFG_PATH"
     fi
 }
+# Path/glob match anchors (issue #260). `jitenv __chpwd` writes these to
+# a per-shell sidecar whenever the config changes; the DEBUG trap reads
+# them to decide — with ZERO subprocess forks — whether a resolved
+# command could possibly match a `path`/`glob` mapping. Without this the
+# trap forks `jitenv is-mapped` for every command, e.g. every git-prompt
+# command on every prompt. cwd_glob mappings are NOT anchors — those are
+# served by the wrapper shims in $__JITENV_WRAP_DIR, not this path.
+__JITENV_ANCHORS_FILE="${__JITENV_WRAP_DIR%/bin}/match-anchors"
+declare -A __JITENV_EXACT 2>/dev/null
+declare -a __JITENV_PREFIX 2>/dev/null
+__jitenv_load_anchors() {
+    __JITENV_EXACT=()
+    __JITENV_PREFIX=()
+    [[ -r "$__JITENV_ANCHORS_FILE" ]] || return 0
+    local kind val
+    # IFS=tab so values (absolute paths / prefixes) keep any spaces.
+    while IFS=$'\t' read -r kind val; do
+        case "$kind" in
+            E) __JITENV_EXACT["$val"]=1 ;;
+            P) __JITENV_PREFIX+=("$val") ;;
+        esac
+    done < "$__JITENV_ANCHORS_FILE"
+}
+
 # chpwd hook: bash has no native chpwd, so we drive `jitenv __chpwd`
 # from PROMPT_COMMAND. The Go side compares pwd and the config-file
 # mtime against per-shell sidecar state ($__JITENV_RUNTIME_DIR/shells/
@@ -97,6 +121,9 @@ __jitenv_chpwd() {
     # we don't leak a non-zero status into the user's prompt.
     local rc=$?
     [[ $rc -eq 10 ]] && hash -r 2>/dev/null
+    # Refresh the in-shell anchor cache (cheap: a builtin read of a tiny
+    # file, no fork) so the trap's pre-filter tracks config edits.
+    __jitenv_load_anchors
     __JITENV_LAST_PWD="$PWD"
 }
 # Run once at hook-load time so the wrapper dir is populated before
@@ -155,6 +182,14 @@ __jitenv_debug_trap() {
         *" command_not_found_handle "*|*" command_not_found_handler "*) return 0 ;;
     esac
 
+    # Fast path: with no `path`/`glob` mappings the trap can never route
+    # anything (cwd_glob is handled by the PATH wrappers), so skip all
+    # resolution outright — not even a `type -P`. This is what keeps the
+    # prompt cheap for cwd_glob-only / unmapped configs, where the DEBUG
+    # trap otherwise fired a `jitenv is-mapped` fork for every command
+    # bash runs while drawing the prompt. (issue #260)
+    [[ ${#__JITENV_EXACT[@]} -eq 0 && ${#__JITENV_PREFIX[@]} -eq 0 ]] && return 0
+
     local cmd="$BASH_COMMAND"
     local first_raw; first_raw="${cmd%% *}"
     [[ -z "$first_raw" ]] && return 0
@@ -183,6 +218,24 @@ __jitenv_debug_trap() {
         [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]] && return 0
     fi
     [[ ! -f "$resolved" ]] && return 0
+
+    # Pre-filter: only spawn `jitenv is-mapped` when this resolved path
+    # could actually match a path/glob mapping — an exact `path` target,
+    # or under some `glob`'s literal prefix. Everything else (the bulk of
+    # what runs, including a git-prompt's /usr/bin commands) returns here
+    # with no fork. `is-mapped` stays the source of truth for whatever
+    # passes; the prefix test is conservative (necessary condition for a
+    # doublestar match), so it can only ever cause an extra fork that
+    # is-mapped then rejects — never a missed injection. (issue #260)
+    if [[ -z "${__JITENV_EXACT[$resolved]:-}" ]]; then
+        local _maybe= _pfx
+        if (( ${#__JITENV_PREFIX[@]} )); then
+            for _pfx in "${__JITENV_PREFIX[@]}"; do
+                [[ "$resolved" == "$_pfx"* ]] && { _maybe=1; break; }
+            done
+        fi
+        [[ -z "$_maybe" ]] && return 0
+    fi
 
     __jitenv_log "candidate cmd=[$cmd] resolved=[$resolved]"
     jitenv is-mapped "$resolved" >/dev/null 2>&1

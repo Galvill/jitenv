@@ -58,6 +58,27 @@ __jitenv_cfg_path() {
         print -r -- "$__JITENV_CFG_PATH"
     fi
 }
+# Path/glob match anchors (issue #260). See bash.sh for the full
+# rationale: `jitenv __chpwd` writes a per-shell sidecar of the path/glob
+# mapping anchors so the accept-line widget can decide, WITHOUT forking
+# `jitenv is-mapped`, whether a typed command could match. cwd_glob is
+# served by the PATH wrappers, not here.
+__JITENV_ANCHORS_FILE="${__JITENV_WRAP_DIR%/bin}/match-anchors"
+typeset -gA __JITENV_EXACT
+typeset -ga __JITENV_PREFIX
+__jitenv_load_anchors() {
+    __JITENV_EXACT=()
+    __JITENV_PREFIX=()
+    [[ -r "$__JITENV_ANCHORS_FILE" ]] || return 0
+    local kind val
+    while IFS=$'\t' read -r kind val; do
+        case "$kind" in
+            E) __JITENV_EXACT[$val]=1 ;;
+            P) __JITENV_PREFIX+=("$val") ;;
+        esac
+    done < "$__JITENV_ANCHORS_FILE"
+}
+
 # precmd-style hook: fires every time the prompt is about to redraw,
 # including after a cd. The Go side compares pwd and the config-file
 # mtime against per-shell sidecar state ($__JITENV_RUNTIME_DIR/shells/
@@ -79,6 +100,8 @@ __jitenv_chpwd() {
     # assignment resets it so we don't leak a non-zero status.
     local rc=$?
     [[ $rc -eq 10 ]] && rehash
+    # Refresh the in-shell anchor cache (cheap builtin read, no fork).
+    __jitenv_load_anchors
     __JITENV_LAST_PWD="$PWD"
 }
 typeset -ga precmd_functions
@@ -110,6 +133,22 @@ fi
 # Set JITENV_HOOK_DEBUG=1 to log each branch the widget takes.
 __jitenv_log() {
     [[ -n "${JITENV_HOOK_DEBUG:-}" ]] && printf 'jitenv-hook: %s\n' "$*" >&2
+}
+
+# __jitenv_anchor_match returns 0 if the resolved path could match a
+# path/glob mapping (an exact target, or under some glob's literal
+# prefix), so the widget only forks `jitenv is-mapped` for plausible
+# candidates. Empty anchor sets (no path/glob mappings — e.g. cwd_glob
+# only) never match → no fork. Conservative: a prefix hit can only cause
+# an extra is-mapped fork that then declines, never a missed injection.
+# (issue #260)
+__jitenv_anchor_match() {
+    local r="$1" pfx
+    [[ -n "${__JITENV_EXACT[$r]}" ]] && return 0
+    for pfx in "${__JITENV_PREFIX[@]}"; do
+        [[ "$r" == "$pfx"* ]] && return 0
+    done
+    return 1
 }
 
 __jitenv_accept_line() {
@@ -149,7 +188,7 @@ __jitenv_accept_line() {
                 fi
                 ;;
         esac
-        if [[ -n "$resolved" && -f "$resolved" ]]; then
+        if [[ -n "$resolved" && -f "$resolved" ]] && __jitenv_anchor_match "$resolved"; then
             __jitenv_log "candidate cmd=[$BUFFER] resolved=[$resolved]"
             jitenv is-mapped "$resolved" >/dev/null 2>&1
             local rc=$?
