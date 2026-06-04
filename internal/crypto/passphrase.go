@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bufio"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -66,4 +67,31 @@ func PromptPassphrase(prompt string, confirm bool) ([]byte, error) {
 		return nil, errors.New("empty passphrase")
 	}
 	return pw, nil
+}
+
+// PromptTTYLine writes prompt to the controlling terminal and reads one
+// echoed line back from it, returning the line without its trailing
+// newline. Like PromptPassphrase it talks directly to /dev/tty
+// (CONIN$/CONOUT$ on Windows) rather than os.Stdin, so an interactive
+// prompt still works while stdin is occupied by piped import data —
+// that's exactly the `jitenv bag import --stdin --on-collision=ask`
+// case. The input is NOT secret (a y/n answer), so it is echoed.
+func PromptTTYLine(prompt string) (string, error) {
+	in, out, err := openTTY()
+	if err != nil {
+		return "", fmt.Errorf("open tty: %w", err)
+	}
+	defer in.Close()
+	if out != in {
+		defer out.Close()
+	}
+	fmt.Fprint(out, prompt)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
+		line = line[:len(line)-1]
+	}
+	return line, nil
 }

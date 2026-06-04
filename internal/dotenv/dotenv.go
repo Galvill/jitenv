@@ -1,29 +1,33 @@
-package tui
+// Package dotenv parses dotenv-style KEY=VALUE blocks into pairs. It is
+// the single shared parser used by both the TUI bulk-import screen and
+// the `jitenv bag import` CLI command (#70, #250) so the two entry
+// points accept exactly the same syntax.
+package dotenv
 
 import (
 	"fmt"
 	"strings"
 )
 
-// dotenvPair is one KEY = VALUE pair parsed from a dotenv-style block.
-type dotenvPair struct {
+// Pair is one KEY = VALUE pair parsed from a dotenv-style block.
+type Pair struct {
 	Key   string
 	Value string
 	Line  int // 1-based source line for error reporting
 }
 
-// dotenvError is a single parse error tied to a source line. It exists
+// ParseError is a single parse error tied to a source line. It exists
 // as its own type so callers can render line numbers cleanly.
-type dotenvError struct {
+type ParseError struct {
 	Line int
 	Msg  string
 }
 
-func (e dotenvError) Error() string {
+func (e ParseError) Error() string {
 	return fmt.Sprintf("line %d: %s", e.Line, e.Msg)
 }
 
-// parseDotenv parses dotenv-style content into pairs. Recognised syntax:
+// Parse parses dotenv-style content into pairs. Recognised syntax:
 //
 //	KEY=VALUE                   bare value, no surrounding whitespace required
 //	KEY="quoted value"          double-quoted; supports \n \r \t \\ \" escapes
@@ -38,9 +42,9 @@ func (e dotenvError) Error() string {
 //
 // On a duplicate key inside the same input the later value wins; the
 // caller decides what to do with collisions against the existing bag.
-func parseDotenv(input string) ([]dotenvPair, []dotenvError) {
-	var pairs []dotenvPair
-	var errs []dotenvError
+func Parse(input string) ([]Pair, []ParseError) {
+	var pairs []Pair
+	var errs []ParseError
 
 	// Normalise line endings so a Windows-style \r\n paste behaves like
 	// a Unix one. We split on \n then strip a trailing \r per line.
@@ -60,27 +64,27 @@ func parseDotenv(input string) ([]dotenvPair, []dotenvError) {
 
 		eq := strings.IndexByte(line, '=')
 		if eq < 0 {
-			errs = append(errs, dotenvError{Line: lineNo, Msg: "no '=' separator"})
+			errs = append(errs, ParseError{Line: lineNo, Msg: "no '=' separator"})
 			continue
 		}
 
 		key := strings.TrimSpace(line[:eq])
 		if key == "" {
-			errs = append(errs, dotenvError{Line: lineNo, Msg: "empty key"})
+			errs = append(errs, ParseError{Line: lineNo, Msg: "empty key"})
 			continue
 		}
 		if !isValidEnvKey(key) {
-			errs = append(errs, dotenvError{Line: lineNo, Msg: fmt.Sprintf("invalid key %q", key)})
+			errs = append(errs, ParseError{Line: lineNo, Msg: fmt.Sprintf("invalid key %q", key)})
 			continue
 		}
 
 		rawVal := strings.TrimLeft(line[eq+1:], " \t")
 		val, err := unquoteValue(rawVal)
 		if err != nil {
-			errs = append(errs, dotenvError{Line: lineNo, Msg: err.Error()})
+			errs = append(errs, ParseError{Line: lineNo, Msg: err.Error()})
 			continue
 		}
-		pairs = append(pairs, dotenvPair{Key: key, Value: val, Line: lineNo})
+		pairs = append(pairs, Pair{Key: key, Value: val, Line: lineNo})
 	}
 	return pairs, errs
 }

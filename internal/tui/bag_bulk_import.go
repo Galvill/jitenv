@@ -2,11 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/gv/jitenv/internal/dotenv"
 )
 
 // bagBulkImportScreen lets the user paste a block of dotenv-style
@@ -36,9 +39,9 @@ type bagBulkImportScreen struct {
 	btnFocus int
 	buttons  []button
 
-	parseErrs  []dotenvError
-	pairs      []dotenvPair // last parse result (in input order, dedup'd)
-	collisions []string     // keys present in both pairs and existing bag
+	parseErrs  []dotenv.ParseError
+	pairs      []dotenv.Pair // last parse result (in input order, dedup'd)
+	collisions []string      // keys present in both pairs and existing bag
 }
 
 const (
@@ -61,7 +64,7 @@ func newBagBulkImportScreen(r *rootModel, bag string) screen {
 		phase:    phaseEdit,
 		area:     ta,
 		btnFocus: -1,
-		buttons:  []button{newButton("Parse"), newButton("Back")},
+		buttons:  []button{newButton("Parse"), newButton("Load from file"), newButton("Back")},
 	}
 }
 
@@ -83,6 +86,13 @@ func (s *bagBulkImportScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 // ----- edit phase --------------------------------------------------
 
 func (s *bagBulkImportScreen) updateEdit(msg tea.Msg) (screen, tea.Cmd) {
+	// pathPickedMsg arrives from filePickerScreen (#223) after the user
+	// picks a .env file via "Load from file". Read it and run the shared
+	// parser on its contents — then fall through to the SAME preview /
+	// collision-resolution / apply flow as a pasted block.
+	if pm, ok := msg.(pathPickedMsg); ok {
+		return s, s.loadFromFile(pm.path)
+	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "esc":
@@ -98,7 +108,9 @@ func (s *bagBulkImportScreen) updateEdit(msg tea.Msg) (screen, tea.Cmd) {
 				label := s.buttons[s.btnFocus].label
 				switch label {
 				case "Parse":
-					return s, s.runParse()
+					return s, s.runParse(s.area.Value())
+				case "Load from file":
+					return s, emit(pushMsg{s: newFilePickerScreen(s.root, pickFile, pickerStartDir(""))})
 				case "Back":
 					return s, emit(popMsg{})
 				}
@@ -143,11 +155,26 @@ func (s *bagBulkImportScreen) advance(dir int) {
 	s.area.Focus()
 }
 
-// runParse parses the textarea contents. On success it advances to the
+// loadFromFile reads the picked file and runs the shared parser on its
+// contents, reusing runParse so a file import lands in the exact same
+// preview / collision-resolution / apply flow as a pasted block. A read
+// failure keeps the user on the edit screen with an error flash.
+func (s *bagBulkImportScreen) loadFromFile(path string) tea.Cmd {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return emit(errorMsg(fmt.Sprintf("read %s: %v", path, err)))
+	}
+	// Mirror the loaded contents into the textarea so the user can see
+	// (and tweak) what was imported before applying.
+	s.area.SetValue(string(data))
+	return s.runParse(string(data))
+}
+
+// runParse parses the given input. On success it advances to the
 // preview phase; on parse errors it stays on the edit screen and lets
 // the user see / fix the errors.
-func (s *bagBulkImportScreen) runParse() tea.Cmd {
-	pairs, errs := parseDotenv(s.area.Value())
+func (s *bagBulkImportScreen) runParse(input string) tea.Cmd {
+	pairs, errs := dotenv.Parse(input)
 	s.parseErrs = errs
 	if len(errs) > 0 {
 		s.pairs = nil
@@ -166,7 +193,7 @@ func (s *bagBulkImportScreen) runParse() tea.Cmd {
 	for i, p := range pairs {
 		dedup[p.Key] = i
 	}
-	kept := make([]dotenvPair, 0, len(dedup))
+	kept := make([]dotenv.Pair, 0, len(dedup))
 	for i, p := range pairs {
 		if dedup[p.Key] == i {
 			kept = append(kept, p)
@@ -219,7 +246,7 @@ func (s *bagBulkImportScreen) updatePreview(msg tea.Msg) (screen, tea.Cmd) {
 			case "Back to edit":
 				s.phase = phaseEdit
 				s.btnFocus = -1
-				s.buttons = []button{newButton("Parse"), newButton("Back")}
+				s.buttons = []button{newButton("Parse"), newButton("Load from file"), newButton("Back")}
 				s.area.Focus()
 				return s, nil
 			}
@@ -296,7 +323,7 @@ func (s *bagBulkImportScreen) viewEdit() string {
 	var b strings.Builder
 	b.WriteString(labelStyle.Render("Paste KEY=VALUE pairs to import into "+s.bag) + "\n")
 	b.WriteString(dimText("Supported: KEY=value, KEY=\"quoted\", KEY='single', export KEY=value, # comments.") + "\n")
-	b.WriteString(dimText("Tab moves to the buttons. Use Parse to validate, then Apply to merge.") + "\n\n")
+	b.WriteString(dimText("Tab moves to the buttons. Parse validates the paste, or Load from file picks a .env. Then Apply to merge.") + "\n\n")
 	b.WriteString(s.area.View() + "\n\n")
 	if len(s.parseErrs) > 0 {
 		b.WriteString(errorStyle.Render(fmt.Sprintf("%d parse error(s):", len(s.parseErrs))) + "\n")

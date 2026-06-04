@@ -1,4 +1,4 @@
-package tui
+package dotenv
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseDotenv_Simple(t *testing.T) {
-	pairs, errs := parseDotenv("FOO=bar\nBAZ=qux\n")
+	pairs, errs := Parse("FOO=bar\nBAZ=qux\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -22,7 +22,7 @@ func TestParseDotenv_Simple(t *testing.T) {
 }
 
 func TestParseDotenv_DoubleQuoted(t *testing.T) {
-	pairs, errs := parseDotenv(`FOO="hello world"` + "\n" + `BAR="line1\nline2"` + "\n")
+	pairs, errs := Parse(`FOO="hello world"` + "\n" + `BAR="line1\nline2"` + "\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -35,7 +35,7 @@ func TestParseDotenv_DoubleQuoted(t *testing.T) {
 }
 
 func TestParseDotenv_DoubleQuoted_EscapedQuote(t *testing.T) {
-	pairs, errs := parseDotenv(`KEY="he said \"hi\""` + "\n")
+	pairs, errs := Parse(`KEY="he said \"hi\""` + "\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -45,7 +45,7 @@ func TestParseDotenv_DoubleQuoted_EscapedQuote(t *testing.T) {
 }
 
 func TestParseDotenv_SingleQuoted_NoEscape(t *testing.T) {
-	pairs, errs := parseDotenv(`FOO='no \n escape here'` + "\n")
+	pairs, errs := Parse(`FOO='no \n escape here'` + "\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -55,7 +55,7 @@ func TestParseDotenv_SingleQuoted_NoEscape(t *testing.T) {
 }
 
 func TestParseDotenv_ExportPrefix(t *testing.T) {
-	pairs, errs := parseDotenv("export FOO=bar\nexport\tBAZ=qux\n")
+	pairs, errs := Parse("export FOO=bar\nexport\tBAZ=qux\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -69,7 +69,7 @@ func TestParseDotenv_ExportPrefix(t *testing.T) {
 
 func TestParseDotenv_ExportLookalike(t *testing.T) {
 	// A key literally named "exported" is not the export prefix.
-	pairs, errs := parseDotenv("exported=1\n")
+	pairs, errs := Parse("exported=1\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -87,7 +87,7 @@ FOO=bar
 # trailing comment
 BAZ=qux
 `
-	pairs, errs := parseDotenv(input)
+	pairs, errs := Parse(input)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -97,7 +97,7 @@ BAZ=qux
 }
 
 func TestParseDotenv_InlineCommentOnBareValue(t *testing.T) {
-	pairs, errs := parseDotenv("FOO=bar # trailing\n")
+	pairs, errs := Parse("FOO=bar # trailing\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -107,7 +107,7 @@ func TestParseDotenv_InlineCommentOnBareValue(t *testing.T) {
 }
 
 func TestParseDotenv_HashInsideQuotes(t *testing.T) {
-	pairs, errs := parseDotenv(`FOO="a # not a comment"` + "\n")
+	pairs, errs := Parse(`FOO="a # not a comment"` + "\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -117,7 +117,7 @@ func TestParseDotenv_HashInsideQuotes(t *testing.T) {
 }
 
 func TestParseDotenv_Malformed_NoEquals(t *testing.T) {
-	_, errs := parseDotenv("FOO=bar\nthis is not a pair\nBAZ=qux\n")
+	_, errs := Parse("FOO=bar\nthis is not a pair\nBAZ=qux\n")
 	if len(errs) != 1 {
 		t.Fatalf("want 1 err, got %d (%v)", len(errs), errs)
 	}
@@ -130,7 +130,7 @@ func TestParseDotenv_Malformed_NoEquals(t *testing.T) {
 }
 
 func TestParseDotenv_Malformed_EmptyKey(t *testing.T) {
-	_, errs := parseDotenv("=value\n")
+	_, errs := Parse("=value\n")
 	if len(errs) != 1 {
 		t.Fatalf("want 1 err, got %d", len(errs))
 	}
@@ -140,7 +140,7 @@ func TestParseDotenv_Malformed_EmptyKey(t *testing.T) {
 }
 
 func TestParseDotenv_Malformed_InvalidKey(t *testing.T) {
-	_, errs := parseDotenv("9FOO=bar\n")
+	_, errs := Parse("9FOO=bar\n")
 	if len(errs) != 1 {
 		t.Fatalf("want 1 err, got %d", len(errs))
 	}
@@ -150,7 +150,7 @@ func TestParseDotenv_Malformed_InvalidKey(t *testing.T) {
 }
 
 func TestParseDotenv_UnterminatedQuote(t *testing.T) {
-	_, errs := parseDotenv(`FOO="oops` + "\n")
+	_, errs := Parse(`FOO="oops` + "\n")
 	if len(errs) != 1 {
 		t.Fatalf("want 1 err, got %d", len(errs))
 	}
@@ -160,7 +160,7 @@ func TestParseDotenv_UnterminatedQuote(t *testing.T) {
 }
 
 func TestParseDotenv_Empty(t *testing.T) {
-	pairs, errs := parseDotenv("")
+	pairs, errs := Parse("")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -170,7 +170,7 @@ func TestParseDotenv_Empty(t *testing.T) {
 }
 
 func TestParseDotenv_WhitespaceOnly(t *testing.T) {
-	pairs, errs := parseDotenv("   \n\t\n\n")
+	pairs, errs := Parse("   \n\t\n\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -180,7 +180,7 @@ func TestParseDotenv_WhitespaceOnly(t *testing.T) {
 }
 
 func TestParseDotenv_CRLFEndings(t *testing.T) {
-	pairs, errs := parseDotenv("FOO=bar\r\nBAZ=qux\r\n")
+	pairs, errs := Parse("FOO=bar\r\nBAZ=qux\r\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -190,7 +190,7 @@ func TestParseDotenv_CRLFEndings(t *testing.T) {
 }
 
 func TestParseDotenv_TrimsTrailingWhitespaceOnBare(t *testing.T) {
-	pairs, errs := parseDotenv("FOO=bar   \n")
+	pairs, errs := Parse("FOO=bar   \n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -200,7 +200,7 @@ func TestParseDotenv_TrimsTrailingWhitespaceOnBare(t *testing.T) {
 }
 
 func TestParseDotenv_DuplicateKeyLaterWins(t *testing.T) {
-	pairs, errs := parseDotenv("FOO=one\nFOO=two\n")
+	pairs, errs := Parse("FOO=one\nFOO=two\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
@@ -214,7 +214,7 @@ func TestParseDotenv_DuplicateKeyLaterWins(t *testing.T) {
 }
 
 func TestParseDotenv_EmptyValueAllowed(t *testing.T) {
-	pairs, errs := parseDotenv("FOO=\n")
+	pairs, errs := Parse("FOO=\n")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
