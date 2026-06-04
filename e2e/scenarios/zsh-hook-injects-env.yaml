@@ -77,8 +77,11 @@ steps:
     # it contains no shell-special characters, and zsh-quoted when it
     # does. A bare /home/jitenv/... path qualifies for the unquoted
     # form, so the rewritten BUFFER lacks the double-quotes the
-    # original eval-style snippet always emitted.
-    assert_stdout_contains: 'BUFFER=jitenv run /home/jitenv/scripts/showz.sh'
+    # original eval-style snippet always emitted. The leading binary is
+    # the lightweight `jitenv-hook` when installed (its absolute path) or
+    # bare `jitenv` otherwise (#263), so assert only the binary-agnostic
+    # tail.
+    assert_stdout_contains: 'run /home/jitenv/scripts/showz.sh'
 
   # End-to-end via the rewritten BUFFER: run it through eval inside
   # zsh and inspect the script's stdout for the injected bag values.
