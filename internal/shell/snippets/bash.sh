@@ -109,6 +109,30 @@ __jitenv_chpwd() {
     # startup file (e.g. ~/.profile's `~/.local/bin` prepend) shoved
     # it back (#224).
     __jitenv_ensure_path
+
+    local base="${__JITENV_WRAP_DIR%/bin}"
+    # Per-command injection marker (#182): drop it so the next typed
+    # command re-injects from scratch. The `[[ -e ]]` test is a builtin
+    # (no fork); `rm` only runs right after a mapped command actually set
+    # the marker, never in the steady state.
+    [[ -e "$base/injected" ]] && command rm -f "$base/injected" 2>/dev/null
+
+    # In-shell short-circuit (#263): skip the `jitenv-hook __chpwd` fork
+    # entirely when neither the cwd nor the config changed since our last
+    # reconcile. A single fork/exec is ~17ms on WSL2, so forking every
+    # prompt just to learn "nothing changed" is the dominant prompt cost.
+    # `last-mtime` is the stamp jitenv writes on every reconcile; bash's
+    # `-nt` is whole-second, so a config edit in the SAME wall-second as
+    # the last reconcile is picked up on the next cd rather than the next
+    # prompt (never wrong — a newly added mapping just activates a beat
+    # late). The Go side keeps the authoritative nanosecond check for when
+    # we DO fork. No config / no stamp yet → fall through and fork.
+    local cfg="${JITENV_CONFIG:-$__JITENV_CFG_PATH}"
+    if [[ "$PWD" == "${__JITENV_LAST_PWD-}" && -f "$base/last-mtime" \
+          && ! "$cfg" -nt "$base/last-mtime" ]]; then
+        return 0
+    fi
+
     # No 2>/dev/null on purpose: the chpwd subcommand is silent
     # in normal operation (it only writes to stderr when
     # JITENV_HOOK_DEBUG is set). Swallowing stderr here would
@@ -127,7 +151,8 @@ __jitenv_chpwd() {
     local rc=$?
     [[ $rc -eq 10 ]] && hash -r 2>/dev/null
     # Refresh the in-shell anchor cache (cheap: a builtin read of a tiny
-    # file, no fork) so the trap's pre-filter tracks config edits.
+    # file, no fork) — only after a reconcile, since anchors change only
+    # when the config does.
     __jitenv_load_anchors
     __JITENV_LAST_PWD="$PWD"
 }

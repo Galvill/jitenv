@@ -93,6 +93,24 @@ __jitenv_chpwd() {
     # Keep the wrap dir at the front of PATH even if a downstream
     # startup file (e.g. ~/.zprofile prepends) shoved it back (#224).
     __jitenv_ensure_path
+
+    local base="${__JITENV_WRAP_DIR%/bin}"
+    # Per-command injection marker (#182): builtin test; rm only after a
+    # mapped command actually set it. See bash.sh.
+    [[ -e "$base/injected" ]] && command rm -f "$base/injected" 2>/dev/null
+
+    # In-shell short-circuit (#263): skip the fork when neither cwd nor
+    # config changed since the last reconcile. A fork/exec is ~17ms on
+    # WSL2, so forking every prompt to learn "nothing changed" is the main
+    # prompt cost. `-nt` is whole-second; a same-wall-second config edit
+    # is caught on the next cd, not the next prompt (never wrong). See
+    # bash.sh for the full rationale.
+    local cfg="${JITENV_CONFIG:-$__JITENV_CFG_PATH}"
+    if [[ "$PWD" == "${__JITENV_LAST_PWD-}" && -f "$base/last-mtime" \
+          && ! "$cfg" -nt "$base/last-mtime" ]]; then
+        return 0
+    fi
+
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
     "$__JITENV_BIN" __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
     # Exit 10 means a wrapper was added or removed → rebuild zsh's
@@ -103,7 +121,8 @@ __jitenv_chpwd() {
     # assignment resets it so we don't leak a non-zero status.
     local rc=$?
     [[ $rc -eq 10 ]] && rehash
-    # Refresh the in-shell anchor cache (cheap builtin read, no fork).
+    # Refresh the in-shell anchor cache (cheap builtin read, no fork) —
+    # only after a reconcile, since anchors change only when config does.
     __jitenv_load_anchors
     __JITENV_LAST_PWD="$PWD"
 }
