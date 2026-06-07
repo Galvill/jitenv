@@ -69,9 +69,25 @@ __jitenv_cfg_path() {
 __JITENV_ANCHORS_FILE="${__JITENV_WRAP_DIR%/bin}/match-anchors"
 typeset -gA __JITENV_EXACT
 typeset -ga __JITENV_PREFIX
+# Whether a bare command could resolve (via $PATH) to a mapped file —
+# gates the widget's bare-name `whence -p`. See bash.sh (#263).
+typeset -g __JITENV_BARENAME_ACTIVE=0
+
+# $PATH minus WSL2 Windows mounts (/mnt/*) so the bare-name `whence -p`
+# never stats the slow 9P filesystem. See bash.sh (#263).
+__jitenv_native_path() {
+    local d
+    __JITENV_NATIVE_PATH=
+    for d in "${(s|:|)PATH}"; do
+        case "$d" in /mnt/*) continue ;; esac
+        __JITENV_NATIVE_PATH="${__JITENV_NATIVE_PATH:+$__JITENV_NATIVE_PATH:}$d"
+    done
+}
+
 __jitenv_load_anchors() {
     __JITENV_EXACT=()
     __JITENV_PREFIX=()
+    __JITENV_BARENAME_ACTIVE=0
     [[ -r "$__JITENV_ANCHORS_FILE" ]] || return 0
     local kind val
     while IFS=$'\t' read -r kind val; do
@@ -80,6 +96,24 @@ __jitenv_load_anchors() {
             P) __JITENV_PREFIX+=("$val") ;;
         esac
     done < "$__JITENV_ANCHORS_FILE"
+
+    # See bash.sh: a bare command can only match an exact anchor whose dir
+    # is on $PATH, or a glob whose prefix overlaps a $PATH dir. If none do,
+    # the widget skips the bare-name resolve. /mnt/* ignored. (#263)
+    local d pd p
+    typeset -A _pd
+    for d in "${(s|:|)PATH}"; do
+        case "$d" in /mnt/*) continue ;; esac
+        _pd[$d]=1
+    done
+    for pd in "${(@k)__JITENV_EXACT}"; do
+        if [[ -n "${_pd[${pd:h}]}" ]]; then __JITENV_BARENAME_ACTIVE=1; return 0; fi
+    done
+    for p in "${__JITENV_PREFIX[@]}"; do
+        for d in "${(@k)_pd}"; do
+            if [[ "$d/" == "$p"* || "$p" == "$d/"* ]]; then __JITENV_BARENAME_ACTIVE=1; return 0; fi
+        done
+    done
 }
 
 # precmd-style hook: fires every time the prompt is about to redraw,
@@ -196,17 +230,19 @@ __jitenv_accept_line() {
                 ;;
             *)
                 # Bare name → resolve through $PATH so `path`/`glob`
-                # mappings fire on PATH-invoked commands too, not just
-                # explicit-path ones. `whence -p` reports only a real
-                # executable file (skips builtins, aliases, functions,
-                # and typos, which yield an empty result → run normally).
-                # If it resolves to a cwd_glob wrapper, the wrapper shim
-                # already calls is-mapped itself, so don't double-dispatch
-                # — leave resolved empty and let the wrapper handle it.
-                # (issue #237)
-                resolved="$(whence -p -- "$first" 2>/dev/null)"
-                if [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]]; then
-                    resolved=""
+                # mappings fire on PATH-invoked commands too (issue #237).
+                # Skip unless an anchor is reachable via $PATH, and resolve
+                # through $PATH minus the WSL2 /mnt/* (9P) mounts — see
+                # bash.sh for the rationale (issue #263). `whence -p`
+                # reports only a real executable file (skips builtins,
+                # aliases, functions, typos → empty → run normally). A
+                # cwd_glob wrapper hit is left empty so the shim handles it.
+                if [[ ${__JITENV_BARENAME_ACTIVE:-0} -eq 1 ]]; then
+                    __jitenv_native_path
+                    resolved="$(PATH="$__JITENV_NATIVE_PATH" whence -p -- "$first" 2>/dev/null)"
+                    if [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]]; then
+                        resolved=""
+                    fi
                 fi
                 ;;
         esac

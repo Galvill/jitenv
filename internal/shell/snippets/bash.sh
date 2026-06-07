@@ -83,9 +83,28 @@ __jitenv_cfg_path() {
 __JITENV_ANCHORS_FILE="${__JITENV_WRAP_DIR%/bin}/match-anchors"
 declare -A __JITENV_EXACT 2>/dev/null
 declare -a __JITENV_PREFIX 2>/dev/null
+# Whether a BARE command could ever resolve (via $PATH) to a mapped file.
+# Recomputed by __jitenv_load_anchors; gates the trap's bare-name branch
+# so it doesn't `type -P` (walk $PATH) when nothing could match. (#263)
+__JITENV_BARENAME_ACTIVE=0
+
+# __jitenv_native_path sets __JITENV_NATIVE_PATH to $PATH with the WSL2
+# Windows mounts (/mnt/*) stripped, so `type -P` in the trap never stats
+# the slow 9P filesystem. path/glob mappings are native-fs files, so a
+# bare command that maps can always still be found. No fork. (#263)
+__jitenv_native_path() {
+    local d IFS=:
+    __JITENV_NATIVE_PATH=
+    for d in $PATH; do
+        case "$d" in /mnt/*) continue ;; esac
+        __JITENV_NATIVE_PATH="${__JITENV_NATIVE_PATH:+$__JITENV_NATIVE_PATH:}$d"
+    done
+}
+
 __jitenv_load_anchors() {
     __JITENV_EXACT=()
     __JITENV_PREFIX=()
+    __JITENV_BARENAME_ACTIVE=0
     [[ -r "$__JITENV_ANCHORS_FILE" ]] || return 0
     local kind val
     # IFS=tab so values (absolute paths / prefixes) keep any spaces.
@@ -95,6 +114,29 @@ __jitenv_load_anchors() {
             P) __JITENV_PREFIX+=("$val") ;;
         esac
     done < "$__JITENV_ANCHORS_FILE"
+
+    # A bare command resolves to <pathdir>/<name>, so it can only match an
+    # exact anchor whose dir is on $PATH, or a glob whose literal prefix
+    # overlaps a $PATH dir. If none do, the trap can skip the bare-name
+    # resolve entirely — that's what keeps a git-prompt cheap on WSL2,
+    # where each `type -P` would otherwise stat ~25 slow /mnt/* (9P) dirs.
+    # /mnt/* entries are ignored here too (mappings are native files). (#263)
+    local d pd p
+    local -A _pd=()
+    local IFS=:
+    for d in $PATH; do
+        case "$d" in /mnt/*) continue ;; esac
+        _pd["$d"]=1
+    done
+    IFS=$' \t\n'
+    for pd in "${!__JITENV_EXACT[@]}"; do
+        [[ -n "${_pd["${pd%/*}"]:-}" ]] && { __JITENV_BARENAME_ACTIVE=1; return 0; }
+    done
+    for p in "${__JITENV_PREFIX[@]}"; do
+        for d in "${!_pd[@]}"; do
+            [[ "$d/" == "$p"* || "$p" == "$d/"* ]] && { __JITENV_BARENAME_ACTIVE=1; return 0; }
+        done
+    done
 }
 
 # chpwd hook: bash has no native chpwd, so we drive `jitenv __chpwd`
@@ -237,10 +279,22 @@ __jitenv_debug_trap() {
     else
         # Bare name → resolve through $PATH so `path`/`glob` mappings fire
         # on PATH-invoked commands too, not just explicit-path ones.
+        # (issue #237)
+        #
+        # Skip entirely unless an anchor is actually reachable via $PATH
+        # (see __jitenv_load_anchors). A bare command can only resolve to a
+        # mapped file whose dir is on $PATH; when none is, resolving here is
+        # pure waste — and on WSL2 `type -P` would stat every /mnt/* (9P)
+        # $PATH entry for each keyword/command a git-prompt runs, which is
+        # what made prompts hang for tens of seconds. (issue #263)
+        [[ ${__JITENV_BARENAME_ACTIVE:-0} -eq 1 ]] || return 0
+        # Resolve through $PATH minus the WSL2 /mnt/* (9P) mounts so even
+        # the active case never stats the slow Windows filesystem.
         # `type -P` only reports a real executable file (skips builtins,
         # aliases, functions, and typos, which yield an empty result →
-        # run normally). (issue #237)
-        resolved="$(builtin type -P -- "$first" 2>/dev/null)"
+        # run normally).
+        __jitenv_native_path
+        resolved="$(PATH="$__JITENV_NATIVE_PATH" builtin type -P -- "$first" 2>/dev/null)"
         [[ -z "$resolved" ]] && return 0
         # If the name resolved to a cwd_glob wrapper, the wrapper shim
         # already calls is-mapped itself — routing it through here too
