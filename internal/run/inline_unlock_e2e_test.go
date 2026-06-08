@@ -99,13 +99,13 @@ func TestRunInlineUnlock(t *testing.T) {
 	mu <- ""
 	go func() {
 		buf := make([]byte, 4096)
-		acc := ""
+		var acc strings.Builder
 		for {
 			n, rerr := ptmx.Read(buf)
 			if n > 0 {
-				acc += string(buf[:n])
+				acc.Write(buf[:n])
 				<-mu
-				mu <- acc
+				mu <- acc.String()
 			}
 			if rerr != nil {
 				return
