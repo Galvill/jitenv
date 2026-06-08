@@ -81,7 +81,8 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	pw.Close()
 
 	// Wait for the socket to appear, indicating Listen succeeded.
-	deadline := time.Now().Add(3 * time.Second)
+	timeout := spawnTimeout()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(paths.Socket); err == nil {
 			// Detach from the child completely.
@@ -95,5 +96,7 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
-	return errors.New("agent did not start within 3s; check ${XDG_RUNTIME_DIR}/jitenv/agent.log")
+	return fmt.Errorf("agent did not start within %s "+
+		"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
+		"check ${XDG_RUNTIME_DIR}/jitenv/agent.log", timeout)
 }

@@ -12,13 +12,17 @@ three options at the countdown prompt without leaving the command:
 - **`u`** — unlock inline. jitenv prompts for your passphrase, starts
   the agent in the background, re-fetches the env vars, and execs your
   command *with* them injected. This is the fast path.
-- **Enter** — continue the command now, with no env injection.
+- **Any other key** (Enter, Space, …) — continue the command now, with
+  no env injection.
 - **Ctrl+C** — abort the command.
 
-Or just run `jitenv unlock` ahead of time. If unlock itself fails
-with "agent did not start within 3s", read the agent log — by
-default it's at `${XDG_RUNTIME_DIR}/jitenv/agent.log`, and at
-`/tmp/jitenv-<uid>/agent.log` if `XDG_RUNTIME_DIR` is unset.
+Or just run `jitenv unlock` ahead of time. If unlock (or the inline
+`[u]` flow) fails with "agent did not start within 10s", the child
+agent's first config read + decrypt + listen didn't finish in time —
+common on slow disks such as WSL2 9P mounts. Raise the ceiling with
+`JITENV_AGENT_SPAWN_TIMEOUT` (a Go duration, e.g. `20s`), then read the
+agent log — by default it's at `${XDG_RUNTIME_DIR}/jitenv/agent.log`,
+and at `/tmp/jitenv-<uid>/agent.log` if `XDG_RUNTIME_DIR` is unset.
 
 To temporarily silence the warning while you debug, `JITENV_HOOK_DELAY=0`
 in the shell. The inline `[u]` prompt is only offered on a real TTY;

@@ -557,7 +557,7 @@ func TestRunRespectsInjectedMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v\nstderr=%s", err, stderr.String())
 	}
-	if strings.Contains(stderr.String(), "agent is not loaded") {
+	if strings.Contains(stderr.String(), "jitenv is locked") {
 		t.Fatalf("agent-down warning fired despite matching marker; stderr=%q", stderr.String())
 	}
 	if strings.Contains(stderr.String(), "jitenv: injected") {
@@ -596,7 +596,7 @@ func TestRunRejectsStaleInjectedMarker(t *testing.T) {
 	_, _ = cmd.Output()
 	// Without the nonce, the marker is invalid. run.go must attempt to
 	// reach the agent and surface the down-warning when it isn't there.
-	if !strings.Contains(stderr.String(), "agent is not loaded") {
+	if !strings.Contains(stderr.String(), "jitenv is locked") {
 		t.Errorf("expected agent-down warning (stale marker should NOT bypass); stderr=%q", stderr.String())
 	}
 }

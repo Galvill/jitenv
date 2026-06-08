@@ -99,13 +99,13 @@ func TestRunInlineUnlock(t *testing.T) {
 	mu <- ""
 	go func() {
 		buf := make([]byte, 4096)
-		acc := ""
+		var acc strings.Builder
 		for {
 			n, rerr := ptmx.Read(buf)
 			if n > 0 {
-				acc += string(buf[:n])
+				acc.Write(buf[:n])
 				<-mu
-				mu <- acc
+				mu <- acc.String()
 			}
 			if rerr != nil {
 				return
@@ -125,7 +125,7 @@ func TestRunInlineUnlock(t *testing.T) {
 		return false
 	}
 
-	if !waitFor("Press [u] to unlock", 5*time.Second) {
+	if !waitFor("Press [u] to enter the passphrase", 5*time.Second) {
 		t.Fatalf("never saw the inline-unlock prompt;\noutput=%s", readAll())
 	}
 

@@ -1,4 +1,4 @@
-// Package agentwarn renders the "agent is not loaded" countdown
+// Package agentwarn renders the "jitenv is locked" countdown
 // shared by the path-mapped runner (jitenv run) and the cwd_glob shim.
 //
 // During the countdown the user can:
@@ -6,7 +6,8 @@
 //	u        → caller drops the countdown and runs the unlock flow,
 //	           then re-fetches env so the mapped command IS injected.
 //	wait     → caller proceeds with the parent environment.
-//	Enter    → caller proceeds immediately, no further wait.
+//	any key  → caller proceeds immediately, no further wait (any
+//	           non-`u`, non-Ctrl+C key counts as continue).
 //	Ctrl+C   → caller aborts; nothing runs.
 //
 // JITENV_HOOK_DELAY (default 10) controls the wait length to match
@@ -34,7 +35,7 @@ type Action int
 
 const (
 	// ActionContinue: run the command without injected env (the user
-	// pressed Enter / any non-`u` key, or the countdown timed out).
+	// pressed any non-`u`, non-Ctrl+C key, or the countdown timed out).
 	ActionContinue Action = iota
 	// ActionAbort: the user pressed Ctrl+C; the caller must not exec.
 	ActionAbort
@@ -65,16 +66,17 @@ func WarnAndWait(target string) Action {
 
 	if !stdinIsTTY() {
 		fmt.Fprintf(os.Stderr,
-			"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
+			"%sjitenv is locked — env vars for %q will NOT be injected.%s\n",
 			red, target, reset)
 		return ActionContinue
 	}
 
 	fmt.Fprintf(os.Stderr,
-		"%sjitenv agent is not loaded — env vars for %q will NOT be set.%s\n",
+		"%sjitenv is locked — env vars for %q will NOT be injected.%s\n",
 		red, target, reset)
 	fmt.Fprintf(os.Stderr,
-		"%sPress [u] to unlock and inject, [Enter] to continue without env, [Ctrl+C] to abort.%s\n",
+		"%sPress [u] to enter the passphrase and unlock. "+
+			"Any other key continues without injecting; [Ctrl+C] aborts.%s\n",
 		red, reset)
 
 	if total == 0 {
@@ -102,45 +104,35 @@ func WarnAndWait(target string) Action {
 		defer restore()
 	}
 
-	// Drain stdin in a goroutine; report the first decisive keystroke.
-	// `u`/`U` → unlock, newline → continue, Ctrl+C (0x03) → abort. We
-	// don't tear it down at return time: on the continue/abort paths
-	// the caller is about to syscall.Exec (which replaces the process
-	// image and reaps the goroutine for free), and on the unlock path
-	// WarnAndWait returns before the passphrase prompt opens — the
-	// single outstanding Read has already consumed the keystroke, so it
-	// can't steal a byte from the subsequent term.ReadPassword on the
-	// same TTY.
+	// Drain stdin in a goroutine; report the first keystroke. `u`/`U` →
+	// unlock, Ctrl+C (0x03) → abort, and ANY other byte → continue (so
+	// Enter, Space, or a stray key all mean "run without env" — the
+	// prompt advertises exactly these semantics). We don't tear it down
+	// at return time: on the continue/abort paths the caller is about to
+	// syscall.Exec (which replaces the process image and reaps the
+	// goroutine for free), and on the unlock path WarnAndWait returns
+	// before the passphrase prompt opens — the single outstanding Read
+	// has already consumed the keystroke, so it can't steal a byte from
+	// the subsequent term.ReadPassword on the same TTY.
 	keyCh := make(chan Action, 1)
 	go func() {
 		buf := make([]byte, 1)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if err != nil || n == 0 {
-				return
-			}
-			switch buf[0] {
-			case 'u', 'U':
-				select {
-				case keyCh <- ActionUnlock:
-				default:
-				}
-				return
-			case 0x03: // Ctrl+C in raw mode (no SIGINT is raised)
-				select {
-				case keyCh <- ActionAbort:
-				default:
-				}
-				return
-			case '\n', '\r':
-				select {
-				case keyCh <- ActionContinue:
-				default:
-				}
-				return
-			}
-			// Any other key: keep reading until a decisive keystroke,
-			// the countdown elapses, or stdin closes.
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+		var act Action
+		switch buf[0] {
+		case 'u', 'U':
+			act = ActionUnlock
+		case 0x03: // Ctrl+C in raw mode (no SIGINT is raised)
+			act = ActionAbort
+		default: // Enter, Space, or any other key
+			act = ActionContinue
+		}
+		select {
+		case keyCh <- act:
+		default:
 		}
 	}()
 

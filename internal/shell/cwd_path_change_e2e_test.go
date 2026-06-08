@@ -370,7 +370,7 @@ fakecmd
 	if !strings.Contains(lk, "fakecmd") {
 		t.Errorf("locked: expected the fakecmd wrapper to be built without an agent; got:\n%s", lk)
 	}
-	if !strings.Contains(lk, "agent is not loaded") {
+	if !strings.Contains(lk, "jitenv is locked") {
 		t.Errorf("locked: expected the agent-down warning; got:\n%s", lk)
 	}
 	if !strings.Contains(lk, "FOO=MISSING") {

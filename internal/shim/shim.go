@@ -519,7 +519,9 @@ func fetchEnv(cmd string) (map[string]string, error) {
 func fetchAfterUnlock(cmd string) (map[string]string, error) {
 	res, err := unlock.Spawn("")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "jitenv: unlock failed (%v) — running without injected env.\n", err)
+		fmt.Fprintf(os.Stderr,
+			"jitenv: unlock failed (%v) — running without injected env. "+
+				"On slow disks, raise JITENV_AGENT_SPAWN_TIMEOUT (e.g. 20s).\n", err)
 		return nil, err
 	}
 	pwd, err := os.Getwd()
