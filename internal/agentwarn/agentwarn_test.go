@@ -1,7 +1,10 @@
 package agentwarn
 
 import (
+	"bytes"
+	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,4 +115,98 @@ func TestWarnAndWait_EnterKey(t *testing.T) {
 		t.Fatal("WarnAndWait did not return on Enter before the countdown elapsed")
 	}
 	w.Close()
+}
+
+// TestWarnAndWait_AnyOtherKeyContinues: per issue #264 the prompt now
+// advertises "any other key continues", so a non-`u`, non-Ctrl+C byte
+// (here a plain letter) must yield ActionContinue immediately instead of
+// looping until Enter / the countdown elapses.
+func TestWarnAndWait_AnyOtherKeyContinues(t *testing.T) {
+	t.Setenv("JITENV_HOOK_DELAY", "10")
+
+	for _, key := range []string{"x", " ", "q"} {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		withStdin(t, r)
+
+		if _, err := w.WriteString(key); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		done := make(chan Action, 1)
+		go func() { done <- WarnAndWait("/some/script.sh") }()
+
+		select {
+		case act := <-done:
+			if act != ActionContinue {
+				t.Fatalf("key %q: expected ActionContinue, got %v", key, act)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("key %q: WarnAndWait did not return before the countdown elapsed", key)
+		}
+		w.Close()
+		r.Close()
+	}
+}
+
+// TestWarnAndWait_PromptCopy asserts the #264 wording: the warning line
+// says jitenv is "locked" and the prompt names the [u] / any-other-key /
+// [Ctrl+C] options.
+func TestWarnAndWait_PromptCopy(t *testing.T) {
+	t.Setenv("JITENV_HOOK_DELAY", "10")
+
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	defer inR.Close()
+	withStdin(t, inR)
+
+	// Capture stderr for the duration of the call.
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = errW
+	t.Cleanup(func() { os.Stderr = prevStderr })
+
+	captured := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, errR)
+		captured <- buf.String()
+	}()
+
+	// Continue immediately so the call returns without waiting.
+	if _, err := inW.WriteString("\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	done := make(chan Action, 1)
+	go func() { done <- WarnAndWait("/some/script.sh") }()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("WarnAndWait did not return before the countdown elapsed")
+	}
+	inW.Close()
+	errW.Close()
+	os.Stderr = prevStderr
+
+	out := <-captured
+	for _, want := range []string{
+		"jitenv is locked",
+		"will NOT be injected",
+		"Press [u] to enter the passphrase and unlock",
+		"Any other key continues without injecting",
+		"[Ctrl+C] aborts",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("prompt copy missing %q\nfull output:\n%s", want, out)
+		}
+	}
 }

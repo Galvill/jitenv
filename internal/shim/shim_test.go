@@ -112,8 +112,8 @@ func TestShimSuppressesWarningWithMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first run: %v\noutput=%s", err, out1)
 	}
-	if !strings.Contains(out1, "agent is not loaded") {
-		t.Errorf("first run: expected 'agent is not loaded' warning;\noutput=%s", out1)
+	if !strings.Contains(out1, "jitenv is locked") {
+		t.Errorf("first run: expected 'jitenv is locked' warning;\noutput=%s", out1)
 	}
 	if !strings.Contains(out1, "RAN") {
 		t.Errorf("first run: expected fakecmd to exec ('RAN');\noutput=%s", out1)
@@ -124,7 +124,7 @@ func TestShimSuppressesWarningWithMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second run: %v\noutput=%s", err, out2)
 	}
-	if strings.Contains(out2, "agent is not loaded") {
+	if strings.Contains(out2, "jitenv is locked") {
 		t.Errorf("second run: warning fired despite __JITENV_AGENT_WARNED=1;\noutput=%s", out2)
 	}
 	if !strings.Contains(out2, "RAN") {
@@ -213,7 +213,7 @@ func TestShimSuppressesInjectionWithMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v\noutput=%s", err, out)
 	}
-	if strings.Contains(out, "agent is not loaded") {
+	if strings.Contains(out, "jitenv is locked") {
 		t.Errorf("warning fired despite matching marker; output=%s", out)
 	}
 	if strings.Contains(out, "jitenv: injected") {
@@ -312,7 +312,7 @@ func TestShimRecoversWrapDirFromPath(t *testing.T) {
 	}
 	out := buf.String()
 
-	if strings.Contains(out, "agent is not loaded") {
+	if strings.Contains(out, "jitenv is locked") {
 		t.Errorf("warning fired despite recoverable wrap dir + marker file; output=%s", out)
 	}
 	if strings.Contains(out, "jitenv: injected") {
@@ -396,7 +396,7 @@ func TestShimSuppressesInjectionViaMarkerFile(t *testing.T) {
 	}
 	out := buf.String()
 
-	if strings.Contains(out, "agent is not loaded") {
+	if strings.Contains(out, "jitenv is locked") {
 		t.Errorf("warning fired despite marker file; output=%s", out)
 	}
 	if strings.Contains(out, "jitenv: injected") {
@@ -475,7 +475,7 @@ func TestShimWarnPathWritesMarkerFile(t *testing.T) {
 		t.Fatalf("run: %v\noutput=%s", err, buf.String())
 	}
 	out := buf.String()
-	if !strings.Contains(out, "agent is not loaded") {
+	if !strings.Contains(out, "jitenv is locked") {
 		t.Errorf("expected agent-down warning;\noutput=%s", out)
 	}
 	if !strings.Contains(out, "RAN") {

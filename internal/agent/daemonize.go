@@ -3,9 +3,29 @@ package agent
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/gv/jitenv/internal/crypto"
 )
+
+// defaultSpawnTimeout is how long SpawnDaemon waits for the freshly
+// spawned agent to bind its socket before giving up. It matches the
+// default countdown length (JITENV_HOOK_DELAY, 10s) so the inline-unlock
+// flow in agentwarn has room to complete on slow disks (issue #264).
+const defaultSpawnTimeout = 10 * time.Second
+
+// spawnTimeout returns how long to wait for the agent socket to appear.
+// Operators on slow-disk environments (e.g. WSL2 9P mounts) can raise it
+// via JITENV_AGENT_SPAWN_TIMEOUT, parsed as a Go duration (e.g. "20s").
+// An empty value or a parse error falls back to defaultSpawnTimeout.
+func spawnTimeout() time.Duration {
+	if v := os.Getenv("JITENV_AGENT_SPAWN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultSpawnTimeout
+}
 
 // SpawnDaemon re-execs the current binary as a detached agent process,
 // passing the derived key over an inherited pipe. It returns once the

@@ -45,10 +45,10 @@ const (
 //
 // When the agent is unreachable (locked, never started, …), the
 // command isn't refused: the user gets the same agent-down countdown
-// the shim uses ("Press [u] to unlock and inject, [Enter] to continue
-// without env, [Ctrl+C] to abort"). Pressing `u` runs the inline
-// unlock flow and re-fetches env so the command IS injected; Enter /
-// timeout runs the script with the parent env. This is what the bash
+// the shim uses ("Press [u] to enter the passphrase and unlock. Any
+// other key continues without injecting; [Ctrl+C] aborts."). Pressing
+// `u` runs the inline unlock flow and re-fetches env so the command IS
+// injected; any other key / timeout runs the script with the parent env. This is what the bash
 // hook used to paint inline; moving it here means `jitenv run`'s
 // behaviour is consistent whether it was invoked by the hook, by hand,
 // or by another tool.
@@ -199,7 +199,9 @@ func fetchOrWarn(ctx context.Context, socket, abs string) (map[string]string, bo
 func fetchAfterUnlock(ctx context.Context, abs string) (map[string]string, bool, error) {
 	res, err := unlock.Spawn("")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "jitenv: unlock failed (%v) — running without injected env.\n", err)
+		fmt.Fprintf(os.Stderr,
+			"jitenv: unlock failed (%v) — running without injected env. "+
+				"On slow disks, raise JITENV_AGENT_SPAWN_TIMEOUT (e.g. 20s).\n", err)
 		return nil, false, nil
 	}
 	cli := agent.NewClient(res.Socket)

@@ -124,10 +124,10 @@ echo '--- step 4 (agent down) ---'
 	if !strings.Contains(step2, "FOO=value-from-noop") {
 		t.Errorf("step 2: expected env to be injected; got:\n%s", step2)
 	}
-	if strings.Contains(step2, "agent is not loaded") {
+	if strings.Contains(step2, "jitenv is locked") {
 		t.Errorf("step 2: did not expect the warning while agent is up; got:\n%s", step2)
 	}
-	if !strings.Contains(step4, "agent is not loaded") {
+	if !strings.Contains(step4, "jitenv is locked") {
 		t.Errorf("step 4: expected the agent-down warning; got:\n%s", step4)
 	}
 	if !strings.Contains(step4, "FOO=MISSING") {

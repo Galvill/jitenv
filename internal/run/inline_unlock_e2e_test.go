@@ -125,7 +125,7 @@ func TestRunInlineUnlock(t *testing.T) {
 		return false
 	}
 
-	if !waitFor("Press [u] to unlock", 5*time.Second) {
+	if !waitFor("Press [u] to enter the passphrase", 5*time.Second) {
 		t.Fatalf("never saw the inline-unlock prompt;\noutput=%s", readAll())
 	}
 

@@ -176,8 +176,8 @@ eval "$(%s/jitenv hook bash)"
 		t.Fatalf("bash run: %v\noutput=%s", err, out)
 	}
 	got := string(out)
-	if !strings.Contains(got, "agent is not loaded") {
-		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
+	if !strings.Contains(got, "jitenv is locked") {
+		t.Errorf("expected red 'jitenv is locked' warning; got:\n%s", got)
 	}
 	if !strings.Contains(got, "RAN") {
 		t.Errorf("expected the script to still run; got:\n%s", got)
@@ -249,7 +249,7 @@ eval "$(%s/jitenv hook bash)"
 		t.Fatalf("bash run: %v\noutput=%s", err, out)
 	}
 	got := string(out)
-	if strings.Contains(got, "agent is not loaded") {
+	if strings.Contains(got, "jitenv is locked") {
 		t.Errorf("expected NO warning for unmapped script; got:\n%s", got)
 	}
 	if !strings.Contains(got, "UNMAPPED-RAN") {
@@ -308,7 +308,7 @@ xyzfdsa-typo
 	out, _ := cmd.CombinedOutput()
 	elapsed := time.Since(start)
 	got := string(out)
-	if strings.Contains(got, "agent is not loaded") {
+	if strings.Contains(got, "jitenv is locked") {
 		t.Errorf("hook leaked the agent-down warning for command_not_found_handle; got:\n%s", got)
 	}
 	if elapsed > 500*time.Millisecond {

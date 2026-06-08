@@ -3,7 +3,7 @@ description: |
   Exercises the two "agent unavailable" UX paths:
 
     1. `jitenv run` against a mapped script with no running agent. The
-       Go-side WarnAndWait prints the red "agent is not loaded" line on
+       Go-side WarnAndWait prints the red "jitenv is locked" line on
        stderr, suppresses the interactive countdown because stdin is
        not a TTY under `docker exec -T`, then executes the script with
        the parent env (no injected vars). Exit code is the script's.
@@ -66,7 +66,7 @@ steps:
   - name: assert-run-exit-ok
     assert_exit_code: 0
   - name: assert-warning-printed
-    assert_stderr_contains: "agent is not loaded"
+    assert_stderr_contains: "jitenv is locked"
   - name: assert-script-ran
     assert_stdout_contains: "ran=ok"
   - name: assert-no-injection

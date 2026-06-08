@@ -64,8 +64,9 @@ bug:
 `jitenv is-mapped` reads the config file directly and never contacts
 the agent, so an exit code 2 always means the on-disk config is
 missing or malformed. The agent-unreachable UX (a red countdown with
-**Press [u] to unlock and inject, [Enter] to continue without env,
-[Ctrl+C] to abort**) lives inside `jitenv run` and the cwd_glob shim —
+**Press [u] to enter the passphrase and unlock. Any other key continues
+without injecting; [Ctrl+C] aborts**) lives inside `jitenv run` and the
+cwd_glob shim —
 see `internal/agentwarn/agentwarn.go`. It only fires *after*
 `is-mapped` returned 0 and `jitenv run` then failed to reach the
 agent.
@@ -73,8 +74,9 @@ agent.
 If you press **`u`**, jitenv runs the unlock flow inline: it prompts
 for your passphrase, starts the agent in the background, re-fetches
 the env vars, and only then execs your command — so the mapped
-command *is* injected, without you leaving the prompt. **Enter**
-continues the command with no env injection; **Ctrl+C** aborts it.
+command *is* injected, without you leaving the prompt. **Any other key**
+(Enter, Space, …) continues the command with no env injection;
+**Ctrl+C** aborts it.
 The inline-unlock option is offered only on a real TTY; piped or
 non-interactive invocations skip the countdown entirely (the warning
 line still prints once so the failure is visible in logs).

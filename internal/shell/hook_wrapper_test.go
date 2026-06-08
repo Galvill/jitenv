@@ -332,8 +332,8 @@ fakecmd
 		t.Fatalf("bash run: %v\noutput=%s", err, out)
 	}
 	got := string(out)
-	if !strings.Contains(got, "agent is not loaded") {
-		t.Errorf("expected red 'agent is not loaded' warning; got:\n%s", got)
+	if !strings.Contains(got, "jitenv is locked") {
+		t.Errorf("expected red 'jitenv is locked' warning; got:\n%s", got)
 	}
 	if !strings.Contains(got, "RAN") {
 		t.Errorf("expected fakecmd to still run; got:\n%s", got)

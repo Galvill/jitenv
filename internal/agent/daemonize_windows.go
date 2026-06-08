@@ -112,7 +112,8 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	// has bound its listener. Unlike Unix where the socket is a file on
 	// disk and os.Stat suffices, Windows pipes live in a separate
 	// namespace — the only reliable "is it up?" check is to dial it.
-	deadline := time.Now().Add(3 * time.Second)
+	timeout := spawnTimeout()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		conn, derr := dialAgent(ctx, paths.Socket, 200*time.Millisecond)
@@ -128,5 +129,7 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
-	return errors.New("agent did not start within 3s; check the agent log under %LOCALAPPDATA%\\jitenv\\agent.log")
+	return fmt.Errorf("agent did not start within %s "+
+		"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
+		"check the agent log under %%LOCALAPPDATA%%\\jitenv\\agent.log", timeout)
 }
