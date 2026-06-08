@@ -3,6 +3,7 @@
 package shell_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -570,6 +571,17 @@ ls $__JITENV_WRAP_DIR
 	}
 	tmp.Close()
 
+	// Capture stdout and stderr into SEPARATE buffers (issue #265). The
+	// markers and `ls` output we assert on go to stdout; __jitenv_chpwd's
+	// reconcile debug (gated on JITENV_HOOK_DEBUG, which a dev may have set
+	// in their environment) goes to stderr. CombinedOutput merges the two,
+	// and because bash's stdout is block-buffered when piped while the
+	// child's stderr is unbuffered, the AFTER-edit reconcile's stderr lines
+	// race ahead and interleave into the before-edit stdout window — making
+	// sectionBetween's text-marker parsing nondeterministic. Keeping the
+	// streams apart means the before/after markers and their `ls` output are
+	// strictly ordered on stdout (a single stream from one writer), so the
+	// boundary is deterministic regardless of debug output.
 	leg3 := exec.Command("bash", "-c", fmt.Sprintf(
 		`PATH=%q:$PATH
 export JITENV_CONFIG=%q
@@ -586,12 +598,17 @@ echo "--- after-edit ---"
 ls $__JITENV_WRAP_DIR
 `, binDir, cfgPath, binDir, projectDir, editedPath, cfgPath, cfgPath))
 	leg3.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
-	out3, err := leg3.CombinedOutput()
-	if err != nil {
-		t.Fatalf("leg 3: %v\n%s", err, out3)
+	var stdout3, stderr3 bytes.Buffer
+	leg3.Stdout = &stdout3
+	leg3.Stderr = &stderr3
+	if err := leg3.Run(); err != nil {
+		t.Fatalf("leg 3: %v\nstdout:\n%s\nstderr:\n%s", err, stdout3.String(), stderr3.String())
 	}
-	got3 := string(out3)
-	t.Logf("leg 3 output:\n%s", got3)
+	got3 := stdout3.String()
+	t.Logf("leg 3 stdout:\n%s", got3)
+	if stderr3.Len() > 0 {
+		t.Logf("leg 3 stderr (chpwd debug):\n%s", stderr3.String())
+	}
 
 	before := sectionBetween(got3, "--- before-edit ---", "--- after-edit ---")
 	after := sectionBetween(got3, "--- after-edit ---", "")
