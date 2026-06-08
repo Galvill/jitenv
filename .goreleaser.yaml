@@ -32,6 +32,31 @@ builds:
       - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
       - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
 
+  # The lightweight hot-path binary the shell hook spawns on every
+  # prompt (__chpwd / is-mapped / run / shim). It imports none of the
+  # AWS SDK / net-http / source / sync / TUI graph the full binary
+  # links, so it starts in ~1.5ms vs ~50ms — the per-prompt cost that
+  # made interactive shells laggy. Same internal packages, identical
+  # behaviour; the hook falls back to `jitenv` when it's absent.
+  - id: jitenv-hook
+    main: ./cmd/jitenv-hook
+    binary: jitenv-hook
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
+      - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
+
   # The interactive TUI lives in a separate binary so the main
   # jitenv binary's import graph stays free of Bubble Tea / Lip
   # Gloss / termenv. Those libs send OSC 11 (background color) +
@@ -68,11 +93,12 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    # Both binaries ship in the same archive so a brew/dpkg/manual
-    # install gets the pair atomically. `ids:` is the v2-spelling
+    # All binaries ship in the same archive so a brew/dpkg/manual
+    # install gets them atomically. `ids:` is the v2-spelling
     # of the build allowlist.
     ids:
       - jitenv
+      - jitenv-hook
       - jitenv-tui
     name_template: "jitenv_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -90,6 +116,7 @@ nfpms:
     package_name: jitenv
     ids:
       - jitenv
+      - jitenv-hook
       - jitenv-tui
     vendor: Galvill
     homepage: https://github.com/Galvill/jitenv

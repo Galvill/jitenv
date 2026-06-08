@@ -4,6 +4,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -215,4 +216,60 @@ func containsString(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// Anchors returns the minimal information a shell hook needs to decide,
+// *without* spawning `jitenv is-mapped`, whether a resolved command path
+// could possibly match a `path`/`glob` mapping:
+//
+//   - exact: the absolute `path` mapping targets (an O(1) exact-match set).
+//   - prefixes: the literal directory prefix of every `glob` mapping —
+//     the run of characters before the first wildcard. A path can match a
+//     doublestar glob only if it starts with this prefix, so HasPrefix is a
+//     necessary (conservative) condition: the hook can safely skip the
+//     is-mapped fork for any resolved path that is neither an exact target
+//     nor under a prefix, and `is-mapped` remains the source of truth for
+//     the (rare) candidates that pass the filter. Both slices are sorted
+//     for a stable on-disk sidecar. cwd_glob mappings are intentionally
+//     excluded — those are intercepted by the PATH wrapper shims, not the
+//     DEBUG-trap / accept-line path. (issue #260)
+func (idx *Index) Anchors() (exact, prefixes []string) {
+	for k := range idx.exact {
+		exact = append(exact, k)
+	}
+	seen := map[string]struct{}{}
+	for _, g := range idx.globs {
+		p := literalPrefix(g.pattern)
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		prefixes = append(prefixes, p)
+	}
+	sort.Strings(exact)
+	sort.Strings(prefixes)
+	return exact, prefixes
+}
+
+// literalPrefix returns the leading run of pattern that contains no
+// doublestar wildcard — i.e. everything before the first unescaped
+// `*`, `?`, `[`, or `{`. A `\`-escaped metacharacter contributes its
+// literal self to the prefix (doublestar treats `\` as an escape on the
+// forward-slash-normalised patterns the Index stores). A pattern with no
+// wildcard yields itself; a pattern that opens with a wildcard yields "".
+func literalPrefix(pattern string) string {
+	var b strings.Builder
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		if c == '\\' && i+1 < len(pattern) {
+			b.WriteByte(pattern[i+1])
+			i++
+			continue
+		}
+		if c == '*' || c == '?' || c == '[' || c == '{' {
+			break
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

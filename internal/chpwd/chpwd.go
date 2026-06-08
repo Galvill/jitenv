@@ -43,6 +43,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/config"
@@ -117,7 +118,7 @@ func Run(args []string) (bool, error) {
 		return false, nil
 	}
 
-	wanted, err := desiredCommandsFor(cfgPath, cfgErr, newPwd)
+	wanted, idx, err := desiredCommandsFor(cfgPath, cfgErr, newPwd)
 	if err != nil {
 		debugLog("desiredCommands error: %v", err)
 		// Config missing or malformed: leave the wrapper dir alone
@@ -126,6 +127,13 @@ func Run(args []string) (bool, error) {
 		return false, nil
 	}
 	debugLog("config reports wanted=%v", wanted)
+
+	// Refresh the per-shell match-anchors sidecar the bash/zsh hooks read
+	// to decide, without forking `jitenv is-mapped`, whether a typed
+	// command could match a path/glob mapping. Only the reconcile path
+	// reaches here (config mtime or pwd changed), so it tracks config
+	// edits; the short-circuit above leaves a valid sidecar untouched.
+	writeAnchors(anchorsPath(paths, pid), idx)
 	changed, err := reconcile(wrapDir, wanted)
 	if err != nil {
 		debugLog("reconcile error: %v", err)
@@ -186,18 +194,59 @@ func writeLastMtime(path string, mtime int64) error {
 // No agent contact, no decryption — the cwd_glob and commands fields
 // are plaintext TOML. cfgErr is the pre-resolved Resolve error so the
 // caller doesn't pay a second config.Resolve cost.
-func desiredCommandsFor(cfgPath string, cfgErr error, pwd string) ([]string, error) {
+func desiredCommandsFor(cfgPath string, cfgErr error, pwd string) ([]string, *config.Index, error) {
 	if cfgErr != nil {
-		return nil, cfgErr
+		return nil, nil, cfgErr
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(cfg.Mappings) == 0 {
-		return nil, nil
+		// Build an (empty) index anyway so the caller writes an empty
+		// anchors sidecar — a config that just lost its last path/glob
+		// mapping must stop the hook from forking is-mapped.
+		return nil, config.NewIndex(cfg.Mappings), nil
 	}
-	return config.NewIndex(cfg.Mappings).CwdCommands(pwd), nil
+	idx := config.NewIndex(cfg.Mappings)
+	return idx.CwdCommands(pwd), idx, nil
+}
+
+// anchorsPath is the per-shell sidecar listing the path/glob match
+// anchors (see config.Index.Anchors). Lives alongside the wrapper bin
+// dir + last-mtime so agent.GcOrphanShells reaps it with the shell.
+func anchorsPath(paths agent.Paths, pid int) string {
+	return filepath.Join(filepath.Dir(paths.ShellWrapDir(pid)), "match-anchors")
+}
+
+// writeAnchors (re)writes the match-anchors sidecar from idx. Format is
+// one tab-separated record per line: `E\t<abs-path>` for an exact path
+// mapping, `P\t<literal-prefix>` for a glob. An empty idx (no path/glob
+// mappings) yields an empty file, which tells the hook to never fork
+// is-mapped. Best-effort: a write failure just means the hook keeps its
+// previous (possibly stale) view until the next reconcile.
+func writeAnchors(path string, idx *config.Index) {
+	var b strings.Builder
+	if idx != nil {
+		exact, prefixes := idx.Anchors()
+		for _, e := range exact {
+			b.WriteString("E\t")
+			b.WriteString(e)
+			b.WriteByte('\n')
+		}
+		for _, p := range prefixes {
+			b.WriteString("P\t")
+			b.WriteString(p)
+			b.WriteByte('\n')
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		debugLog("writeAnchors mkdir: %v", err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		debugLog("writeAnchors: %v", err)
+	}
 }
 
 // reconcile makes the wrapper dir contain exactly one wrapper per

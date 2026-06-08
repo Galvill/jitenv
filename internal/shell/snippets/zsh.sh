@@ -20,6 +20,9 @@ export __JITENV_SESSION_NONCE
 
 __JITENV_RUNTIME_DIR={{RuntimeDir}}
 __JITENV_CFG_PATH={{ConfigPath}}
+# Hot-path binary: lightweight `jitenv-hook` when installed (≈1.5ms
+# startup), else bare `jitenv`. See bash.sh for the rationale.
+__JITENV_BIN={{HookBin}}
 export __JITENV_WRAP_DIR="$__JITENV_RUNTIME_DIR/shells/$$/bin"
 # See bash.sh — gates env injection in the shim so vars don't leak
 # into children of unmapped commands (issue #52).
@@ -58,6 +61,61 @@ __jitenv_cfg_path() {
         print -r -- "$__JITENV_CFG_PATH"
     fi
 }
+# Path/glob match anchors (issue #260). See bash.sh for the full
+# rationale: `jitenv __chpwd` writes a per-shell sidecar of the path/glob
+# mapping anchors so the accept-line widget can decide, WITHOUT forking
+# `jitenv is-mapped`, whether a typed command could match. cwd_glob is
+# served by the PATH wrappers, not here.
+__JITENV_ANCHORS_FILE="${__JITENV_WRAP_DIR%/bin}/match-anchors"
+typeset -gA __JITENV_EXACT
+typeset -ga __JITENV_PREFIX
+# Whether a bare command could resolve (via $PATH) to a mapped file —
+# gates the widget's bare-name `whence -p`. See bash.sh (#263).
+typeset -g __JITENV_BARENAME_ACTIVE=0
+
+# $PATH minus WSL2 Windows mounts (/mnt/*) so the bare-name `whence -p`
+# never stats the slow 9P filesystem. See bash.sh (#263).
+__jitenv_native_path() {
+    local d
+    __JITENV_NATIVE_PATH=
+    for d in "${(s|:|)PATH}"; do
+        case "$d" in /mnt/*) continue ;; esac
+        __JITENV_NATIVE_PATH="${__JITENV_NATIVE_PATH:+$__JITENV_NATIVE_PATH:}$d"
+    done
+}
+
+__jitenv_load_anchors() {
+    __JITENV_EXACT=()
+    __JITENV_PREFIX=()
+    __JITENV_BARENAME_ACTIVE=0
+    [[ -r "$__JITENV_ANCHORS_FILE" ]] || return 0
+    local kind val
+    while IFS=$'\t' read -r kind val; do
+        case "$kind" in
+            E) __JITENV_EXACT[$val]=1 ;;
+            P) __JITENV_PREFIX+=("$val") ;;
+        esac
+    done < "$__JITENV_ANCHORS_FILE"
+
+    # See bash.sh: a bare command can only match an exact anchor whose dir
+    # is on $PATH, or a glob whose prefix overlaps a $PATH dir. If none do,
+    # the widget skips the bare-name resolve. /mnt/* ignored. (#263)
+    local d pd p
+    typeset -A _pd
+    for d in "${(s|:|)PATH}"; do
+        case "$d" in /mnt/*) continue ;; esac
+        _pd[$d]=1
+    done
+    for pd in "${(@k)__JITENV_EXACT}"; do
+        if [[ -n "${_pd[${pd:h}]}" ]]; then __JITENV_BARENAME_ACTIVE=1; return 0; fi
+    done
+    for p in "${__JITENV_PREFIX[@]}"; do
+        for d in "${(@k)_pd}"; do
+            if [[ "$d/" == "$p"* || "$p" == "$d/"* ]]; then __JITENV_BARENAME_ACTIVE=1; return 0; fi
+        done
+    done
+}
+
 # precmd-style hook: fires every time the prompt is about to redraw,
 # including after a cd. The Go side compares pwd and the config-file
 # mtime against per-shell sidecar state ($__JITENV_RUNTIME_DIR/shells/
@@ -69,8 +127,26 @@ __jitenv_chpwd() {
     # Keep the wrap dir at the front of PATH even if a downstream
     # startup file (e.g. ~/.zprofile prepends) shoved it back (#224).
     __jitenv_ensure_path
+
+    local base="${__JITENV_WRAP_DIR%/bin}"
+    # Per-command injection marker (#182): builtin test; rm only after a
+    # mapped command actually set it. See bash.sh.
+    [[ -e "$base/injected" ]] && command rm -f "$base/injected" 2>/dev/null
+
+    # In-shell short-circuit (#263): skip the fork when neither cwd nor
+    # config changed since the last reconcile. A fork/exec is ~17ms on
+    # WSL2, so forking every prompt to learn "nothing changed" is the main
+    # prompt cost. `-nt` is whole-second; a same-wall-second config edit
+    # is caught on the next cd, not the next prompt (never wrong). See
+    # bash.sh for the full rationale.
+    local cfg="${JITENV_CONFIG:-$__JITENV_CFG_PATH}"
+    if [[ "$PWD" == "${__JITENV_LAST_PWD-}" && -f "$base/last-mtime" \
+          && ! "$cfg" -nt "$base/last-mtime" ]]; then
+        return 0
+    fi
+
     # No 2>/dev/null on purpose; see bash.sh for the rationale.
-    jitenv __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
+    "$__JITENV_BIN" __chpwd "$$" "${__JITENV_LAST_PWD-}" "$PWD"
     # Exit 10 means a wrapper was added or removed → rebuild zsh's
     # command hash table so the change takes effect immediately. Without
     # it, a wrapper added for an already-run command stays masked by the
@@ -79,6 +155,9 @@ __jitenv_chpwd() {
     # assignment resets it so we don't leak a non-zero status.
     local rc=$?
     [[ $rc -eq 10 ]] && rehash
+    # Refresh the in-shell anchor cache (cheap builtin read, no fork) —
+    # only after a reconcile, since anchors change only when config does.
+    __jitenv_load_anchors
     __JITENV_LAST_PWD="$PWD"
 }
 typeset -ga precmd_functions
@@ -112,6 +191,22 @@ __jitenv_log() {
     [[ -n "${JITENV_HOOK_DEBUG:-}" ]] && printf 'jitenv-hook: %s\n' "$*" >&2
 }
 
+# __jitenv_anchor_match returns 0 if the resolved path could match a
+# path/glob mapping (an exact target, or under some glob's literal
+# prefix), so the widget only forks `jitenv is-mapped` for plausible
+# candidates. Empty anchor sets (no path/glob mappings — e.g. cwd_glob
+# only) never match → no fork. Conservative: a prefix hit can only cause
+# an extra is-mapped fork that then declines, never a missed injection.
+# (issue #260)
+__jitenv_anchor_match() {
+    local r="$1" pfx
+    [[ -n "${__JITENV_EXACT[$r]}" ]] && return 0
+    for pfx in "${__JITENV_PREFIX[@]}"; do
+        [[ "$r" == "$pfx"* ]] && return 0
+    done
+    return 1
+}
+
 __jitenv_accept_line() {
     emulate -L zsh
     local first_raw first rest resolved
@@ -124,34 +219,35 @@ __jitenv_accept_line() {
         first="${first#\'}"; first="${first%\'}"
         case "$first" in
             /*)        resolved="$first" ;;
-            ./*|../*)
-                # Normalize the same way bash.sh does so zsh and bash
-                # produce identical canonical absolute paths and stay in
-                # sync. The old `${PWD}/${first#./}` only stripped a
-                # leading `./`, so `../foo` became `$PWD/../foo` — an
-                # unnormalized path that won't path-equality-match a
-                # mapping stored in canonical absolute form (issue #245).
+            */*)
+                # Any token containing a slash is a pathname (./x, ../x,
+                # dir/x, a/b/c), not a $PATH lookup — resolve it relative to
+                # the cwd, canonicalized via cd+pwd (issue #245). NOT gated
+                # by the bare-name $PATH check below: a relative path can
+                # match a path/glob mapping regardless of $PATH (#237/#263).
                 resolved="$(cd "$(dirname "$first")" 2>/dev/null && pwd)/$(basename "$first")"
                 ;;
             *)
                 # Bare name → resolve through $PATH so `path`/`glob`
-                # mappings fire on PATH-invoked commands too, not just
-                # explicit-path ones. `whence -p` reports only a real
-                # executable file (skips builtins, aliases, functions,
-                # and typos, which yield an empty result → run normally).
-                # If it resolves to a cwd_glob wrapper, the wrapper shim
-                # already calls is-mapped itself, so don't double-dispatch
-                # — leave resolved empty and let the wrapper handle it.
-                # (issue #237)
-                resolved="$(whence -p -- "$first" 2>/dev/null)"
-                if [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]]; then
-                    resolved=""
+                # mappings fire on PATH-invoked commands too (issue #237).
+                # Skip unless an anchor is reachable via $PATH, and resolve
+                # through $PATH minus the WSL2 /mnt/* (9P) mounts — see
+                # bash.sh for the rationale (issue #263). `whence -p`
+                # reports only a real executable file (skips builtins,
+                # aliases, functions, typos → empty → run normally). A
+                # cwd_glob wrapper hit is left empty so the shim handles it.
+                if [[ ${__JITENV_BARENAME_ACTIVE:-0} -eq 1 ]]; then
+                    __jitenv_native_path
+                    resolved="$(PATH="$__JITENV_NATIVE_PATH" whence -p -- "$first" 2>/dev/null)"
+                    if [[ "$resolved" == "$__JITENV_WRAP_DIR/"* ]]; then
+                        resolved=""
+                    fi
                 fi
                 ;;
         esac
-        if [[ -n "$resolved" && -f "$resolved" ]]; then
+        if [[ -n "$resolved" && -f "$resolved" ]] && __jitenv_anchor_match "$resolved"; then
             __jitenv_log "candidate cmd=[$BUFFER] resolved=[$resolved]"
-            jitenv is-mapped "$resolved" >/dev/null 2>&1
+            "$__JITENV_BIN" is-mapped "$resolved" >/dev/null 2>&1
             local rc=$?
             __jitenv_log "is-mapped rc=$rc"
             case "$rc" in
@@ -164,7 +260,7 @@ __jitenv_accept_line() {
                     # so a filename containing `"`, `$`, backtick, or
                     # other zsh-active characters (legal on Linux/macOS)
                     # can't break BUFFER's quoting (security #123).
-                    BUFFER="jitenv run ${(q+)resolved}$rest"
+                    BUFFER="${(q+)__JITENV_BIN} run ${(q+)resolved}$rest"
                     ;;
                 *)
                     # rc=1 (not mapped) or rc=2 (config unreadable) →

@@ -2,6 +2,9 @@ package shell
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/gv/jitenv/internal/agent"
@@ -47,8 +50,32 @@ func Render(shell string) (string, error) {
 	r := strings.NewReplacer(
 		"{{RuntimeDir}}", quote(paths.Dir),
 		"{{ConfigPath}}", quote(cfgPath),
+		"{{HookBin}}", quote(hookBin()),
 	)
 	return r.Replace(tmpl), nil
+}
+
+// hookBin resolves the binary the shell hook should invoke for the
+// hot-path commands (__chpwd / is-mapped / run). It prefers the
+// lightweight `jitenv-hook` installed alongside the running binary —
+// spawning it costs ~1.5ms vs ~50ms for the full `jitenv` (which links
+// the AWS SDK / net-http graph). When jitenv-hook isn't present (partial
+// install, `go install` of only cmd/jitenv) it falls back to bare
+// `jitenv`, preserving the previous behaviour. A re-`eval` of the hook
+// picks up jitenv-hook once it's installed.
+func hookBin() string {
+	self, err := os.Executable()
+	if err == nil {
+		name := "jitenv-hook"
+		if runtime.GOOS == "windows" {
+			name = "jitenv-hook.exe"
+		}
+		cand := filepath.Join(filepath.Dir(self), name)
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+			return cand
+		}
+	}
+	return "jitenv"
 }
 
 // shellQuote single-quotes a path for safe inclusion in a POSIX shell

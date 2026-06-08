@@ -49,6 +49,30 @@ builds:
         - cmd: ./packaging/macos/sign-submit.sh "{{ .Path }}" "{{ .Os }}"
           output: true
 
+  # Lightweight hot-path binary (see .goreleaser.yaml). Signed +
+  # notarized like the others via the per-binary post hook.
+  - id: jitenv-hook
+    main: ./cmd/jitenv-hook
+    binary: jitenv-hook
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/gv/jitenv/internal/version.Version={{.Version}}
+      - -X github.com/gv/jitenv/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/gv/jitenv/internal/version.Date={{.Date}}
+    hooks:
+      post:
+        - cmd: ./packaging/macos/sign-submit.sh "{{ .Path }}" "{{ .Os }}"
+          output: true
+
   - id: jitenv-tui
     main: ./cmd/jitenv-tui
     binary: jitenv-tui
@@ -79,6 +103,7 @@ archives:
     formats: [tar.gz]
     ids:
       - jitenv
+      - jitenv-hook
       - jitenv-tui
     name_template: "jitenv_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
