@@ -274,7 +274,11 @@ __jitenv_debug_trap() {
     local resolved
     if [[ "$first" = /* ]]; then
         resolved="$first"
-    elif [[ "$first" = ./* || "$first" = ../* ]]; then
+    elif [[ "$first" = */* ]]; then
+        # Any token containing a slash is a pathname (./x, ../x, dir/x,
+        # a/b/c), not a $PATH lookup — resolve it relative to the cwd. This
+        # is NOT gated by the bare-name PATH check below: a relative path
+        # can match a path/glob mapping regardless of $PATH. (issue #237/#263)
         resolved="$(cd "$(dirname "$first")" 2>/dev/null && pwd)/$(basename "$first")"
     else
         # Bare name → resolve through $PATH so `path`/`glob` mappings fire

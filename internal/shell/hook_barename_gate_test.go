@@ -90,3 +90,62 @@ func TestHookBarenameGate(t *testing.T) {
 		t.Errorf("Case B: expected BARENAME_ACTIVE=1 (mapping dir on PATH); got:\n%s", outB)
 	}
 }
+
+// TestHookRelativePathCapturedWhenGateOff is the regression for invoking a
+// mapped file by a relative path with a slash (e.g. `test/run.sh`). Such a
+// token is a pathname, not a $PATH lookup, so it must be resolved and
+// matched even when __JITENV_BARENAME_ACTIVE is 0 (mappings not on $PATH).
+// Before the fix it fell into the gated bare-name branch and was dropped,
+// while `./test/run.sh` still worked.
+func TestHookRelativePathCapturedWhenGateOff(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+	binDir := filepath.Dir(bin)
+	buildHookBinary(t, binDir)
+	dir := t.TempDir()
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+
+	// Mapping at dir/proj/run.sh — dir/proj is NOT on $PATH → gate off.
+	scriptMap := filepath.Join(dir, "proj", "run.sh")
+	mkexec(t, scriptMap)
+	cfgPath := writeConfigWithMappings(t, dir, []config.Mapping{
+		{Path: scriptMap, Vars: []config.VarRef{{Name: "FOO", Source: "n", Ref: "x"}}},
+	})
+
+	// cd into dir, then invoke the mapping by a relative path with a slash.
+	// JITENV_HOOK_DELAY=0 avoids the agent-down countdown on the route.
+	script := fmt.Sprintf(`
+PATH=%q:$PATH
+export JITENV_CONFIG=%q
+export JITENV_HOOK_DEBUG=1
+export JITENV_HOOK_DELAY=0
+eval "$(jitenv hook bash)"
+cd %q
+printf 'BARENAME_ACTIVE=%%s\n' "${__JITENV_BARENAME_ACTIVE:-unset}"
+printf '__RUN__\n' >&2
+proj/run.sh
+printf '__DONE__\n' >&2
+`, binDir, cfgPath, dir)
+	cmd := exec.Command("bash", "--norc", "-c", script)
+	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+runtimeDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash run: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "BARENAME_ACTIVE=0") {
+		t.Fatalf("expected gate off (mapping not on PATH); got:\n%s", got)
+	}
+	runPhase := got[strings.Index(got, "__RUN__"):]
+	// The relative-with-slash path must reach is-mapped (resolved as a
+	// pathname), i.e. NOT be dropped by the bare-name gate.
+	if !strings.Contains(runPhase, "candidate cmd=[proj/run.sh]") {
+		t.Errorf("relative path `proj/run.sh` was not captured by the hook (gate dropped it):\n%s", runPhase)
+	}
+	if !strings.Contains(runPhase, "branch=case0") {
+		t.Errorf("relative path `proj/run.sh` resolved but was not routed as mapped (case0):\n%s", runPhase)
+	}
+}

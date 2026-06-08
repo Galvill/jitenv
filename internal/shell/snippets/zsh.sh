@@ -219,13 +219,12 @@ __jitenv_accept_line() {
         first="${first#\'}"; first="${first%\'}"
         case "$first" in
             /*)        resolved="$first" ;;
-            ./*|../*)
-                # Normalize the same way bash.sh does so zsh and bash
-                # produce identical canonical absolute paths and stay in
-                # sync. The old `${PWD}/${first#./}` only stripped a
-                # leading `./`, so `../foo` became `$PWD/../foo` — an
-                # unnormalized path that won't path-equality-match a
-                # mapping stored in canonical absolute form (issue #245).
+            */*)
+                # Any token containing a slash is a pathname (./x, ../x,
+                # dir/x, a/b/c), not a $PATH lookup — resolve it relative to
+                # the cwd, canonicalized via cd+pwd (issue #245). NOT gated
+                # by the bare-name $PATH check below: a relative path can
+                # match a path/glob mapping regardless of $PATH (#237/#263).
                 resolved="$(cd "$(dirname "$first")" 2>/dev/null && pwd)/$(basename "$first")"
                 ;;
             *)
