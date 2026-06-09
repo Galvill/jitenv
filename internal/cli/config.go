@@ -81,6 +81,7 @@ func newConfigShowCmd() *cobra.Command {
 				return err
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 			if err := config.DecryptInPlace(c, key); err != nil {
 				return err
 			}

@@ -97,6 +97,7 @@ func runClone(cmd *cobra.Command, args []string, tokenStdin bool, bagOverride st
 		return err
 	}
 	defer zeroBytes(key)
+	defer lockKey(key)()
 	// One-shot opaque-ID migration (#248) so a legacy config cloned into
 	// gets the sealed name_map + backup like the unlock/TUI paths, rather
 	// than silently migrating on save without a backup. The lock against
