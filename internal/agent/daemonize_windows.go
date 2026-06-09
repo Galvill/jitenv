@@ -112,24 +112,42 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	// has bound its listener. Unlike Unix where the socket is a file on
 	// disk and os.Stat suffices, Windows pipes live in a separate
 	// namespace — the only reliable "is it up?" check is to dial it.
+	//
+	// As on Unix, the prior `cmd.ProcessState != nil` early-exit check
+	// was dead code (#276): exec.Cmd populates ProcessState only via
+	// cmd.Wait(). Park a goroutine on Wait() to surface early child exits
+	// promptly; otherwise a crashing child blocked the caller for the
+	// full spawnTimeout (10s default). The goroutine sits parked for the
+	// lifetime of the agent on the success path and dies with the parent
+	// `jitenv unlock` invocation.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
 	timeout := spawnTimeout()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		conn, derr := dialAgent(ctx, paths.Socket, 200*time.Millisecond)
 		cancel()
 		if derr == nil {
 			conn.Close()
-			_ = cmd.Process.Release()
 			return nil
 		}
-		if cmd.ProcessState != nil {
-			return fmt.Errorf("agent exited early: %s%s", cmd.ProcessState, logTailSuffix(paths.LogFile))
+		select {
+		case waitErr := <-waitCh:
+			return fmt.Errorf("agent exited early: %v%s", waitErr, logTailSuffix(paths.LogFile))
+		case <-deadline.C:
+			_ = cmd.Process.Kill()
+			<-waitCh
+			return fmt.Errorf("agent did not start within %s "+
+				"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
+				"check the agent log under %%LOCALAPPDATA%%\\jitenv\\agent.log%s", timeout, logTailSuffix(paths.LogFile))
+		case <-ticker.C:
+			// loop and re-dial
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	_ = cmd.Process.Kill()
-	return fmt.Errorf("agent did not start within %s "+
-		"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
-		"check the agent log under %%LOCALAPPDATA%%\\jitenv\\agent.log%s", timeout, logTailSuffix(paths.LogFile))
 }

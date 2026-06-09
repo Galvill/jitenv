@@ -81,24 +81,49 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	pw.Close()
 
 	// Wait for the socket to appear, indicating Listen succeeded.
+	//
+	// We must learn about an early child exit promptly. cmd.ProcessState
+	// is only populated by cmd.Wait(), so the previous "if
+	// cmd.ProcessState != nil" branch was dead code (#276) — a crashing
+	// child (wrong binary, panic in init, denied socket dir) blocked the
+	// caller for the full spawnTimeout (10s by default since #266).
+	//
+	// Park a goroutine on cmd.Wait() and race it against the socket
+	// appearing. On success we return without joining the goroutine; it
+	// sits parked on Wait for the lifetime of the agent process and exits
+	// when the agent exits. We deliberately drop the earlier
+	// cmd.Process.Release() call — Release tells Go to forget the
+	// process, but the goroutine still wants it for Wait(). The OS reaps
+	// the agent via init reparenting once the parent (this `jitenv
+	// unlock` invocation) exits.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
 	timeout := spawnTimeout()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
 		if _, err := os.Stat(paths.Socket); err == nil {
-			// Detach from the child completely.
-			_ = cmd.Process.Release()
 			return nil
 		}
-		// If the child died early, surface that — with the tail of the
-		// agent log so the actual child stderr (e.g. a re-exec of the
-		// wrong binary printing `unknown command "__agent"`) is visible.
-		if cmd.ProcessState != nil {
-			return fmt.Errorf("agent exited early: %s%s", cmd.ProcessState, logTailSuffix(paths.LogFile))
+		select {
+		case waitErr := <-waitCh:
+			// Child died before the socket appeared — surface the exit
+			// status plus the tail of the agent log so the actual stderr
+			// (e.g. `unknown command "__agent"`) is visible.
+			return fmt.Errorf("agent exited early: %v%s", waitErr, logTailSuffix(paths.LogFile))
+		case <-deadline.C:
+			_ = cmd.Process.Kill()
+			// Drain the Wait goroutine so it doesn't leak past return.
+			<-waitCh
+			return fmt.Errorf("agent did not start within %s "+
+				"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
+				"check ${XDG_RUNTIME_DIR}/jitenv/agent.log%s", timeout, logTailSuffix(paths.LogFile))
+		case <-ticker.C:
+			// loop and re-stat the socket
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	_ = cmd.Process.Kill()
-	return fmt.Errorf("agent did not start within %s "+
-		"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
-		"check ${XDG_RUNTIME_DIR}/jitenv/agent.log%s", timeout, logTailSuffix(paths.LogFile))
 }

@@ -24,7 +24,10 @@ import (
 // Without this, inline unlock (#264/#268) re-execs jitenv-hook, the child
 // hits its default switch case (`unknown command "__agent"`), exits 2, and
 // the socket-appearance loop times out.
-func resolveAgentExecutable() (string, error) {
+//
+// Exposed as a function variable so tests can inject a fake binary path
+// (#276 covers the early-child-exit detection that exercises this seam).
+var resolveAgentExecutable = func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
