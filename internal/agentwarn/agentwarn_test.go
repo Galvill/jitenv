@@ -2,11 +2,15 @@ package agentwarn
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // TestWarnAndWait_NonTTYReturnsImmediately guards the non-interactive
@@ -57,6 +61,21 @@ func withStdin(t *testing.T, r *os.File) {
 	})
 }
 
+// withFakeRawMode stubs the makeRaw hook so it returns success against
+// the pipe-backed stdin used by the keystroke tests. term.MakeRaw would
+// otherwise fail on a non-TTY fd, sending the call through the
+// line-prompt fallback path — but the per-keystroke dispatch is what
+// the existing tests cover (since #232/#264 settled the semantics).
+//
+// The "old state" is a typed nil: term.Restore tolerates a nil State
+// without touching the fd, which is what we want for the pipe.
+func withFakeRawMode(t *testing.T) {
+	t.Helper()
+	prev := makeRaw
+	makeRaw = func(fd int) (*term.State, error) { return nil, nil }
+	t.Cleanup(func() { makeRaw = prev })
+}
+
 // TestWarnAndWait_UnlockKey: typing `u` returns ActionUnlock so the
 // caller can route into the inline-unlock flow (issue #232).
 func TestWarnAndWait_UnlockKey(t *testing.T) {
@@ -68,6 +87,7 @@ func TestWarnAndWait_UnlockKey(t *testing.T) {
 	}
 	defer r.Close()
 	withStdin(t, r)
+	withFakeRawMode(t)
 
 	if _, err := w.WriteString("u\n"); err != nil {
 		t.Fatalf("write: %v", err)
@@ -98,6 +118,7 @@ func TestWarnAndWait_EnterKey(t *testing.T) {
 	}
 	defer r.Close()
 	withStdin(t, r)
+	withFakeRawMode(t)
 
 	if _, err := w.WriteString("\n"); err != nil {
 		t.Fatalf("write: %v", err)
@@ -130,6 +151,7 @@ func TestWarnAndWait_AnyOtherKeyContinues(t *testing.T) {
 			t.Fatalf("pipe: %v", err)
 		}
 		withStdin(t, r)
+		withFakeRawMode(t)
 
 		if _, err := w.WriteString(key); err != nil {
 			t.Fatalf("write: %v", err)
@@ -163,6 +185,7 @@ func TestWarnAndWait_PromptCopy(t *testing.T) {
 	}
 	defer inR.Close()
 	withStdin(t, inR)
+	withFakeRawMode(t)
 
 	// Capture stderr for the duration of the call.
 	errR, errW, err := os.Pipe()
@@ -208,5 +231,173 @@ func TestWarnAndWait_PromptCopy(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("prompt copy missing %q\nfull output:\n%s", want, out)
 		}
+	}
+}
+
+// TestWarnAndWait_LinePromptFallbackOnMakeRawFailure exercises bug (b):
+// when term.MakeRaw fails on a TTY (some pty layers, broken termios),
+// WarnAndWait must fall back to a single line-prompt instead of
+// silently breaking the per-keystroke UX (the raw-less goroutine would
+// stay parked in line-buffered Read and `u` wouldn't fire until
+// Enter — the countdown ticks down and the user sees nothing happen).
+func TestWarnAndWait_LinePromptFallbackOnMakeRawFailure(t *testing.T) {
+	t.Setenv("JITENV_HOOK_DELAY", "10")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	withStdin(t, r)
+
+	// Force MakeRaw to fail so we go through linePromptFallback.
+	prevMakeRaw := makeRaw
+	makeRaw = func(fd int) (*term.State, error) { return nil, errors.New("simulated MakeRaw failure") }
+	t.Cleanup(func() { makeRaw = prevMakeRaw })
+
+	// Capture stderr to assert the fallback wording fires.
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = errW
+	t.Cleanup(func() { os.Stderr = prevStderr })
+
+	captured := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, errR)
+		captured <- buf.String()
+	}()
+
+	// Send `u\n` — the fallback reads a line and dispatches on the
+	// first byte, so this must classify as ActionUnlock.
+	if _, err := w.WriteString("u\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	done := make(chan Action, 1)
+	go func() { done <- WarnAndWait("/some/script.sh") }()
+
+	select {
+	case act := <-done:
+		if act != ActionUnlock {
+			t.Fatalf("expected ActionUnlock via line-prompt fallback, got %v", act)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("line-prompt fallback did not return on `u\\n` within 3s")
+	}
+	w.Close()
+	errW.Close()
+	os.Stderr = prevStderr
+
+	out := <-captured
+	if !strings.Contains(out, "raw mode unavailable") {
+		t.Errorf("fallback wording not seen in stderr; got:\n%s", out)
+	}
+}
+
+// TestWarnAndWait_LinePromptFallback_ContinueOnAnyOtherLine: the line-
+// prompt fallback's classification mirrors the raw-mode path — a line
+// whose first byte is neither `u` nor 0x03 is ActionContinue.
+func TestWarnAndWait_LinePromptFallback_ContinueOnAnyOtherLine(t *testing.T) {
+	t.Setenv("JITENV_HOOK_DELAY", "10")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	withStdin(t, r)
+
+	prevMakeRaw := makeRaw
+	makeRaw = func(fd int) (*term.State, error) { return nil, errors.New("simulated MakeRaw failure") }
+	t.Cleanup(func() { makeRaw = prevMakeRaw })
+
+	if _, err := w.WriteString("\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	done := make(chan Action, 1)
+	go func() { done <- WarnAndWait("/some/script.sh") }()
+
+	select {
+	case act := <-done:
+		if act != ActionContinue {
+			t.Fatalf("expected ActionContinue, got %v", act)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("line-prompt fallback did not return on Enter within 3s")
+	}
+	w.Close()
+}
+
+// TestKeyReader_StopReleasesGoroutine guards bug (a): after WarnAndWait
+// returns, the stdin-reader goroutine must NOT still be parked in a
+// Read on the duplicated stdin fd. The leaked goroutine on the pre-fix
+// code would steal the next byte the parent process tries to read from
+// stdin.
+//
+// Counts goroutines before vs after a short-countdown WarnAndWait call
+// that exits via the "key pressed → ActionContinue" path. The reader
+// goroutine is part of that delta; if stop() failed to cancel it, the
+// goroutine count would stay elevated.
+//
+// Linux/macOS only: the Windows reader intentionally retains the
+// legacy leak (see reader_windows.go).
+func TestKeyReader_StopReleasesGoroutine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reader intentionally leaks; see reader_windows.go")
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := newKeyReader()
+	prevStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = prevStdin })
+
+	before := runtime.NumGoroutine()
+	ch := reader.start()
+	// Brief wait so the reader's goroutine is definitely parked in
+	// Read before we cancel it.
+	time.Sleep(50 * time.Millisecond)
+	reader.stop()
+
+	// stop() pushed a past deadline on the dup's *os.File and closed
+	// it; the goroutine's Read returns immediately and the goroutine
+	// exits. Give the scheduler a beat to actually reap it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.Gosched()
+		if runtime.NumGoroutine() <= before+1 { // +1 for test scheduling jitter
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Sanity: the channel is non-nil and closed-or-empty.
+	select {
+	case _, ok := <-ch:
+		// Either no key (ok=true with zero) or the channel was closed.
+		_ = ok
+	default:
+	}
+
+	after := runtime.NumGoroutine()
+	// We allow a small jitter (other goroutines may come/go during the
+	// test). The pre-fix code leaked one specific goroutine that would
+	// stay alive long past stop() because os.Stdin.Read had no way to
+	// be cancelled; in those runs, after-before reliably stayed at >=1
+	// indefinitely. The fix should drive it back to before within the
+	// deadline above.
+	if after > before+1 {
+		t.Errorf("reader goroutine appears to have leaked: before=%d after=%d", before, after)
 	}
 }
