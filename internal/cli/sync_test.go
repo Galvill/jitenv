@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gv/jitenv/internal/config"
@@ -112,8 +113,10 @@ func TestWritePulledConfig_AcceptsEncryptedFormWithSourceBackedVar(t *testing.T)
 	if err != nil {
 		t.Fatalf("stat dest: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("dest perms = %o, want 0600", perm)
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Errorf("dest perms = %o, want 0600", perm)
+		}
 	}
 	got, err := os.ReadFile(destPath)
 	if err != nil {
