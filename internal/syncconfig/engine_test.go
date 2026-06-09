@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/gv/jitenv/internal/crypto"
@@ -264,6 +267,64 @@ func TestPushFenceRejectsStaleOverwrite(t *testing.T) {
 	}
 }
 
+// TestPushFenceRejectsIncompleteRemote: an orphan blob on the remote
+// (meta sidecar manually removed, or a partial-write that lost the
+// meta) must NOT be silently clobbered by a non-force push — the
+// engine must surface ErrRemoteStateIncomplete and require --force
+// (#279).
+func TestPushFenceRejectsIncompleteRemote(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	a1 := buildFileAdapter(t, mk1, &m1.Adapters[0])
+
+	// Publish a clean (blob, meta) pair.
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the remote by deleting the meta sidecar (mirrors a
+	// partial Push or a partial filesystem replication).
+	if err := os.Remove(remote + ".meta.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A non-force push must refuse.
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte("version = 1\n# new\n"), 1, false); err == nil {
+		t.Fatal("expected push against incomplete remote to be refused without --force")
+	}
+
+	// --force still works.
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte("version = 1\n# new\n"), 1, true); err != nil {
+		t.Fatalf("--force push against incomplete remote should succeed: %v", err)
+	}
+}
+
+// TestPullRefusesIncompleteRemote: pull against an orphan blob/meta
+// must surface a clear error rather than fall through Decide() with a
+// zero-hash remote (which would otherwise look like spurious
+// divergence). The local config must remain untouched (#279).
+func TestPullRefusesIncompleteRemote(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	a1 := buildFileAdapter(t, mk1, &m1.Adapters[0])
+
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(remote + ".meta.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := syncconfig.PullConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), false)
+	if err == nil {
+		t.Fatal("expected pull against incomplete remote to fail")
+	}
+	if res.Applied != nil {
+		t.Fatal("incomplete-remote pull must not produce an Applied payload")
+	}
+}
+
 // TestPushFenceRejectsNoBaseOverwrite: a fresh machine with no recorded
 // base, pushing to a remote that already has DIFFERENT state, must be
 // refused on a non-force push (symmetric with PullConfig's no-base
@@ -300,5 +361,114 @@ func TestPushFenceRejectsNoBaseOverwrite(t *testing.T) {
 	// --force overrides the fence.
 	if _, err := syncconfig.PushConfig(context.Background(), a2, &m2.Adapters[0], dek2, localEdit, 1, true); err != nil {
 		t.Fatalf("forced push should succeed: %v", err)
+	}
+}
+
+// casRejectAdapter wraps an existing adapter and unconditionally returns
+// ErrPreconditionFailed from Push, simulating a CAS-capable backend (s3)
+// where a concurrent writer landed between the pre-push Pull and the
+// Push and the storage rejected our write. Pull and Validate delegate so
+// the engine's pre-push Pull still sees a real remote.
+type casRejectAdapter struct{ inner syncadapter.Adapter }
+
+func (c *casRejectAdapter) Name() string                       { return c.inner.Name() }
+func (c *casRejectAdapter) Validate(ctx context.Context) error { return c.inner.Validate(ctx) }
+func (c *casRejectAdapter) Pull(ctx context.Context) ([]byte, syncadapter.Meta, error) {
+	return c.inner.Pull(ctx)
+}
+func (c *casRejectAdapter) Push(_ context.Context, _ []byte, _ syncadapter.Meta) error {
+	return syncadapters.ErrPreconditionFailed
+}
+
+// TestPushCASRejectOnForceHasNonCircularMessage: when --force is set and
+// the storage-level CAS still rejects the push (the engine's soft fence
+// was bypassed by --force, but the adapter's CAS — e.g. s3 If-Match —
+// is an independent layer that --force does NOT disable), the surfaced
+// error MUST NOT tell the user to "push with --force to overwrite",
+// because the user is already doing exactly that (#278 review). It also
+// MUST wrap ErrPreconditionFailed so callers can detect the case
+// programmatically.
+func TestPushCASRejectOnForceHasNonCircularMessage(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	inner := buildFileAdapter(t, mk1, &m1.Adapters[0])
+
+	// Seed the remote so the pre-push Pull succeeds (otherwise the
+	// engine would never reach the Push call we want to exercise).
+	if _, err := syncconfig.PushConfig(context.Background(), inner, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrap the adapter so Push always returns ErrPreconditionFailed —
+	// the same error a CAS-capable backend produces when a concurrent
+	// writer raced us between Pull and Push.
+	rejecting := &casRejectAdapter{inner: inner}
+
+	// --force is set; the soft fence will not block, so we reach the
+	// adapter's Push, which rejects via CAS.
+	_, err := syncconfig.PushConfig(context.Background(), rejecting, &m1.Adapters[0], dek1,
+		[]byte("version = 1\n# forced edit\n"), 1, true)
+	if err == nil {
+		t.Fatal("expected force-push to surface the CAS rejection")
+	}
+	if !errors.Is(err, syncadapters.ErrPreconditionFailed) {
+		t.Fatalf("expected error to wrap ErrPreconditionFailed (for callers using errors.Is), got %v", err)
+	}
+	msg := err.Error()
+	// The remediation must not be circular: telling a user who passed
+	// --force to "push with --force" is unhelpful.
+	circular := regexp.MustCompile(`--force\s+to\s+overwrite`)
+	if circular.MatchString(msg) {
+		t.Fatalf("force-push CAS error must not suggest --force again, got: %q", msg)
+	}
+	// And it must not advise pulling-to-reconcile either: under --force
+	// the user has explicitly chosen to overwrite, so the right next
+	// step is to retry the push.
+	if strings.Contains(msg, "jitenv sync pull") {
+		t.Fatalf("force-push CAS error must not advise `jitenv sync pull` (the user already chose to overwrite), got: %q", msg)
+	}
+	// Sanity: the message should at least mention retrying so the user
+	// knows what to do.
+	if !strings.Contains(msg, "retry") {
+		t.Fatalf("force-push CAS error should suggest a retry, got: %q", msg)
+	}
+}
+
+// TestPushCASRejectWithoutForceKeepsReconcileAdvice: the non-force case
+// keeps the original remediation — pull to reconcile, or escalate to
+// --force — because both are valid next steps when the user hasn't yet
+// committed to overwriting (#278 review).
+func TestPushCASRejectWithoutForceKeepsReconcileAdvice(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	inner := buildFileAdapter(t, mk1, &m1.Adapters[0])
+
+	// Seed remote so the pre-push Pull yields a known state and our
+	// recorded base matches it — the engine's soft fence then passes
+	// through and we reach the adapter Push that the wrapper rejects.
+	if _, err := syncconfig.PushConfig(context.Background(), inner, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+
+	rejecting := &casRejectAdapter{inner: inner}
+
+	// force=false: the soft fence sees rmeta.Hash == ad.BaseHash so it
+	// does not block, then the adapter Push rejects with the CAS error.
+	_, err := syncconfig.PushConfig(context.Background(), rejecting, &m1.Adapters[0], dek1,
+		[]byte("version = 1\n# follow-up edit\n"), 1, false)
+	if err == nil {
+		t.Fatal("expected non-force push to surface the CAS rejection")
+	}
+	if !errors.Is(err, syncadapters.ErrPreconditionFailed) {
+		t.Fatalf("expected error to wrap ErrPreconditionFailed, got %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "jitenv sync pull") {
+		t.Fatalf("non-force CAS error should advise `jitenv sync pull`, got: %q", msg)
+	}
+	if !strings.Contains(msg, "--force to overwrite") {
+		t.Fatalf("non-force CAS error should mention escalating to --force, got: %q", msg)
 	}
 }

@@ -77,6 +77,19 @@ type adapter struct {
 	once   sync.Once
 	cli    api
 	cliErr error
+
+	// etagMu guards lastBlobETag / lastSeenAt, which together carry the
+	// compare-and-set token from the most recent successful Pull into
+	// the next Push (#278). The engine drives Pull → fence → Push
+	// against the SAME adapter instance, so stashing the ETag here lets
+	// Push pass IfMatch without widening the Adapter.Push interface.
+	//
+	// A zero ETag means "Pull did not observe a blob"; Push then uses
+	// IfNoneMatch: "*" to refuse to clobber any object that appeared
+	// since (genuinely-first-push CAS).
+	etagMu       sync.Mutex
+	lastBlobETag string
+	lastObserved bool
 }
 
 // New constructs an s3 adapter. Required params: "bucket" and "key".
@@ -210,6 +223,20 @@ func (a *adapter) Validate(ctx context.Context) error {
 	return nil
 }
 
+// Push uploads the (blob, meta) pair to S3 with a compare-and-set
+// precondition (#278): if the most recent Pull observed a blob, the
+// PutObject uses IfMatch: <observed ETag> so a concurrent push that
+// landed in between is detected and rejected with
+// ErrPreconditionFailed; if Pull observed no blob, the PutObject uses
+// IfNoneMatch: "*" so a racing first-push from another host is also
+// detected.
+//
+// The CAS guard applies to the BLOB only. The meta sidecar is written
+// after the blob lands; if a concurrent writer raced and lost on the
+// blob, no meta was overwritten because we never reached this step.
+// (A meta that lags behind its blob is exactly the
+// ErrRemoteStateIncomplete state PullConfig refuses to fast-forward
+// through, so the engine self-heals on the next push.)
 func (a *adapter) Push(ctx context.Context, blob []byte, meta syncadapter.Meta) error {
 	if err := a.Validate(ctx); err != nil {
 		return err
@@ -218,7 +245,16 @@ func (a *adapter) Push(ctx context.Context, blob []byte, meta syncadapter.Meta) 
 	if err != nil {
 		return err
 	}
-	if err := a.putObject(ctx, a.key, blob); err != nil {
+
+	a.etagMu.Lock()
+	prevETag := a.lastBlobETag
+	observed := a.lastObserved
+	a.etagMu.Unlock()
+
+	if err := a.putObjectCAS(ctx, a.key, blob, prevETag, observed); err != nil {
+		if isPreconditionFailed(err) {
+			return fmt.Errorf("s3 adapter: %w", syncadapters.ErrPreconditionFailed)
+		}
 		return fmt.Errorf("s3 adapter: put blob: %w", err)
 	}
 	if err := a.putObject(ctx, a.metaKey(), mb); err != nil {
@@ -227,13 +263,50 @@ func (a *adapter) Push(ctx context.Context, blob []byte, meta syncadapter.Meta) 
 	return nil
 }
 
-// putObject writes one object with server-side encryption requested:
-// SSE-KMS when a key ID is configured, otherwise SSE-S3 (AES256).
+// putObject writes one object with server-side encryption requested
+// (SSE-KMS when a key ID is configured, otherwise SSE-S3) and NO
+// precondition. Used for the meta sidecar, whose CAS is implicit in
+// the blob's: if the blob put was rejected on a stale ETag we never
+// reach the meta put, and a meta-without-blob is surfaced as
+// ErrRemoteStateIncomplete on the next Pull (#279).
 func (a *adapter) putObject(ctx context.Context, key string, data []byte) error {
 	cli, err := a.client(ctx)
 	if err != nil {
 		return err
 	}
+	in := a.buildPutInput(key, data)
+	_, err = cli.PutObject(ctx, in)
+	return err
+}
+
+// putObjectCAS is putObject + a precondition header derived from the
+// most recent Pull observation. When observed is true and prevETag is
+// non-empty, IfMatch is set (CAS against a known prior version). When
+// observed is false, IfNoneMatch "*" is set (refuse to overwrite any
+// object — guards the first-push race). When observed is true and
+// prevETag is empty (a degraded path — Pull saw the object but the
+// SDK returned no ETag), no precondition is sent: the engine's
+// soft pre-push fence still catches the common case.
+func (a *adapter) putObjectCAS(ctx context.Context, key string, data []byte, prevETag string, observed bool) error {
+	cli, err := a.client(ctx)
+	if err != nil {
+		return err
+	}
+	in := a.buildPutInput(key, data)
+	switch {
+	case observed && prevETag != "":
+		in.IfMatch = awsv2.String(prevETag)
+	case !observed:
+		in.IfNoneMatch = awsv2.String("*")
+	}
+	_, err = cli.PutObject(ctx, in)
+	return err
+}
+
+// buildPutInput centralizes the shared PutObjectInput shape (bucket,
+// key, body, SSE settings). Callers add the precondition headers they
+// need on top.
+func (a *adapter) buildPutInput(key string, data []byte) *s3.PutObjectInput {
 	in := &s3.PutObjectInput{
 		Bucket: awsv2.String(a.bucket),
 		Key:    awsv2.String(key),
@@ -245,26 +318,62 @@ func (a *adapter) putObject(ctx context.Context, key string, data []byte) error 
 	} else {
 		in.ServerSideEncryption = types.ServerSideEncryptionAes256
 	}
-	_, err = cli.PutObject(ctx, in)
-	return err
+	return in
 }
 
+// isPreconditionFailed reports whether err is the S3 412 conditional-
+// write failure. The SDK exposes it as an APIError with code
+// "PreconditionFailed"; tests inject the same code via the smithy
+// APIError interface.
+func isPreconditionFailed(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "PreconditionFailed", "412":
+			return true
+		}
+	}
+	return false
+}
+
+// Pull reads the (blob, meta) pair from S3. It distinguishes three
+// outcomes (#279): both objects absent → ErrNoRemoteState (clean first
+// push); exactly one absent → ErrRemoteStateIncomplete (corrupt remote
+// state — typically a Push that PutObject'd the blob but failed before
+// the meta); both present → (blob, meta, nil).
+//
+// Conflating the two missing-cases let the engine's pre-push fence
+// silently overwrite an orphan blob without --force; splitting them is
+// what restores the safety guarantee on shared buckets.
+//
+// Pull also records the blob's ETag (or its absence) on the adapter so
+// the next Push against this instance can issue an If-Match (or
+// If-None-Match: "*") conditional PutObject for proper CAS (#278).
 func (a *adapter) Pull(ctx context.Context) ([]byte, syncadapter.Meta, error) {
-	blob, err := a.getObject(ctx, a.key)
-	if errors.Is(err, syncadapters.ErrNoRemoteState) {
+	blob, blobETag, blobErr := a.getObject(ctx, a.key)
+	mb, _, metaErr := a.getObject(ctx, a.metaKey())
+
+	blobMissing := errors.Is(blobErr, syncadapters.ErrNoRemoteState)
+	metaMissing := errors.Is(metaErr, syncadapters.ErrNoRemoteState)
+
+	// Stash the observed-blob state for the next Push regardless of
+	// outcome below: incomplete/clean/first-push all want to feed the
+	// CAS layer with whatever the blob currently looks like.
+	a.recordBlobObservation(blobETag, !blobMissing)
+
+	switch {
+	case blobMissing && metaMissing:
 		return nil, syncadapter.Meta{}, syncadapters.ErrNoRemoteState
+	case blobMissing && metaErr == nil:
+		return nil, syncadapter.Meta{}, syncadapters.ErrRemoteStateIncomplete
+	case metaMissing && blobErr == nil:
+		return nil, syncadapter.Meta{}, syncadapters.ErrRemoteStateIncomplete
 	}
-	if err != nil {
-		return nil, syncadapter.Meta{}, fmt.Errorf("s3 adapter: get blob: %w", err)
+	if blobErr != nil {
+		return nil, syncadapter.Meta{}, fmt.Errorf("s3 adapter: get blob: %w", blobErr)
 	}
-	mb, err := a.getObject(ctx, a.metaKey())
-	if errors.Is(err, syncadapters.ErrNoRemoteState) {
-		// A blob without its meta sidecar is corrupt remote state; treat
-		// as missing (mirrors the file/ssh adapters).
-		return nil, syncadapter.Meta{}, syncadapters.ErrNoRemoteState
-	}
-	if err != nil {
-		return nil, syncadapter.Meta{}, fmt.Errorf("s3 adapter: get meta: %w", err)
+	if metaErr != nil {
+		return nil, syncadapter.Meta{}, fmt.Errorf("s3 adapter: get meta: %w", metaErr)
 	}
 	var meta syncadapter.Meta
 	if err := json.Unmarshal(mb, &meta); err != nil {
@@ -273,12 +382,25 @@ func (a *adapter) Pull(ctx context.Context) ([]byte, syncadapter.Meta, error) {
 	return blob, meta, nil
 }
 
-// getObject reads one object's bytes. A missing object is reported as
-// syncadapters.ErrNoRemoteState.
-func (a *adapter) getObject(ctx context.Context, key string) ([]byte, error) {
+// recordBlobObservation stashes the most recently observed ETag for
+// the blob object, used by Push's conditional PutObject. observed
+// reflects whether Pull saw the object at all; etag may be empty even
+// when observed=true if the server returned no ETag (older S3-
+// compatible stores).
+func (a *adapter) recordBlobObservation(etag string, observed bool) {
+	a.etagMu.Lock()
+	a.lastBlobETag = etag
+	a.lastObserved = observed
+	a.etagMu.Unlock()
+}
+
+// getObject reads one object's bytes and returns its ETag. A missing
+// object is reported as syncadapters.ErrNoRemoteState (with empty
+// ETag).
+func (a *adapter) getObject(ctx context.Context, key string) ([]byte, string, error) {
 	cli, err := a.client(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	out, err := cli.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: awsv2.String(a.bucket),
@@ -286,12 +408,20 @@ func (a *adapter) getObject(ctx context.Context, key string) ([]byte, error) {
 	})
 	if err != nil {
 		if isNotFound(err) {
-			return nil, syncadapters.ErrNoRemoteState
+			return nil, "", syncadapters.ErrNoRemoteState
 		}
-		return nil, err
+		return nil, "", err
 	}
 	defer out.Body.Close()
-	return io.ReadAll(out.Body)
+	body, rerr := io.ReadAll(out.Body)
+	if rerr != nil {
+		return nil, "", rerr
+	}
+	var etag string
+	if out.ETag != nil {
+		etag = *out.ETag
+	}
+	return body, etag, nil
 }
 
 // isNotFound reports whether err is an S3 "object/key absent" condition.

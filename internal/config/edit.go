@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/gv/jitenv/internal/atomicfile"
 	"github.com/gv/jitenv/internal/crypto"
 )
 
@@ -136,28 +137,14 @@ func DeriveKeyFromMeta(c *Config, passphrase []byte) ([]byte, error) {
 	return key, nil
 }
 
-// atomicSave writes c to a sibling tempfile (0600) then renames over path.
+// atomicSave writes c to a sibling tempfile (0600) then renames over
+// path. Streams the TOML encoder directly into the tempfile so a large
+// config never has to buffer in RAM; durability + cleanup-on-failure
+// come from internal/atomicfile (#281).
 func atomicSave(path string, c *Config) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".jitenv-*.toml")
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0600); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := toml.NewEncoder(tmp).Encode(c); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.WriteFunc(path, 0o600, ".jitenv-*.toml", func(f *os.File) error {
+		return toml.NewEncoder(f).Encode(c)
+	})
 }
 
 // AtomicSave is the exported variant for callers outside this package

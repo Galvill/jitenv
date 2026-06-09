@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gv/jitenv/internal/atomicfile"
 	"github.com/gv/jitenv/internal/syncadapters"
 	"github.com/gv/jitenv/pkg/syncadapter"
 )
@@ -68,63 +69,54 @@ func (a *adapter) Push(ctx context.Context, blob []byte, meta syncadapter.Meta) 
 	if err := a.Validate(ctx); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(a.path, blob, 0600); err != nil {
+	if err := atomicfile.Write(a.path, blob, 0600, ".jitenv-sync-*"); err != nil {
 		return fmt.Errorf("file adapter: write blob: %w", err)
 	}
 	mb, err := json.Marshal(meta)
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(a.metaPath(), mb, 0600); err != nil {
+	if err := atomicfile.Write(a.metaPath(), mb, 0600, ".jitenv-sync-*"); err != nil {
 		return fmt.Errorf("file adapter: write meta: %w", err)
 	}
 	return nil
 }
 
+// Pull reads the (blob, meta) pair. Three distinct outcomes:
+//
+//   - both files absent → ErrNoRemoteState (clean first-push case).
+//   - exactly one of the two absent → ErrRemoteStateIncomplete (the remote
+//     is corrupt, typically a partial Push or partial replication; #279).
+//   - both present → (blob, meta, nil).
+//
+// The two missing-cases used to collapse to ErrNoRemoteState, which let
+// the engine's pre-push fence treat an orphan blob as "fine, first push"
+// and silently clobber it. Splitting the errors is what lets PushConfig
+// require --force in the corrupt case.
 func (a *adapter) Pull(ctx context.Context) ([]byte, syncadapter.Meta, error) {
-	blob, err := os.ReadFile(a.path)
-	if errors.Is(err, os.ErrNotExist) {
+	blob, blobErr := os.ReadFile(a.path)
+	mb, metaErr := os.ReadFile(a.metaPath())
+
+	blobMissing := errors.Is(blobErr, os.ErrNotExist)
+	metaMissing := errors.Is(metaErr, os.ErrNotExist)
+
+	switch {
+	case blobMissing && metaMissing:
 		return nil, syncadapter.Meta{}, syncadapters.ErrNoRemoteState
+	case blobMissing && metaErr == nil:
+		return nil, syncadapter.Meta{}, syncadapters.ErrRemoteStateIncomplete
+	case metaMissing && blobErr == nil:
+		return nil, syncadapter.Meta{}, syncadapters.ErrRemoteStateIncomplete
 	}
-	if err != nil {
-		return nil, syncadapter.Meta{}, fmt.Errorf("file adapter: read blob: %w", err)
+	if blobErr != nil {
+		return nil, syncadapter.Meta{}, fmt.Errorf("file adapter: read blob: %w", blobErr)
 	}
-	mb, err := os.ReadFile(a.metaPath())
-	if errors.Is(err, os.ErrNotExist) {
-		// A blob without meta is corrupt remote state; treat as missing.
-		return nil, syncadapter.Meta{}, syncadapters.ErrNoRemoteState
-	}
-	if err != nil {
-		return nil, syncadapter.Meta{}, fmt.Errorf("file adapter: read meta: %w", err)
+	if metaErr != nil {
+		return nil, syncadapter.Meta{}, fmt.Errorf("file adapter: read meta: %w", metaErr)
 	}
 	var meta syncadapter.Meta
 	if err := json.Unmarshal(mb, &meta); err != nil {
 		return nil, syncadapter.Meta{}, fmt.Errorf("file adapter: parse meta: %w", err)
 	}
 	return blob, meta, nil
-}
-
-// writeFileAtomic writes via a sibling tempfile + rename so a reader
-// never sees a half-written blob.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".jitenv-sync-*")
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), perm); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
 }

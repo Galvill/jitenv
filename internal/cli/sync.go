@@ -488,12 +488,19 @@ func runSyncStatus(cmd *cobra.Command) error {
 		_, rmeta, perr := adapter.Pull(context.Background())
 		remotePresent := true
 		remoteShort := "-"
-		if errors.Is(perr, syncadapters.ErrNoRemoteState) {
+		switch {
+		case errors.Is(perr, syncadapters.ErrNoRemoteState):
 			remotePresent = false
-		} else if perr != nil {
+		case errors.Is(perr, syncadapters.ErrRemoteStateIncomplete):
+			// Surface the orphan-blob case explicitly: status would
+			// otherwise read as "diverged" against a zero-hash remote
+			// which is more confusing than helpful (#279).
+			fmt.Fprintf(out, "  %-16s [%s]  remote state is incomplete (blob or meta missing); re-publish with `jitenv sync push --force` to overwrite\n", ad.Name, ad.Type)
+			continue
+		case perr != nil:
 			fmt.Fprintf(out, "  %-16s [%s]  unreachable: %v\n", ad.Name, ad.Type, perr)
 			continue
-		} else {
+		default:
 			remoteShort = short(rmeta.Hash)
 		}
 		d := syncconfig.Decide(localHash, rmeta.Hash, ad.BaseHash, remotePresent)

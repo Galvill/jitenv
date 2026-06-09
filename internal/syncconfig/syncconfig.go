@@ -29,6 +29,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/gv/jitenv/internal/atomicfile"
 	"github.com/gv/jitenv/internal/crypto"
 )
 
@@ -100,31 +101,15 @@ func Load(path string) (*File, error) {
 }
 
 // Save writes the sidecar atomically with 0600 perms (sibling tempfile +
-// rename), mirroring config.AtomicSave.
+// rename), mirroring config.AtomicSave. Durability + cleanup-on-failure
+// come from internal/atomicfile (#281).
 func Save(path string, f *File) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".jitenv-sync-*.toml")
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0600); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := toml.NewEncoder(tmp).Encode(f); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.WriteFunc(path, 0o600, ".jitenv-sync-*.toml", func(w *os.File) error {
+		return toml.NewEncoder(w).Encode(f)
+	})
 }
 
 // argonParams returns the KDF params stored in the sidecar, applying the
