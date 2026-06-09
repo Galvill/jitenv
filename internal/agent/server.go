@@ -360,9 +360,23 @@ func (a *Agent) dispatch(ctx context.Context, req Request) Response {
 		if err != nil {
 			return Response{OK: false, Error: err.Error()}
 		}
+		// Swap first, then Wipe the outgoing resolver. This mirrors
+		// the Shutdown path (server.go ~L229) and bounds the
+		// in-memory copies of decrypted secret material to one:
+		// without Wipe-on-swap, every TUI save / sync pull stacks
+		// another resolver's worth of plaintext bag values + decrypted
+		// SourceConfig params on the heap until GC pages them out
+		// (security #287). The Wipe runs AFTER the swap so any
+		// concurrent FetchEnv requests in flight against the old
+		// resolver finish against fully-populated state — they hold
+		// their own reference via currentResolver().
 		a.mu.Lock()
+		old := a.resolver
 		a.resolver = next
 		a.mu.Unlock()
+		if w, ok := old.(interface{ Wipe() }); ok {
+			w.Wipe()
+		}
 		return Response{OK: true}
 	default:
 		return Response{OK: false, Error: fmt.Sprintf("unknown op %q", req.Op)}
