@@ -53,9 +53,23 @@ func TestAgentRejectsExcessConnections(t *testing.T) {
 		holders = append(holders, c)
 	}
 
-	// Give the accept loop a moment to land all `cap` conns inside
-	// handle() so the semaphore is full.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the accept loop to land all `cap` holder conns inside
+	// handle() so the semaphore is full. A fixed sleep here raced on
+	// slow CI runners (macOS scheduling) — if the agent hadn't yet
+	// drained the OS accept queue, the "excess" dial below would slip
+	// into a free slot and block in ReadMessage under the 10s per-conn
+	// deadline, missing the test's 2s read window (#301).
+	saturated := false
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if a.inFlightConns() >= maxConcurrentAgentConns {
+			saturated = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !saturated {
+		t.Fatalf("agent never saw %d in-flight conns (have %d)", maxConcurrentAgentConns, a.inFlightConns())
+	}
 
 	// The (cap+1)th connection must be rejected promptly: the agent
 	// either refuses the connect at the OS level or accepts-then-
@@ -66,7 +80,11 @@ func TestAgentRejectsExcessConnections(t *testing.T) {
 		return
 	}
 	defer extra.Close()
-	if err := extra.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+	// 2s read deadline: with the saturation check above, EOF should
+	// arrive within a few ms — but the scheduler on a loaded CI runner
+	// can defer the close goroutine a surprising amount, so give it
+	// real headroom rather than a tight 500ms (#301).
+	if err := extra.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
 	}
 	buf := make([]byte, 1)
