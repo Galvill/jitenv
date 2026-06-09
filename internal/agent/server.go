@@ -50,6 +50,12 @@ type Agent struct {
 	// SIGTERM mid-fetch dropped a connection while the response was
 	// half-written, surfacing as a confusing IPC error to the client.
 	handlers sync.WaitGroup
+	// inFlight counts connections currently holding a semaphore slot
+	// (between `sem <- struct{}{}` and the matching `<-sem` in Serve).
+	// Exposed via inFlightConns() for tests that need to wait for the
+	// cap to be saturated before probing the accept-time rejection path
+	// — sleeping a fixed duration races on slow CI runners (#301).
+	inFlight atomic.Int32
 
 	mu       sync.RWMutex
 	resolver Resolver
@@ -90,6 +96,12 @@ func (a *Agent) SetReload(fn func() (Resolver, error)) {
 	a.reload = fn
 	a.mu.Unlock()
 }
+
+// inFlightConns returns the number of connections currently occupying a
+// semaphore slot in Serve's accept loop. Test-only — exists so the
+// conn-limit regression can wait for the cap to be saturated rather than
+// sleeping a fixed duration that races on slow CI (#301).
+func (a *Agent) inFlightConns() int { return int(a.inFlight.Load()) }
 
 func (a *Agent) currentResolver() Resolver {
 	a.mu.RLock()
@@ -174,8 +186,10 @@ func (a *Agent) Serve(ctx context.Context) error {
 		select {
 		case sem <- struct{}{}:
 			a.handlers.Add(1)
+			a.inFlight.Add(1)
 			go func() {
 				defer func() {
+					a.inFlight.Add(-1)
 					<-sem
 					a.handlers.Done()
 				}()
