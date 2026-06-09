@@ -266,30 +266,6 @@ func resolveJitenvTUIPath() (string, error) {
 	)
 }
 
-// migrateOpaqueIDsLocked runs the one-shot opaque-ID migration (#248)
-// under the shared .tui.lock so the agent-spawn path and a concurrent
-// `jitenv config` TUI session can't both rewrite the config at once.
-// The lock is held only for the duration of the migration (a no-op when
-// the config is already migrated), then released so the TUI can still be
-// opened while the agent runs. A "lock already held" error is treated as
-// "another jitenv process is migrating/editing right now" and surfaced
-// so the user retries rather than proceeding on a possibly-half-written
-// config.
-//
-// Returns migrated=true when the on-disk config was rewritten, so the
-// caller can print the one-shot backup notice (printMigrationNotice).
-func migrateOpaqueIDsLocked(cfgPath string, key []byte) (migrated bool, err error) {
-	lock, lockErr := lockfile.Acquire(cfgPath + ".tui.lock")
-	if lockErr != nil {
-		if errors.Is(lockErr, os.ErrExist) {
-			return false, fmt.Errorf("another jitenv session is editing %s — close it, then retry", cfgPath)
-		}
-		return false, fmt.Errorf("acquire config lock for migration: %w", lockErr)
-	}
-	defer lock.Close()
-	return config.MigrateToOpaqueIDs(cfgPath, key)
-}
-
 // printMigrationNotice writes the one-shot post-migration backup notice
 // (#269) to w. Shared by every key-holding CLI surface (unlock, bag
 // import) so the copy — including the absolute backup path and the

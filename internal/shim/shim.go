@@ -33,6 +33,7 @@ import (
 
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
+	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/runnotice"
 	"github.com/gv/jitenv/internal/unlock"
 )
@@ -523,6 +524,14 @@ func fetchAfterUnlock(cmd string) (map[string]string, error) {
 			"jitenv: unlock failed (%v) — running without injected env. "+
 				"On slow disks, raise JITENV_AGENT_SPAWN_TIMEOUT (e.g. 20s).\n", err)
 		return nil, err
+	}
+	// Surface the one-shot opaque-ID migration backup notice (#275): a
+	// user whose first jitenv interaction post-#248 upgrade is an inline
+	// unlock from the cwd_glob shim's agent-down countdown otherwise
+	// never sees the .pre-id-migration.bak rollback hint (#269).
+	if res.Migrated {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, config.MigrationNotice(res.CfgPath))
 	}
 	pwd, err := os.Getwd()
 	if err != nil {

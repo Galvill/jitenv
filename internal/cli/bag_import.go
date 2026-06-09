@@ -155,8 +155,10 @@ func runBagImport(cmd *cobra.Command, opts importOpts) error {
 
 	// One-shot opaque-ID migration (#248) so a legacy config gets the
 	// sealed name_map + backup before we mint a new bag/keys into it,
-	// matching the clone/unlock paths.
-	migrated, err := migrateOpaqueIDsLocked(cfgPath, key)
+	// matching the clone/unlock paths. The lock against `jitenv config`
+	// and concurrent migrations is taken internally by
+	// config.MigrateToOpaqueIDs (#275 hoist).
+	migrated, err := config.MigrateToOpaqueIDs(cfgPath, key)
 	if err != nil {
 		return err
 	}

@@ -44,10 +44,11 @@ func newUnlockCmd() *cobra.Command {
 			defer lockKey(key)()
 
 			// One-shot opaque-ID migration (#248), before the agent is
-			// spawned and starts serving. Guarded by the same .tui.lock
-			// the TUI uses so a concurrent `jitenv config` migration can't
-			// race this one.
-			migrated, err := migrateOpaqueIDsLocked(cfgPath, key)
+			// spawned and starts serving. config.MigrateToOpaqueIDs holds
+			// its own internal .tui.lock (#275 hoist) so a concurrent
+			// `jitenv config` migration can't race this one — callers no
+			// longer wrap the call themselves.
+			migrated, err := config.MigrateToOpaqueIDs(cfgPath, key)
 			if err != nil {
 				return err
 			}

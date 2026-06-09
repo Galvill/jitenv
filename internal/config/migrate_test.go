@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gv/jitenv/internal/crypto"
+	"github.com/gv/jitenv/internal/lockfile"
 )
 
 // writeLegacyConfig builds and writes a pre-#248 (name-keyed,
@@ -216,6 +218,71 @@ func TestAtomicSave_PreservesMigrationBackup(t *testing.T) {
 	removeMigrationBackup(path)
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
 		t.Fatalf("removeMigrationBackup should unlink the backup, stat err=%v", err)
+	}
+}
+
+// TestMigrateToOpaqueIDs_AlreadyMigratedSkipsLock verifies the #275
+// invariant: an already-migrated config does NOT acquire the internal
+// migration lock. This keeps the no-op fast path lock-free so every
+// inline unlock against a modern config costs nothing extra, and lets
+// the no-op path coexist with a TUI session that's currently holding
+// the .tui.lock for editing.
+func TestMigrateToOpaqueIDs_AlreadyMigratedSkipsLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+
+	// First migration brings the config to the modern shape.
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+
+	// Hold the migration lock externally (simulates a concurrent
+	// `jitenv config` TUI session).
+	heldF, err := lockfile.Acquire(path + MigrationLockSuffix)
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+	t.Cleanup(func() { _ = heldF.Close() })
+
+	// A second migration must short-circuit BEFORE touching the lock —
+	// otherwise this call would block forever (or fail) on the held
+	// lock. The fast-path probe at the top of MigrateToOpaqueIDs is
+	// what guarantees this.
+	done := make(chan error, 1)
+	go func() {
+		_, err := MigrateToOpaqueIDs(path, key)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("already-migrated MigrateToOpaqueIDs must be a no-op even when the lock is held; got err=%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("already-migrated MigrateToOpaqueIDs blocked on the held lock; the no-op path must skip locking")
+	}
+}
+
+// TestMigrateToOpaqueIDs_LegacyContendsOnLock verifies that a legacy
+// config (still needing migration) DOES contend on the internal lock,
+// so two concurrent migrations can't race each other on a half-written
+// config (#275).
+func TestMigrateToOpaqueIDs_LegacyContendsOnLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+
+	heldF, err := lockfile.Acquire(path + MigrationLockSuffix)
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+	t.Cleanup(func() { _ = heldF.Close() })
+
+	if _, err := MigrateToOpaqueIDs(path, key); err == nil {
+		t.Fatal("migration on a legacy config should fail when the lock is held externally")
+	} else if !strings.Contains(err.Error(), "another jitenv session is editing") {
+		t.Fatalf("expected 'another jitenv session is editing' error, got: %v", err)
 	}
 }
 
