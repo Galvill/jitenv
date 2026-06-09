@@ -162,6 +162,7 @@ available, e.g. via an expect-style wrapper).`,
 				return nil
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 			if err := config.DecryptInPlace(c, key); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not decrypt to compute warnings: %v\n", err)
 				return nil

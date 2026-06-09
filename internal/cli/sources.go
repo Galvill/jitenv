@@ -53,6 +53,7 @@ func newSourcesListCmd() *cobra.Command {
 				return err
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 			if err := config.DecryptInPlace(cfg, key); err != nil {
 				return err
 			}
@@ -108,6 +109,7 @@ func newSourcesTestCmd() *cobra.Command {
 				return err
 			}
 			defer zeroBytes(key)
+			defer lockKey(key)()
 			// Decrypt first: post-#248 the on-disk Sources map is keyed by
 			// opaque IDs, and DecryptInPlace translates them back to the
 			// user-facing names this command looks up by.
