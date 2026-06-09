@@ -183,10 +183,11 @@ func TestMigrateToOpaqueIDs_ValidateStructure(t *testing.T) {
 }
 
 // TestAtomicSave_PreservesMigrationBackup verifies that, as of #269,
-// AtomicSave no longer consumes the pre-migration backup: the verbatim
-// backup written by the migration survives subsequent config-modifying
-// saves so the user keeps a rollback escape hatch until they delete it
-// themselves.
+// AtomicSave no longer unconditionally consumes the pre-migration
+// backup: a freshly-migrated config (Meta.MigratedAt = now) keeps the
+// verbatim backup across subsequent saves so the user has an in-window
+// rollback escape hatch. Post-#288 the retention sweep eventually
+// removes it; that path is exercised by the *Retention* tests below.
 func TestAtomicSave_PreservesMigrationBackup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -203,7 +204,9 @@ func TestAtomicSave_PreservesMigrationBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// Two saves to be sure nothing in the save path removes it.
+	// Two saves to be sure nothing in the save path removes the
+	// in-window backup (Meta.MigratedAt was stamped seconds ago, so
+	// the retention sweep is a no-op).
 	if err := AtomicSave(path, c); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -211,13 +214,176 @@ func TestAtomicSave_PreservesMigrationBackup(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	if _, err := os.Stat(backup); err != nil {
-		t.Fatalf("backup must be preserved across AtomicSave (#269), stat err=%v", err)
+		t.Fatalf("in-window backup must be preserved across AtomicSave (#269), stat err=%v", err)
 	}
 
 	// removeMigrationBackup remains the explicit way to delete it.
 	removeMigrationBackup(path)
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
 		t.Fatalf("removeMigrationBackup should unlink the backup, stat err=%v", err)
+	}
+}
+
+// TestAtomicSave_RemovesExpiredMigrationBackup asserts the #288
+// retention sweep: when Meta.MigratedAt is older than the configured
+// rollback window, the next AtomicSave removes the .pre-id-migration.bak
+// so it stops riding along in dotfile tarballs / rsyncs of the config
+// directory.
+func TestAtomicSave_RemovesExpiredMigrationBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	backup := path + MigrationBackupSuffix
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("backup should exist immediately after migration: %v", err)
+	}
+
+	// Backdate Meta.MigratedAt to 31 days ago — one day past the
+	// default 30-day rollback window — and persist it via a normal
+	// load → mutate → AtomicSave round trip so the sweep runs.
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	c.Meta.MigratedAt = time.Now().Add(-31 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("expired backup must be auto-removed by AtomicSave (#288), stat err=%v", err)
+	}
+
+	// A subsequent save with the backup already gone is a no-op (the
+	// sweep tolerates a missing file).
+	c2, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := AtomicSave(path, c2); err != nil {
+		t.Fatalf("save after sweep: %v", err)
+	}
+}
+
+// TestAtomicSave_KeepsInWindowMigrationBackup pins the boundary
+// behaviour: a backup whose recorded migration timestamp is INSIDE
+// the rollback window must survive AtomicSave. This is the user's
+// rollback escape hatch — sweeping it early would defeat #269.
+func TestAtomicSave_KeepsInWindowMigrationBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	backup := path + MigrationBackupSuffix
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Backdate to 29 days ago — still inside the default 30-day window.
+	c.Meta.MigratedAt = time.Now().Add(-29 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("in-window backup must survive AtomicSave: %v", err)
+	}
+}
+
+// TestAtomicSave_MigrationBackupRetentionEnvOverride exercises the
+// JITENV_MIGRATION_BACKUP_RETENTION_DAYS knob: setting it to 0
+// shortens the window to "remove on the very next save", which is the
+// fastest user-visible way to drain a stale backup.
+func TestAtomicSave_MigrationBackupRetentionEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	backup := path + MigrationBackupSuffix
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("backup should exist immediately after migration: %v", err)
+	}
+
+	t.Setenv(MigrationBackupRetentionEnv, "0")
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Meta.MigratedAt is "just now", but retention=0 means
+	// time.Since(MigratedAt) >= 0 is true → sweep on the next save.
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("retention=0 must sweep on the next save (#288), stat err=%v", err)
+	}
+}
+
+// TestAtomicSave_MigrationBackupRetentionEnvDisable asserts the
+// "never auto-remove" escape hatch: a negative retention value
+// disables the sweep entirely, restoring the pre-#288 "user owns the
+// .bak" semantics for operators who explicitly want it.
+func TestAtomicSave_MigrationBackupRetentionEnvDisable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	backup := path + MigrationBackupSuffix
+
+	t.Setenv(MigrationBackupRetentionEnv, "-1")
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Even with an obviously-expired stamp, retention<0 must not
+	// touch the backup.
+	c.Meta.MigratedAt = time.Now().Add(-365 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("retention<0 must not sweep, stat err=%v", err)
+	}
+}
+
+// TestAtomicSave_MissingMigratedAtPreservesBackup pins the
+// backwards-compat behaviour: a config that has a backup on disk but
+// no Meta.MigratedAt (because it was migrated by a binary that
+// predates the #288 stamp) MUST keep the backup. We never delete a
+// backup we can't date.
+func TestAtomicSave_MissingMigratedAtPreservesBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	backup := path + MigrationBackupSuffix
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Simulate a pre-#288 on-disk state by clearing MigratedAt before
+	// saving. With an empty stamp the sweep MUST be a no-op even
+	// when retention=0 (an empty stamp is "I don't know when").
+	c.Meta.MigratedAt = ""
+	t.Setenv(MigrationBackupRetentionEnv, "0")
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("empty Meta.MigratedAt must preserve the backup: %v", err)
 	}
 }
 

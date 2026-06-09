@@ -42,6 +42,16 @@ type Meta struct {
 	Salt           string `toml:"salt"`               // base64
 	Verify         string `toml:"verify"`             // enc:v1:...
 	NameMap        string `toml:"name_map,omitempty"` // enc:v2: sealed JSON (#248)
+	// MigratedAt records when the pre-#248 → opaque-ID migration ran,
+	// as an RFC3339 UTC timestamp. Set by MigrateToOpaqueIDs immediately
+	// before it writes the migrated config; consumed by the AtomicSave
+	// retention sweep that auto-removes the verbatim pre-id-migration
+	// backup once the rollback window has elapsed (#288). Empty on
+	// configs that were never migrated and on legacy configs migrated
+	// by a binary that predates this field — in both cases the sweep
+	// leaves the backup alone, so the user-visible behaviour is the
+	// pre-#288 status quo (keep the .bak until the user removes it).
+	MigratedAt string `toml:"migrated_at,omitempty"`
 }
 
 type AgentConfig struct {
