@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -338,6 +341,31 @@ func TestS3NewRequiresBucketAndKey(t *testing.T) {
 	if _, err := New(map[string]any{"bucket": "b", "key": "k", "access_key_id": "AKIA"}); err == nil {
 		t.Fatal("expected access_key_id without secret_access_key to be rejected")
 	}
+	// Symmetric half-set rejection (#284): secret_access_key without
+	// access_key_id used to fall through silently into the default
+	// credential chain, hiding a user config typo behind whatever
+	// identity the SDK picked up instead.
+	_, err := New(map[string]any{"bucket": "b", "key": "k", "secret_access_key": "wJalr"})
+	if err == nil {
+		t.Fatal("expected secret_access_key without access_key_id to be rejected")
+	}
+	if !strings.Contains(err.Error(), "must be set together") {
+		t.Fatalf("expected symmetric-pair error message, got %q", err.Error())
+	}
+	// Both-empty is the supported "use the default credential chain"
+	// configuration and must still construct.
+	if _, err := New(map[string]any{"bucket": "b", "key": "k"}); err != nil {
+		t.Fatalf("both-empty creds (default chain) must construct, got %v", err)
+	}
+	// Both-set is the supported explicit-static configuration.
+	if _, err := New(map[string]any{
+		"bucket":            "b",
+		"key":               "k",
+		"access_key_id":     "AKIA",
+		"secret_access_key": "wJalr",
+	}); err != nil {
+		t.Fatalf("both-set creds must construct, got %v", err)
+	}
 }
 
 // TestS3ClientConcurrentInitNoRace exercises the lazy client() init from
@@ -362,4 +390,135 @@ func TestS3ClientConcurrentInitNoRace(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
+}
+
+// TestS3ClientRetriesAfterTransientFailure: a one-shot newClient
+// failure (mirroring a brief IMDS hiccup) must not pin the adapter
+// dead. After the backoff window elapses, the next client() call
+// rebuilds successfully (#283).
+func TestS3ClientRetriesAfterTransientFailure(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+
+	// Drive newClient to fail the first call and succeed thereafter.
+	var calls atomic.Int32
+	transient := errors.New("simulated IMDS unreachable")
+	a.newClient = func(context.Context) (api, error) {
+		if calls.Add(1) == 1 {
+			return nil, transient
+		}
+		return fs, nil
+	}
+
+	// Use a virtual clock so the test doesn't sleep for real.
+	var nowT time.Time
+	a.now = func() time.Time { return nowT }
+	nowT = time.Unix(1_700_000_000, 0)
+
+	// First call: hits the transient failure, error is cached.
+	if _, err := a.client(context.Background()); !errors.Is(err, transient) {
+		t.Fatalf("first call: expected transient error, got %v", err)
+	}
+	// Second call within the backoff window: must return the cached
+	// error WITHOUT re-invoking newClient.
+	nowT = nowT.Add(clientInitBackoff / 2)
+	if _, err := a.client(context.Background()); !errors.Is(err, transient) {
+		t.Fatalf("within-backoff call: expected cached transient error, got %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("within-backoff call must not re-invoke newClient, calls=%d", got)
+	}
+	// Past the backoff: next call re-invokes newClient and recovers.
+	nowT = nowT.Add(clientInitBackoff)
+	cli, err := a.client(context.Background())
+	if err != nil {
+		t.Fatalf("post-backoff call: expected recovery, got %v", err)
+	}
+	if cli == nil {
+		t.Fatal("post-backoff call: expected non-nil client")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("post-backoff call must re-invoke newClient exactly once, calls=%d", got)
+	}
+	// Once cached, subsequent calls reuse the client and never touch
+	// newClient again — the success path is sticky.
+	if _, err := a.client(context.Background()); err != nil {
+		t.Fatalf("post-recovery call: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("post-recovery call must not re-invoke newClient, calls=%d", got)
+	}
+}
+
+// TestS3ClientConcurrentTransientFailure: many goroutines hammer a
+// failing newClient. The mutex must serialize them so newClient is
+// called at most once per backoff window (not once per goroutine), and
+// every caller must observe the same error (#283).
+func TestS3ClientConcurrentTransientFailure(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+
+	transient := errors.New("simulated IMDS unreachable")
+	var calls atomic.Int32
+	a.newClient = func(context.Context) (api, error) {
+		calls.Add(1)
+		return nil, transient
+	}
+	// Freeze the clock so the backoff window covers every concurrent
+	// call: the FIRST caller takes the build path, every later caller
+	// finds lastErrAt set within the window and returns the cached err.
+	frozen := time.Unix(1_700_000_000, 0)
+	a.now = func() time.Time { return frozen }
+
+	const n = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := a.client(context.Background()); !errors.Is(err, transient) {
+				t.Errorf("expected transient error, got %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	// With the clock frozen inside the backoff window, every caller
+	// after the first must take the cached-error short-circuit. Exactly
+	// one newClient call should have been made.
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 newClient call across %d concurrent callers, got %d", n, got)
+	}
+}
+
+// TestS3ValidateRecoversAfterClientInitFailure: the documented user
+// scenario from #283 — a transient client-build failure must not pin
+// Validate dead for the adapter's lifetime.
+func TestS3ValidateRecoversAfterClientInitFailure(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+
+	var calls atomic.Int32
+	transient := errors.New("simulated IMDS unreachable")
+	a.newClient = func(context.Context) (api, error) {
+		if calls.Add(1) == 1 {
+			return nil, transient
+		}
+		return fs, nil
+	}
+	var nowT time.Time
+	a.now = func() time.Time { return nowT }
+	nowT = time.Unix(1_700_000_000, 0)
+
+	if err := a.Validate(context.Background()); !errors.Is(err, transient) {
+		t.Fatalf("first Validate: expected transient error, got %v", err)
+	}
+	// Step past the backoff so the next attempt rebuilds.
+	nowT = nowT.Add(clientInitBackoff + time.Second)
+	if err := a.Validate(context.Background()); err != nil {
+		t.Fatalf("Validate after backoff: expected recovery, got %v", err)
+	}
 }
