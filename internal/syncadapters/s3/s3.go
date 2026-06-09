@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -38,6 +39,13 @@ import (
 )
 
 const typeName = "s3"
+
+// clientInitBackoff is the minimum interval between client()
+// reconstruction attempts after a failed build. Short enough that a
+// transient (IMDS hiccup, partial DNS) recovers in the same operator
+// session; long enough that a persistently-broken config (wrong region,
+// missing IAM) doesn't hammer the AWS config loader on every Push/Pull.
+const clientInitBackoff = 5 * time.Second
 
 // Well-known canned-group grantee URIs. A bucket ACL that grants READ (or
 // FULL_CONTROL) to either of these is effectively public, so Validate
@@ -72,11 +80,22 @@ type adapter struct {
 	// client on demand).
 	newClient func(ctx context.Context) (api, error)
 
-	// once guards lazy construction of cli so concurrent Push/Pull are
-	// safe (the syncadapter.Adapter contract requires concurrency safety).
-	once   sync.Once
-	cli    api
-	cliErr error
+	// now is a test seam for the client-init backoff clock. Production
+	// uses time.Now; tests override it to advance the clock without
+	// real sleeps.
+	now func() time.Time
+
+	// mu guards lazy construction of cli so concurrent Push/Pull are
+	// safe (the syncadapter.Adapter contract requires concurrency
+	// safety). Unlike a sync.Once, a cached error is NOT pinned for the
+	// adapter's lifetime: client() retries on every call where cli is
+	// nil, throttled to clientInitBackoff between attempts so a
+	// persistently-broken config doesn't hammer the AWS config loader
+	// (#283).
+	mu        sync.Mutex
+	cli       api
+	cliErr    error
+	lastErrAt time.Time
 
 	// etagMu guards lastBlobETag / lastSeenAt, which together carry the
 	// compare-and-set token from the most recent successful Pull into
@@ -121,11 +140,20 @@ func New(cfg map[string]any) (syncadapter.Adapter, error) {
 	endpointOverride := asString(cfg["endpoint_override"])
 	usePathStyle := asBool(cfg["use_path_style"])
 
-	if accessKeyID != "" && secretAccessKey == "" {
-		return nil, errors.New("s3 adapter: access_key_id is set but secret_access_key is empty")
+	// Symmetric credential validation (#284): either both halves are
+	// set (use these explicit static creds) or both are empty (fall
+	// back to the AWS default chain). Half-set in either direction is
+	// almost always a config typo — the original code rejected
+	// id-without-secret but silently ignored secret-without-id, which
+	// led to the SDK quietly falling back to a different identity than
+	// the user intended.
+	hasID := accessKeyID != ""
+	hasSecret := secretAccessKey != ""
+	if hasID != hasSecret {
+		return nil, errors.New("s3 adapter: access_key_id and secret_access_key must be set together")
 	}
 
-	a := &adapter{bucket: bucket, key: key, kmsKey: kmsKey}
+	a := &adapter{bucket: bucket, key: key, kmsKey: kmsKey, now: time.Now}
 	a.newClient = func(ctx context.Context) (api, error) {
 		opts := []func(*config.LoadOptions) error{}
 		if region != "" {
@@ -157,13 +185,33 @@ func (a *adapter) Name() string { return typeName }
 func (a *adapter) metaKey() string { return a.key + ".meta.json" }
 
 // client returns the cached S3 client, building it on first use. The
-// sync.Once makes concurrent first calls race-free; a construction error
-// is cached too so a failed build is not retried mid-flight.
+// mutex makes concurrent first calls race-free. Unlike a sync.Once, a
+// construction error is NOT pinned for the adapter's lifetime: a
+// transient failure (IMDS hiccup, DNS blip during EC2 instance-role
+// lookup) recovers on the next call, throttled to clientInitBackoff
+// between attempts so a persistently-broken config doesn't hammer the
+// AWS config loader (#283).
 func (a *adapter) client(ctx context.Context) (api, error) {
-	a.once.Do(func() {
-		a.cli, a.cliErr = a.newClient(ctx)
-	})
-	return a.cli, a.cliErr
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cli != nil {
+		return a.cli, nil
+	}
+	// Throttle retries: a recent failure stays cached until the backoff
+	// expires. The very first call (lastErrAt zero) is never throttled.
+	if !a.lastErrAt.IsZero() && a.now().Sub(a.lastErrAt) < clientInitBackoff {
+		return nil, a.cliErr
+	}
+	cli, err := a.newClient(ctx)
+	if err != nil {
+		a.cliErr = err
+		a.lastErrAt = a.now()
+		return nil, err
+	}
+	a.cli = cli
+	a.cliErr = nil
+	a.lastErrAt = time.Time{}
+	return a.cli, nil
 }
 
 // Validate confirms the bucket is reachable and refuses a bucket that is
