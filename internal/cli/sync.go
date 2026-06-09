@@ -390,9 +390,18 @@ func runSyncPull(cmd *cobra.Command, adapterName string, adopt bool) error {
 	}
 }
 
-// writePulledConfig validates the pulled bytes parse + Validate, then
-// writes them through config.AtomicSave so the agent reload hook fires
-// and on-disk perms stay 0600.
+// writePulledConfig validates the pulled bytes parse + ValidateStructure,
+// then writes them through config.AtomicSave so the agent reload hook
+// fires and on-disk perms stay 0600.
+//
+// Pulled bytes are the raw on-disk (encrypted) form (sync pushes the
+// bytes returned by readConfigBytes). After #248 var.source on disk is
+// an enc:v2:... envelope, so the full Validate() — which calls
+// ValidatePost() and cross-references var.source against the s_xxxxxx-
+// keyed Sources map — spuriously rejects every realistic pulled config.
+// Use ValidateStructure(), the encrypted-form-safe variant whose doc
+// comment explicitly directs callers operating on the encrypted form to
+// use it.
 func writePulledConfig(cfgPath string, plaintext []byte) error {
 	// Stage the decrypted plaintext in the config directory (which is
 	// 0700), not os.TempDir() which is world-traversable — mirrors
@@ -418,7 +427,7 @@ func writePulledConfig(cfgPath string, plaintext []byte) error {
 	if err != nil {
 		return fmt.Errorf("pulled config does not parse: %w", err)
 	}
-	if err := parsed.Validate(); err != nil {
+	if err := parsed.ValidateStructure(); err != nil {
 		return fmt.Errorf("pulled config is invalid, refusing to apply: %w", err)
 	}
 	return config.AtomicSave(cfgPath, parsed)
