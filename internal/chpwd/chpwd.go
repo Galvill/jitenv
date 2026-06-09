@@ -123,7 +123,16 @@ func Run(args []string) (bool, error) {
 		debugLog("desiredCommands error: %v", err)
 		// Config missing or malformed: leave the wrapper dir alone
 		// so a momentary parse error doesn't tear down a working
-		// state. Returning nil keeps the shell hook quiet.
+		// state. But DO clear the match-anchors sidecar (#286) — if
+		// we leave it stale, the bash/zsh in-shell pre-filter (#260)
+		// keeps trusting yesterday's anchors and forks `is-mapped`
+		// for every stale-matching path (which then exits 2 →
+		// silently no env), AND any mapping the user just added in
+		// the broken edit stays invisible until the next cd. An
+		// empty sidecar correctly short-circuits the pre-filter
+		// while the config is broken. Returning nil keeps the shell
+		// hook quiet.
+		writeAnchors(anchorsPath(paths, pid), nil)
 		return false, nil
 	}
 	debugLog("config reports wanted=%v", wanted)
@@ -219,25 +228,34 @@ func anchorsPath(paths agent.Paths, pid int) string {
 	return filepath.Join(filepath.Dir(paths.ShellWrapDir(pid)), "match-anchors")
 }
 
-// writeAnchors (re)writes the match-anchors sidecar from idx. Format is
-// one tab-separated record per line: `E\t<abs-path>` for an exact path
-// mapping, `P\t<literal-prefix>` for a glob. An empty idx (no path/glob
-// mappings) yields an empty file, which tells the hook to never fork
-// is-mapped. Best-effort: a write failure just means the hook keeps its
-// previous (possibly stale) view until the next reconcile.
+// writeAnchors (re)writes the match-anchors sidecar from idx. Records are
+// NUL-framed pairs (#285): `E\x00<abs-path>\x00` for an exact path
+// mapping, `P\x00<literal-prefix>\x00` for a glob. NUL is the one byte
+// that can't appear in a Unix path, so paths containing TAB or newline
+// (legal on Linux/macOS) round-trip intact through the bash/zsh readers
+// — before this, a TAB in the path silently truncated the anchor and
+// bypassed env injection, and a malicious filename could craft bogus
+// anchors that intercept unrelated commands.
+//
+// An empty (or nil) idx yields an empty file, which tells the in-shell
+// pre-filter (#260) to never fork `is-mapped`. Best-effort: a write
+// failure just means the hook keeps its previous view until the next
+// reconcile.
 func writeAnchors(path string, idx *config.Index) {
 	var b strings.Builder
 	if idx != nil {
 		exact, prefixes := idx.Anchors()
 		for _, e := range exact {
-			b.WriteString("E\t")
+			b.WriteByte('E')
+			b.WriteByte(0)
 			b.WriteString(e)
-			b.WriteByte('\n')
+			b.WriteByte(0)
 		}
 		for _, p := range prefixes {
-			b.WriteString("P\t")
+			b.WriteByte('P')
+			b.WriteByte(0)
 			b.WriteString(p)
-			b.WriteByte('\n')
+			b.WriteByte(0)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

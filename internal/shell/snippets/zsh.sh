@@ -89,8 +89,14 @@ __jitenv_load_anchors() {
     __JITENV_PREFIX=()
     __JITENV_BARENAME_ACTIVE=0
     [[ -r "$__JITENV_ANCHORS_FILE" ]] || return 0
+    # NUL-framed pairs (#285): `<kind>\0<val>\0`. `read -d ''` sets the
+    # delimiter to NUL (the first byte of the empty arg's storage), so we
+    # pair-wise read kind then val. NUL is the one byte that can't appear
+    # in a Unix path, so paths containing TAB or newline (legal on
+    # Linux/macOS) survive verbatim — the previous TAB framing truncated
+    # such anchors and silently bypassed env injection.
     local kind val
-    while IFS=$'\t' read -r kind val; do
+    while IFS= read -rd '' kind && IFS= read -rd '' val; do
         case "$kind" in
             E) __JITENV_EXACT[$val]=1 ;;
             P) __JITENV_PREFIX+=("$val") ;;

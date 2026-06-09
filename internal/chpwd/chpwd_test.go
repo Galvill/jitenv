@@ -3,9 +3,11 @@
 package chpwd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,5 +156,133 @@ func TestRunUnlinksInjectionMarker(t *testing.T) {
 	}
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Errorf("injection marker still exists after chpwd run: stat err=%v", err)
+	}
+}
+
+// TestWriteAnchorsNULFraming asserts the on-disk format of the match-anchors
+// sidecar (#285): `<kind>\0<val>\0` per record, with NUL framing so paths
+// containing TAB / newline (legal on Linux/macOS) round-trip intact instead
+// of being silently truncated by the shell reader.
+func TestWriteAnchorsNULFraming(t *testing.T) {
+	tmp := t.TempDir()
+	anchorsFile := filepath.Join(tmp, "match-anchors")
+
+	// Build an Index that contains a path with a TAB embedded — the
+	// previous TAB-framed format would have written this as
+	// `E\t/with\ttab\n`, which a bash reader would read back as just
+	// `/with` (the `tab` segment becoming a stray field).
+	tabbed := "/projects/My\tProject/bin/tool"
+	prefix := "/legit/prefix/"
+	mappings := []config.Mapping{
+		{Path: tabbed, Vars: []config.VarRef{{Name: "FOO", Source: "s", Ref: "x"}}},
+		{Glob: prefix + "**", Vars: []config.VarRef{{Name: "BAR", Source: "s", Ref: "y"}}},
+	}
+	idx := config.NewIndex(mappings)
+
+	writeAnchors(anchorsFile, idx)
+
+	got, err := os.ReadFile(anchorsFile)
+	if err != nil {
+		t.Fatalf("read anchors: %v", err)
+	}
+
+	// Format: `E\0<path>\0P\0<prefix>\0`.
+	want := []byte("E\x00" + tabbed + "\x00P\x00" + prefix + "\x00")
+	if !bytes.Equal(got, want) {
+		t.Errorf("anchors framing wrong:\n  got=%q\n want=%q", got, want)
+	}
+
+	// Sanity-check there's no raw TAB framing or newline framing left.
+	if bytes.Contains(got, []byte("E\t")) || bytes.Contains(got, []byte("P\t")) {
+		t.Errorf("anchors file still contains legacy TAB framing: %q", got)
+	}
+	if i := bytes.IndexByte(got, '\n'); i >= 0 {
+		t.Errorf("anchors file contains newline at %d (NUL framing should leave none): %q", i, got)
+	}
+
+	// And confirm the original TAB-containing path is present verbatim
+	// (i.e. not truncated at the TAB the way the old reader did).
+	if !bytes.Contains(got, []byte(tabbed)) {
+		t.Errorf("TAB-containing path was mangled by writeAnchors: %q", got)
+	}
+}
+
+// TestWriteAnchorsNilEmitsEmptyFile asserts that a nil Index produces an
+// empty sidecar (not a missing one) so the bash/zsh fast-path correctly
+// short-circuits when no anchors are wanted. This is the substrate of the
+// #286 fix below (clear-sidecar-on-Load-fail) — `writeAnchors(path, nil)`
+// must produce a valid empty-anchor file.
+func TestWriteAnchorsNilEmitsEmptyFile(t *testing.T) {
+	tmp := t.TempDir()
+	anchorsFile := filepath.Join(tmp, "match-anchors")
+	// Pre-populate with stale anchors so we can prove it's overwritten,
+	// not just left alone.
+	if err := os.WriteFile(anchorsFile, []byte("E\x00/stale/path\x00"), 0o600); err != nil {
+		t.Fatalf("seed stale: %v", err)
+	}
+
+	writeAnchors(anchorsFile, nil)
+
+	got, err := os.ReadFile(anchorsFile)
+	if err != nil {
+		t.Fatalf("read anchors: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("writeAnchors(nil) should empty the file, got %q", got)
+	}
+}
+
+// TestRunClearsAnchorsOnConfigError is the #286 regression: when the
+// config is corrupt (Load-fail), Run must overwrite any pre-existing
+// match-anchors sidecar with an empty one, so the bash/zsh in-shell
+// pre-filter (#260) stops trusting yesterday's anchors. Without this
+// fix the hook keeps forking `is-mapped` for every stale-matching path
+// AND newly-added mappings stay invisible until the next cd.
+func TestRunClearsAnchorsOnConfigError(t *testing.T) {
+	tmp := t.TempDir()
+	runtimeDir := filepath.Join(tmp, "runtime")
+	cfgPath := filepath.Join(tmp, "config.toml")
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("JITENV_CONFIG", cfgPath)
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a syntactically broken TOML config — config.Load should fail.
+	if err := os.WriteFile(cfgPath, []byte("this is = not valid toml [[[\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pid := os.Getpid()
+	paths, _ := agent.DefaultPaths()
+	wrapDir := paths.ShellWrapDir(pid)
+	shellDir := filepath.Dir(wrapDir)
+	if err := os.MkdirAll(shellDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-populate stale anchors from a prior good load.
+	staleAnchors := filepath.Join(shellDir, "match-anchors")
+	stale := []byte("E\x00/stale/yesterday\x00P\x00/old/prefix/\x00")
+	if err := os.WriteFile(staleAnchors, stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the Load-fail path: pwd different from oldpwd so the
+	// short-circuit doesn't fire before we get to desiredCommandsFor.
+	if _, err := Run([]string{strconv.Itoa(pid), tmp, filepath.Join(tmp, "other")}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got, err := os.ReadFile(staleAnchors)
+	if err != nil {
+		t.Fatalf("read anchors after broken-config Run: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("anchors sidecar not cleared on config Load-fail (#286):\n  got=%q", got)
+	}
+	// Also confirm no leftover content from the stale write.
+	if strings.Contains(string(got), "stale") || strings.Contains(string(got), "yesterday") {
+		t.Errorf("stale anchor content leaked through Load-fail path: %q", got)
 	}
 }
