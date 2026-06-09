@@ -30,14 +30,42 @@ type PullResult struct {
 // new base hash on ad (the caller persists the sidecar).
 //
 // dek and masterKey are NOT logged; the caller owns zeroing them.
+//
+// Concurrency note: the pre-push fence here is best-effort — it relies
+// on the adapter's Pull reflecting whatever was last successfully
+// pushed (TOCTOU). Adapters that can offer stronger compare-and-set
+// guarantees layer them on top INSIDE their Push using state
+// remembered from the immediately-preceding Pull: the s3 adapter
+// stashes the blob's ETag at Pull-time and issues PutObject with
+// If-Match on Push (#278), so two concurrent pushers from different
+// hosts cannot both land — the loser sees ErrPreconditionFailed
+// instead of silently overwriting. The file and ssh adapters have no
+// equivalent CAS primitive available without OS-level coordination
+// (flock / a distributed lock service) and remain TOCTOU-vulnerable;
+// that gap is documented in pkg/syncadapter/syncadapter.go's v2 Lock
+// note.
 func PushConfig(ctx context.Context, adapter syncadapter.Adapter, ad *Adapter, dek, cfgBytes []byte, schemaVersion int, force bool) (PushResult, error) {
 	localHash := HashConfig(cfgBytes)
 
+	// Always Pull before Push, even on --force: the soft fence is
+	// skipped under --force, but CAS-capable adapters (s3) stash the
+	// observed ETag during Pull so the subsequent Push can issue
+	// If-Match. Without a Pull on the force path the adapter would
+	// fall back to IfNoneMatch:"*" and refuse to overwrite any
+	// existing object — defeating --force entirely (#278). Errors
+	// from the pre-push Pull are evaluated below; on --force the
+	// errors are tolerated and the Push proceeds.
+	_, rmeta, rerr := adapter.Pull(ctx)
 	if !force {
-		_, rmeta, rerr := adapter.Pull(ctx)
 		switch {
 		case errors.Is(rerr, syncadapters.ErrNoRemoteState):
 			// first push; fine
+		case errors.Is(rerr, syncadapters.ErrRemoteStateIncomplete):
+			// The remote has a blob without its meta (or vice versa).
+			// Treat as a hard refusal: a non-force push would silently
+			// clobber the orphan and lose whatever it was carrying. The
+			// user must pass --force to explicitly overwrite (#279).
+			return PushResult{}, fmt.Errorf("remote state is incomplete (blob without meta or meta without blob); inspect the remote and re-publish with `jitenv sync push --force` to overwrite, or restore the missing file manually")
 		case rerr != nil:
 			return PushResult{}, fmt.Errorf("pre-push remote check failed: %w", rerr)
 		default:
@@ -63,6 +91,14 @@ func PushConfig(ctx context.Context, adapter syncadapter.Adapter, ad *Adapter, d
 	}
 	meta := syncadapter.Meta{Hash: localHash, SchemaVersion: schemaVersion}
 	if err := adapter.Push(ctx, blob, meta); err != nil {
+		if errors.Is(err, syncadapters.ErrPreconditionFailed) {
+			// A CAS-capable adapter rejected the write because the
+			// remote object changed between our pre-push Pull and the
+			// Push itself — symmetric with the soft-fence's "remote
+			// advanced" branch, but enforced by the storage. Surface it
+			// with the same remediation steps (#278).
+			return PushResult{}, fmt.Errorf("remote changed between pull and push (concurrent writer); run `jitenv sync pull` to reconcile and retry, or push with --force to overwrite")
+		}
 		return PushResult{}, err
 	}
 	ad.BaseHash = localHash
@@ -88,6 +124,12 @@ func PullConfig(ctx context.Context, adapter syncadapter.Adapter, ad *Adapter, d
 	remotePresent := true
 	if errors.Is(perr, syncadapters.ErrNoRemoteState) {
 		remotePresent = false
+	} else if errors.Is(perr, syncadapters.ErrRemoteStateIncomplete) {
+		// Remote has only one of (blob, meta). We can't decrypt or even
+		// hash-check anything, so surface a clear error instead of
+		// falling through to a hash-only Decide() that would treat the
+		// zero-hash meta as a valid divergence input (#279).
+		return PullResult{}, fmt.Errorf("remote state is incomplete (blob without meta or meta without blob); inspect the remote and either restore the missing file or re-publish from a known-good machine with `jitenv sync push --force`")
 	} else if perr != nil {
 		return PullResult{}, perr
 	}

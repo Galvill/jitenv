@@ -3,6 +3,10 @@ package s3
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -10,6 +14,7 @@ import (
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 
 	"github.com/gv/jitenv/internal/syncadapters"
 	"github.com/gv/jitenv/pkg/syncadapter"
@@ -18,30 +23,82 @@ import (
 // fakeS3 is an in-memory S3 keyed by object key. It records the SSE
 // settings of the last PutObject so tests can assert encryption-at-rest
 // is requested. No AWS credentials or network are involved.
+//
+// It also implements minimal ETag + If-Match / If-None-Match semantics
+// so the CAS path (#278) can be exercised without LocalStack.
 type fakeS3 struct {
 	objects map[string][]byte
+	etags   map[string]string
 
 	lastSSE    types.ServerSideEncryption
 	lastKMSKey string
+	// putHeaders records the precondition headers seen on EACH PutObject,
+	// keyed by object key. Tests assert per-key (e.g. the BLOB put got
+	// IfMatch, the META put did not).
+	putHeaders map[string]putHeaders
 
 	// Validate-path knobs.
 	policyPublic bool          // GetBucketPolicyStatus.IsPublic
 	aclGrants    []types.Grant // GetBucketAcl.Grants
 }
 
-func newFakeS3() *fakeS3 { return &fakeS3{objects: map[string][]byte{}} }
+type putHeaders struct {
+	IfMatch     string
+	IfNoneMatch string
+}
+
+func newFakeS3() *fakeS3 {
+	return &fakeS3{
+		objects:    map[string][]byte{},
+		etags:      map[string]string{},
+		putHeaders: map[string]putHeaders{},
+	}
+}
+
+// fakePreconditionFailed is an APIError fake matching the smithy
+// interface so the adapter's isPreconditionFailed detector triggers.
+type fakePreconditionFailed struct{}
+
+func (fakePreconditionFailed) Error() string                 { return "PreconditionFailed" }
+func (fakePreconditionFailed) ErrorCode() string             { return "PreconditionFailed" }
+func (fakePreconditionFailed) ErrorMessage() string          { return "PreconditionFailed" }
+func (fakePreconditionFailed) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	hdr := putHeaders{}
+	if in.IfMatch != nil {
+		hdr.IfMatch = *in.IfMatch
+	}
+	if in.IfNoneMatch != nil {
+		hdr.IfNoneMatch = *in.IfNoneMatch
+	}
+	f.putHeaders[*in.Key] = hdr
+	// Evaluate preconditions before the write lands.
+	if in.IfMatch != nil {
+		cur, exists := f.etags[*in.Key]
+		if !exists || cur != *in.IfMatch {
+			return nil, fakePreconditionFailed{}
+		}
+	}
+	if in.IfNoneMatch != nil && *in.IfNoneMatch == "*" {
+		if _, exists := f.objects[*in.Key]; exists {
+			return nil, fakePreconditionFailed{}
+		}
+	}
 	data, err := io.ReadAll(in.Body)
 	if err != nil {
 		return nil, err
 	}
 	f.objects[*in.Key] = data
+	// S3 ETags for non-multipart uploads are the hex MD5 in quotes.
+	sum := md5.Sum(data)
+	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(sum[:]))
+	f.etags[*in.Key] = etag
 	f.lastSSE = in.ServerSideEncryption
 	if in.SSEKMSKeyId != nil {
 		f.lastKMSKey = *in.SSEKMSKeyId
 	}
-	return &s3.PutObjectOutput{}, nil
+	return &s3.PutObjectOutput{ETag: awsv2.String(etag)}, nil
 }
 
 func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
@@ -49,14 +106,16 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 	if !ok {
 		return nil, &types.NoSuchKey{}
 	}
-	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(data))}, nil
+	etag := f.etags[*in.Key]
+	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(data)), ETag: awsv2.String(etag)}, nil
 }
 
 func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	if _, ok := f.objects[*in.Key]; !ok {
 		return nil, &types.NotFound{}
 	}
-	return &s3.HeadObjectOutput{}, nil
+	etag := f.etags[*in.Key]
+	return &s3.HeadObjectOutput{ETag: awsv2.String(etag)}, nil
 }
 
 func (f *fakeS3) GetBucketPolicyStatus(_ context.Context, _ *s3.GetBucketPolicyStatusInput, _ ...func(*s3.Options)) (*s3.GetBucketPolicyStatusOutput, error) {
@@ -98,6 +157,16 @@ func TestS3PushPullRoundTrip(t *testing.T) {
 	if err := a.Push(context.Background(), want, meta); err != nil {
 		t.Fatalf("push: %v", err)
 	}
+	// First push: no prior observation, so the BLOB put must send
+	// IfNoneMatch: "*" to guard against a concurrent first writer (#278).
+	if got := fs.putHeaders["jitenv/blob"].IfNoneMatch; got != "*" {
+		t.Fatalf("expected IfNoneMatch=\"*\" on first blob push, got %q", got)
+	}
+	// The meta sidecar must NOT carry a precondition: its CAS is
+	// implicit in the blob's (a stale-blob push never reaches the meta).
+	if got := fs.putHeaders["jitenv/blob.meta.json"]; got.IfMatch != "" || got.IfNoneMatch != "" {
+		t.Fatalf("expected meta put to be unconditional, got %+v", got)
+	}
 
 	got, gotMeta, err := a.Pull(context.Background())
 	if err != nil {
@@ -113,6 +182,15 @@ func TestS3PushPullRoundTrip(t *testing.T) {
 	// Default (no KMS key) must request SSE-S3 (AES256).
 	if fs.lastSSE != types.ServerSideEncryptionAes256 {
 		t.Fatalf("expected SSE AES256, got %q", fs.lastSSE)
+	}
+
+	// A second push after that Pull must carry IfMatch=<observed ETag>
+	// on the BLOB put (CAS against the known prior version).
+	if err := a.Push(context.Background(), []byte("next"), syncadapter.Meta{Hash: "x", SchemaVersion: 1}); err != nil {
+		t.Fatalf("second push: %v", err)
+	}
+	if fs.putHeaders["jitenv/blob"].IfMatch == "" {
+		t.Fatalf("expected IfMatch header on Push-after-Pull, got none")
 	}
 }
 
@@ -136,15 +214,82 @@ func TestS3PutRequestsKMSWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestS3PullMissingMetaIsNoRemoteState: a blob present but its meta
-// sidecar absent is treated as no remote state (corrupt remote).
-func TestS3PullMissingMetaIsNoRemoteState(t *testing.T) {
+// TestS3PullMissingMetaIsIncomplete: a blob present but its meta
+// sidecar absent must surface ErrRemoteStateIncomplete so the engine's
+// pre-push fence refuses a non-force overwrite of the orphan (#279).
+func TestS3PullMissingMetaIsIncomplete(t *testing.T) {
 	fs := newFakeS3()
 	a := newFakeAdapter(t, fs, nil)
-	// Plant only the blob, not the meta.
 	fs.objects["jitenv/blob"] = []byte("blob-only")
+	fs.etags["jitenv/blob"] = "\"deadbeef\""
+	_, _, err := a.Pull(context.Background())
+	if !errors.Is(err, syncadapters.ErrRemoteStateIncomplete) {
+		t.Fatalf("expected ErrRemoteStateIncomplete for missing meta, got %v", err)
+	}
+}
+
+// TestS3PullMissingBlobIsIncomplete: the symmetric case — meta
+// present, blob absent — must also surface ErrRemoteStateIncomplete.
+func TestS3PullMissingBlobIsIncomplete(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+	fs.objects["jitenv/blob.meta.json"] = []byte(`{"hash":"abc","schema_version":1}`)
+	fs.etags["jitenv/blob.meta.json"] = "\"feedface\""
+	_, _, err := a.Pull(context.Background())
+	if !errors.Is(err, syncadapters.ErrRemoteStateIncomplete) {
+		t.Fatalf("expected ErrRemoteStateIncomplete for missing blob, got %v", err)
+	}
+}
+
+// TestS3PushCASRejectsConcurrentClobber: machine A pulls, then a third
+// party rewrites the blob (changing its ETag), then A pushes — the
+// PutObject must fail with ErrPreconditionFailed instead of silently
+// overwriting B's update (#278).
+func TestS3PushCASRejectsConcurrentClobber(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+
+	// Seed an initial (blob, meta) pair so Pull sees a real ETag.
+	if err := a.Push(context.Background(), []byte("v1"), syncadapter.Meta{Hash: "h1", SchemaVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.Pull(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a concurrent writer overwriting the blob between Pull
+	// and Push. This bumps the stored ETag, so A's stashed ETag is now
+	// stale — exactly the TOCTOU window the CAS guards.
+	fs.objects["jitenv/blob"] = []byte("v2-by-other-host")
+	fs.etags["jitenv/blob"] = "\"changed-by-other\""
+
+	// A's push must be rejected at the precondition check.
+	err := a.Push(context.Background(), []byte("v3-by-A"), syncadapter.Meta{Hash: "h3", SchemaVersion: 1})
+	if !errors.Is(err, syncadapters.ErrPreconditionFailed) {
+		t.Fatalf("expected ErrPreconditionFailed on stale-ETag push, got %v", err)
+	}
+}
+
+// TestS3PushFirstPushCASRejectsRace: two concurrent first pushes —
+// after one lands, the other (which started with lastObserved=false
+// from its own Pull) must fail with ErrPreconditionFailed via the
+// IfNoneMatch: "*" guard (#278).
+func TestS3PushFirstPushCASRejectsRace(t *testing.T) {
+	fs := newFakeS3()
+	a := newFakeAdapter(t, fs, nil)
+
+	// Adapter's Pull sees nothing (clean state).
 	if _, _, err := a.Pull(context.Background()); err != syncadapters.ErrNoRemoteState {
-		t.Fatalf("expected ErrNoRemoteState for missing meta, got %v", err)
+		t.Fatalf("setup: expected ErrNoRemoteState, got %v", err)
+	}
+
+	// A third party "wins" the race and writes the blob first.
+	fs.objects["jitenv/blob"] = []byte("racer-wrote-first")
+	fs.etags["jitenv/blob"] = "\"racer\""
+
+	err := a.Push(context.Background(), []byte("our-payload"), syncadapter.Meta{Hash: "h", SchemaVersion: 1})
+	if !errors.Is(err, syncadapters.ErrPreconditionFailed) {
+		t.Fatalf("expected ErrPreconditionFailed on first-push race, got %v", err)
 	}
 }
 

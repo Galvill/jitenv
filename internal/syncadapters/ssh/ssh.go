@@ -169,21 +169,36 @@ func (a *adapter) writeRemote(ctx context.Context, remotePath string, data []byt
 	return err
 }
 
+// Pull reads the (blob, meta) pair from the remote host. It
+// distinguishes three outcomes (#279): both files absent →
+// ErrNoRemoteState (clean first push); exactly one absent →
+// ErrRemoteStateIncomplete (corrupt remote — typically a partial Push
+// or a partial filesystem replication that delivered one file but not
+// the other); both present → (blob, meta, nil).
+//
+// Conflating the two missing-cases let the engine's pre-push fence
+// silently overwrite an orphan blob without --force; splitting them
+// requires the user to opt into clobbering.
 func (a *adapter) Pull(ctx context.Context) ([]byte, syncadapter.Meta, error) {
-	// Read blob; distinguish "missing" via a sentinel exit.
-	blob, err := a.readRemote(ctx, a.path)
-	if errors.Is(err, errRemoteMissing) {
+	blob, blobErr := a.readRemote(ctx, a.path)
+	mb, metaErr := a.readRemote(ctx, a.metaRemote())
+
+	blobMissing := errors.Is(blobErr, errRemoteMissing)
+	metaMissing := errors.Is(metaErr, errRemoteMissing)
+
+	switch {
+	case blobMissing && metaMissing:
 		return nil, syncadapter.Meta{}, syncadapters.ErrNoRemoteState
+	case blobMissing && metaErr == nil:
+		return nil, syncadapter.Meta{}, syncadapters.ErrRemoteStateIncomplete
+	case metaMissing && blobErr == nil:
+		return nil, syncadapter.Meta{}, syncadapters.ErrRemoteStateIncomplete
 	}
-	if err != nil {
-		return nil, syncadapter.Meta{}, fmt.Errorf("ssh adapter: read blob: %w", err)
+	if blobErr != nil {
+		return nil, syncadapter.Meta{}, fmt.Errorf("ssh adapter: read blob: %w", blobErr)
 	}
-	mb, err := a.readRemote(ctx, a.metaRemote())
-	if errors.Is(err, errRemoteMissing) {
-		return nil, syncadapter.Meta{}, syncadapters.ErrNoRemoteState
-	}
-	if err != nil {
-		return nil, syncadapter.Meta{}, fmt.Errorf("ssh adapter: read meta: %w", err)
+	if metaErr != nil {
+		return nil, syncadapter.Meta{}, fmt.Errorf("ssh adapter: read meta: %w", metaErr)
 	}
 	var meta syncadapter.Meta
 	if err := json.Unmarshal(mb, &meta); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -261,6 +262,64 @@ func TestPushFenceRejectsStaleOverwrite(t *testing.T) {
 	_, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte("version = 1\n# my edit\n"), 1, false)
 	if err == nil {
 		t.Fatal("expected stale push to be refused by the fence")
+	}
+}
+
+// TestPushFenceRejectsIncompleteRemote: an orphan blob on the remote
+// (meta sidecar manually removed, or a partial-write that lost the
+// meta) must NOT be silently clobbered by a non-force push — the
+// engine must surface ErrRemoteStateIncomplete and require --force
+// (#279).
+func TestPushFenceRejectsIncompleteRemote(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	a1 := buildFileAdapter(t, mk1, &m1.Adapters[0])
+
+	// Publish a clean (blob, meta) pair.
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the remote by deleting the meta sidecar (mirrors a
+	// partial Push or a partial filesystem replication).
+	if err := os.Remove(remote + ".meta.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A non-force push must refuse.
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte("version = 1\n# new\n"), 1, false); err == nil {
+		t.Fatal("expected push against incomplete remote to be refused without --force")
+	}
+
+	// --force still works.
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte("version = 1\n# new\n"), 1, true); err != nil {
+		t.Fatalf("--force push against incomplete remote should succeed: %v", err)
+	}
+}
+
+// TestPullRefusesIncompleteRemote: pull against an orphan blob/meta
+// must surface a clear error rather than fall through Decide() with a
+// zero-hash remote (which would otherwise look like spurious
+// divergence). The local config must remain untouched (#279).
+func TestPullRefusesIncompleteRemote(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "blob")
+	m1 := newMachine(t, remote)
+	mk1, dek1 := unlock(t, m1, samplePassphrase)
+	a1 := buildFileAdapter(t, mk1, &m1.Adapters[0])
+
+	if _, err := syncconfig.PushConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(remote + ".meta.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := syncconfig.PullConfig(context.Background(), a1, &m1.Adapters[0], dek1, []byte(sampleConfig), false)
+	if err == nil {
+		t.Fatal("expected pull against incomplete remote to fail")
+	}
+	if res.Applied != nil {
+		t.Fatal("incomplete-remote pull must not produce an Applied payload")
 	}
 }
 
