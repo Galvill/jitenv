@@ -39,7 +39,7 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 	defer pr.Close()
 	defer pw.Close()
 
-	exe, err := os.Executable()
+	exe, err := resolveAgentExecutable()
 	if err != nil {
 		return err
 	}
@@ -89,14 +89,16 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 			_ = cmd.Process.Release()
 			return nil
 		}
-		// If the child died early, surface that.
+		// If the child died early, surface that — with the tail of the
+		// agent log so the actual child stderr (e.g. a re-exec of the
+		// wrong binary printing `unknown command "__agent"`) is visible.
 		if cmd.ProcessState != nil {
-			return fmt.Errorf("agent exited early: %s", cmd.ProcessState)
+			return fmt.Errorf("agent exited early: %s%s", cmd.ProcessState, logTailSuffix(paths.LogFile))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
 	return fmt.Errorf("agent did not start within %s "+
 		"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
-		"check ${XDG_RUNTIME_DIR}/jitenv/agent.log", timeout)
+		"check ${XDG_RUNTIME_DIR}/jitenv/agent.log%s", timeout, logTailSuffix(paths.LogFile))
 }
