@@ -161,19 +161,16 @@ func atomicSave(path string, c *Config) error {
 }
 
 // AtomicSave is the exported variant for callers outside this package
-// (e.g. the TUI). On a successful write it also consumes the pre-#248
-// migration backup escape hatch (#248): the FIRST config-modifying save
-// after a migration unlinks config.toml.pre-id-migration.bak. The
-// migration's own write goes through the unexported atomicSave so it
-// keeps the backup it just created — only the *next* user-facing save
-// removes it. A save that didn't follow a migration simply finds no
-// backup (no-op).
+// (e.g. the TUI). It writes c to a sibling tempfile then renames over
+// path (mode 0600).
+//
+// Unlike earlier behavior (#248), AtomicSave no longer consumes the
+// pre-id-migration backup. The verbatim pre-#248 backup written by
+// MigrateToOpaqueIDs persists on disk until the user removes it
+// themselves (#269) — saving the config no longer silently deletes the
+// only rollback escape hatch.
 func AtomicSave(path string, c *Config) error {
-	if err := atomicSave(path, c); err != nil {
-		return err
-	}
-	removeMigrationBackup(path)
-	return nil
+	return atomicSave(path, c)
 }
 
 func zero(b []byte) {

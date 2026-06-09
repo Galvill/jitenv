@@ -47,8 +47,12 @@ func newUnlockCmd() *cobra.Command {
 			// spawned and starts serving. Guarded by the same .tui.lock
 			// the TUI uses so a concurrent `jitenv config` migration can't
 			// race this one.
-			if err := migrateOpaqueIDsLocked(cfgPath, key); err != nil {
+			migrated, err := migrateOpaqueIDsLocked(cfgPath, key)
+			if err != nil {
 				return err
+			}
+			if migrated {
+				printMigrationNotice(cmd.ErrOrStderr(), cfgPath)
 			}
 			// Reload cfg in case migration rewrote it (idle timeout etc.
 			// are unchanged by migration, but read the fresh bytes so the

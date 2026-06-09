@@ -37,13 +37,13 @@ func Run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	cfg, key, err := loadOrInit(cfgPath)
+	cfg, key, migrated, err := loadOrInit(cfgPath)
 	if err != nil {
 		return err
 	}
 	defer zero(key)
 
-	return runModel(cfgPath, cfg, key, nil)
+	return runModel(cfgPath, cfg, key, nil, migrated)
 }
 
 // RunWithMappingTemplate runs the TUI with a freshly-reloaded config
@@ -74,9 +74,11 @@ func RunWithMappingTemplate(cfgPath string, key []byte, template *config.Mapping
 	if err != nil {
 		return err
 	}
-	if migrated, err := config.MigrateToOpaqueIDs(cfgPath, key); err != nil {
+	migrated, err := config.MigrateToOpaqueIDs(cfgPath, key)
+	if err != nil {
 		return fmt.Errorf("migrate config for post-clone follow-up: %w", err)
-	} else if migrated {
+	}
+	if migrated {
 		cfg, err = config.Load(cfgPath)
 		if err != nil {
 			return err
@@ -85,7 +87,7 @@ func RunWithMappingTemplate(cfgPath string, key []byte, template *config.Mapping
 	if err := config.DecryptInPlace(cfg, key); err != nil {
 		return fmt.Errorf("decrypt config for post-clone follow-up: %w", err)
 	}
-	return runModel(cfgPath, cfg, key, &mappingTemplate{m: template, hint: footerHint})
+	return runModel(cfgPath, cfg, key, &mappingTemplate{m: template, hint: footerHint}, migrated)
 }
 
 // mappingTemplate is the optional "open on a pre-filled mapping form"
@@ -96,8 +98,14 @@ type mappingTemplate struct {
 	hint string
 }
 
-func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTemplate) error {
+func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTemplate, migrated bool) error {
 	m := newRootModel(cfgPath, cfg, key)
+	if migrated {
+		// One-shot status-line toast inside the TUI; the full multi-line
+		// backup notice is printed to stderr after the alt-screen
+		// restores (below), mirroring maybeAutoInstallHook (#269).
+		m.migrationNotice = "upgraded config to opaque-ID format — pre-upgrade backup kept (see notice on exit)"
+	}
 	if tmpl != nil && tmpl.m != nil {
 		// Append the template mapping and push the form screen on
 		// top of the default menu — Esc returns to the menu, save
@@ -118,6 +126,15 @@ func runModel(cfgPath string, cfg *config.Config, key []byte, tmpl *mappingTempl
 	}
 	if root.savedSinceLastReload {
 		_ = pingAgentReload()
+	}
+	// Print the full multi-line post-migration backup notice (#269) to
+	// stderr once the alt-screen has restored, so the long copy (absolute
+	// backup path + rollback instructions + "don't sync" warning) is
+	// readable below the shell prompt. The in-TUI status line was just a
+	// short toast.
+	if migrated {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, config.MigrationNotice(cfgPath))
 	}
 	// Auto-install the shell hook on TUI exit when there's at least
 	// one mapping configured and the hook isn't already wired. We
@@ -164,58 +181,60 @@ func maybeAutoInstallHook(w io.Writer, cfgPath string) {
 // loadOrInit handles the "no config yet" first-run path: prompt the
 // user, create a fresh encrypted file, then load it. On the existing-
 // config path it just prompts for the passphrase and decrypts.
-func loadOrInit(cfgPath string) (*config.Config, []byte, error) {
+func loadOrInit(cfgPath string) (*config.Config, []byte, bool, error) {
 	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "No config at %s.\nCreate a new one? [y/N] ", cfgPath)
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(ans)) {
 		case "y", "yes":
 		default:
-			return nil, nil, errors.New("aborted")
+			return nil, nil, false, errors.New("aborted")
 		}
 		pw, err := crypto.PromptPassphrase("jitenv config: new passphrase: ", true)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		defer zero(pw)
 		if err := config.InitNew(cfgPath, pw); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		fmt.Fprintf(os.Stderr, "Created %s\n", cfgPath)
 	}
 
 	pw, err := crypto.PromptPassphrase("jitenv config passphrase: ", false)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	defer zero(pw)
 	c, err := config.Load(cfgPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	key, err := config.DeriveKeyFromMeta(c, pw)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	// One-shot opaque-ID migration (#248). Runs under the TUI lock held
 	// by `jitenv config`, so it can't race the agent-spawn migration.
-	if migrated, err := config.MigrateToOpaqueIDs(cfgPath, key); err != nil {
+	migrated, err := config.MigrateToOpaqueIDs(cfgPath, key)
+	if err != nil {
 		zero(key)
-		return nil, nil, err
-	} else if migrated {
+		return nil, nil, false, err
+	}
+	if migrated {
 		// Reload the rewritten (opaque-ID) form so DecryptInPlace below
 		// works on the migrated bytes.
 		c, err = config.Load(cfgPath)
 		if err != nil {
 			zero(key)
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 	}
 	if err := config.DecryptInPlace(c, key); err != nil {
 		zero(key)
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return c, key, nil
+	return c, key, migrated, nil
 }
 
 // pingAgentReload sends an OpReload to a running agent. Errors are

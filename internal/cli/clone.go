@@ -100,8 +100,12 @@ func runClone(cmd *cobra.Command, args []string, tokenStdin bool, bagOverride st
 	// One-shot opaque-ID migration (#248) so a legacy config cloned into
 	// gets the sealed name_map + backup like the unlock/TUI paths, rather
 	// than silently migrating on save without a backup.
-	if err := migrateOpaqueIDsLocked(cfgPath, key); err != nil {
+	migrated, err := migrateOpaqueIDsLocked(cfgPath, key)
+	if err != nil {
 		return err
+	}
+	if migrated {
+		printMigrationNotice(cmd.ErrOrStderr(), cfgPath)
 	}
 	cfg, err = config.Load(cfgPath)
 	if err != nil {
