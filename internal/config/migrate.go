@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/gv/jitenv/internal/lockfile"
 )
@@ -150,9 +152,18 @@ func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 		return false, fmt.Errorf("migrate: re-encrypt under opaque IDs: %w (original left untouched; backup at %s)", err, backupPath)
 	}
 
+	// Stamp the migration timestamp into Meta so the AtomicSave
+	// retention sweep (#288) knows when the rollback window started.
+	// RFC3339 / UTC is human-readable, sorts lexicographically, and is
+	// unambiguous across time zones. Recorded BEFORE save so it lands
+	// on disk with the migrated config.
+	c.Meta.MigratedAt = time.Now().UTC().Format(time.RFC3339)
+
 	// Write via the unexported atomicSave (AtomicSave is identical now,
 	// but keep the internal call explicit). The verbatim backup created
-	// above stays on disk as the rollback escape hatch (#269).
+	// above stays on disk as the rollback escape hatch (#269); the
+	// AtomicSave retention sweep removes it once Meta.MigratedAt is
+	// older than the configured window (#288).
 	if err := atomicSave(path, c); err != nil {
 		return false, fmt.Errorf("migrate: save migrated config: %w (original left untouched; backup at %s)", err, backupPath)
 	}
@@ -198,11 +209,91 @@ func writeVerbatimBackup(src, dst string) error {
 }
 
 // removeMigrationBackup unlinks the pre-migration backup sibling for
-// path, if present. As of #269 nothing in the save path calls this —
-// the backup is intentionally left on disk for the user to remove. The
-// helper is retained for callers that want to explicitly delete the
-// backup (and is exercised by tests). Best-effort: a failure to remove
-// is non-fatal, so the error is swallowed.
+// path, if present. As of #288 the AtomicSave path wires this in via
+// sweepMigrationBackupIfExpired once the rollback window
+// (Meta.MigratedAt + DefaultMigrationBackupRetention) has elapsed,
+// closing the long-tail data-exfil hazard where the .bak rode along
+// in dotfile tarballs / rsyncs (#288). Best-effort: a failure to
+// remove is non-fatal, so the error is swallowed.
 func removeMigrationBackup(path string) {
 	_ = os.Remove(path + MigrationBackupSuffix)
+}
+
+// MigrationBackupRetentionEnv lets the user override the default
+// rollback window for the pre-id-migration backup. Value is parsed as
+// an integer number of days; 0 means "remove on the next save",
+// negative means "never auto-remove" (preserves the pre-#288
+// behaviour for users who explicitly want to keep the .bak
+// indefinitely). A malformed value falls back to the default.
+const MigrationBackupRetentionEnv = "JITENV_MIGRATION_BACKUP_RETENTION_DAYS"
+
+// DefaultMigrationBackupRetention is the rollback window after which
+// AtomicSave auto-removes the pre-id-migration backup (#288). 30 days
+// is the rollback window most users would want — long enough to catch
+// a migration regression that surfaces after a few weeks of normal
+// use, short enough that a dotfile tarball taken months later does
+// NOT carry the verbatim pre-#248 secrets.
+const DefaultMigrationBackupRetention = 30 * 24 * time.Hour
+
+// migrationBackupRetention returns the effective retention window,
+// honouring JITENV_MIGRATION_BACKUP_RETENTION_DAYS. A negative value
+// disables the sweep entirely (returned as a negative Duration); 0
+// triggers immediate removal on the next save.
+func migrationBackupRetention() time.Duration {
+	raw, ok := os.LookupEnv(MigrationBackupRetentionEnv)
+	if !ok || raw == "" {
+		return DefaultMigrationBackupRetention
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return DefaultMigrationBackupRetention
+	}
+	return time.Duration(n) * 24 * time.Hour
+}
+
+// sweepMigrationBackupIfExpired removes the verbatim pre-id-migration
+// backup sibling of path when Meta.MigratedAt is past the configured
+// rollback window. Called from atomicSave on every save (#288) so the
+// backup gradually ages out of any config directory the user is
+// actively touching, rather than persisting indefinitely as a silent
+// secret-exfil hazard (it rode along in `tar czf ~/.config/jitenv`
+// and `rsync ~/.config/jitenv` flows).
+//
+// Behaviour matrix:
+//   - retention <  0: sweep disabled, no-op (operator opt-out).
+//   - meta.MigratedAt empty: no recorded migration, no-op. Backwards
+//     compat with configs migrated by a binary that predates this
+//     field — those users keep manual ownership of the .bak.
+//   - meta.MigratedAt unparseable: treat as if it were empty
+//     (defensive — never delete a backup based on a malformed
+//     timestamp).
+//   - backup missing: no-op (idempotent; the common steady-state
+//     after the first sweep).
+//   - now - migratedAt >= retention: best-effort os.Remove. Errors
+//     are swallowed — a failed remove is no worse than the pre-#288
+//     status quo where the user removes it themselves.
+//
+// The sweep never touches Meta.MigratedAt: keeping the timestamp on
+// disk is harmless and lets a future tool report "this config
+// migrated on <date>" without parsing the .bak.
+func sweepMigrationBackupIfExpired(path string, meta Meta) {
+	retention := migrationBackupRetention()
+	if retention < 0 {
+		return
+	}
+	if meta.MigratedAt == "" {
+		return
+	}
+	migratedAt, err := time.Parse(time.RFC3339, meta.MigratedAt)
+	if err != nil {
+		return
+	}
+	if time.Since(migratedAt) < retention {
+		return
+	}
+	backup := path + MigrationBackupSuffix
+	if _, err := os.Stat(backup); err != nil {
+		return
+	}
+	_ = os.Remove(backup)
 }

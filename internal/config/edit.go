@@ -141,21 +141,36 @@ func DeriveKeyFromMeta(c *Config, passphrase []byte) ([]byte, error) {
 // path. Streams the TOML encoder directly into the tempfile so a large
 // config never has to buffer in RAM; durability + cleanup-on-failure
 // come from internal/atomicfile (#281).
+//
+// On every successful save the pre-id-migration backup sibling
+// (.pre-id-migration.bak) is swept if Meta.MigratedAt is past the
+// configured rollback window (#288). The sweep is best-effort and
+// gated on Meta.MigratedAt being a parseable RFC3339 stamp, so
+// configs migrated by a binary that predates the field keep the
+// pre-#288 "leave the .bak alone" behaviour.
 func atomicSave(path string, c *Config) error {
-	return atomicfile.WriteFunc(path, 0o600, ".jitenv-*.toml", func(f *os.File) error {
+	if err := atomicfile.WriteFunc(path, 0o600, ".jitenv-*.toml", func(f *os.File) error {
 		return toml.NewEncoder(f).Encode(c)
-	})
+	}); err != nil {
+		return err
+	}
+	sweepMigrationBackupIfExpired(path, c.Meta)
+	return nil
 }
 
 // AtomicSave is the exported variant for callers outside this package
 // (e.g. the TUI). It writes c to a sibling tempfile then renames over
 // path (mode 0600).
 //
-// Unlike earlier behavior (#248), AtomicSave no longer consumes the
-// pre-id-migration backup. The verbatim pre-#248 backup written by
-// MigrateToOpaqueIDs persists on disk until the user removes it
-// themselves (#269) — saving the config no longer silently deletes the
-// only rollback escape hatch.
+// Unlike earlier behavior (#248), AtomicSave does not unconditionally
+// consume the pre-id-migration backup. The verbatim pre-#248 backup
+// written by MigrateToOpaqueIDs persists on disk for the rollback
+// window (default 30 days, override via
+// JITENV_MIGRATION_BACKUP_RETENTION_DAYS) so the user keeps an escape
+// hatch; once the window has elapsed AtomicSave removes the backup so
+// it does NOT ride along in dotfile tarballs / rsyncs (#288). The user
+// can still delete it manually at any time via the on-screen rm
+// command in MigrationNotice (#269).
 func AtomicSave(path string, c *Config) error {
 	return atomicSave(path, c)
 }
