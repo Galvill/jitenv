@@ -41,7 +41,10 @@ func newKeyReader() *keyReader {
 
 // start launches the reader goroutine and returns the channel it will
 // send the (single) classified keystroke on. The channel is closed by
-// stop() if no key arrived before cancellation.
+// stop() if no key arrived before cancellation; the goroutine itself
+// never closes r.ch on its normal "got a key, sent, exit" path, so a
+// "channel closed without a value" signal in WarnAndWait unambiguously
+// means the stop() cancellation path.
 func (r *keyReader) start() <-chan Action {
 	r.once.Do(func() {
 		// Dup stdin so we can hold a Close-able handle that doesn't
@@ -70,8 +73,18 @@ func (r *keyReader) start() <-chan Action {
 			buf := make([]byte, 1)
 			n, err := f.Read(buf)
 			if err != nil || n == 0 {
+				// Cancellation (stop() closed the fd / pushed the
+				// deadline) or EOF. stop() owns closing ch — do not
+				// close here, and do not send on a channel that may
+				// already be closed.
 				return
 			}
+			// Best-effort send. If stop() raced ahead and already
+			// closed ch the send would panic; recover so the goroutine
+			// still exits cleanly. In practice this race is vanishingly
+			// rare: a real keystroke means the user pressed something
+			// before the deadline fired.
+			defer func() { _ = recover() }()
 			select {
 			case ch <- classifyKey(buf[0]):
 			default:
@@ -86,18 +99,22 @@ func (r *keyReader) start() <-chan Action {
 // effect on the real stdin (fd 0), which the next stage of the caller
 // (passphrase prompt, exec, etc.) keeps using.
 //
+// stop() also closes r.ch so the WarnAndWait select observes a closed
+// channel (`!ok`) on the cancellation path; the goroutine never closes
+// r.ch itself, so closing here under stopOnce is race-free.
+//
 // Idempotent: WarnAndWait calls stop() both eagerly from finish() and
 // via a defer; only the first call does the work.
 func (r *keyReader) stop() {
 	r.stopOnce.Do(func() {
-		if r.file == nil {
-			return
+		if r.file != nil {
+			// Past deadline → any in-flight Read on the dup returns
+			// immediately with an i/o timeout error, and the goroutine
+			// bails. Then Close() releases the dup fd and the goroutine's
+			// reference goes away cleanly.
+			_ = r.file.SetReadDeadline(time.Unix(1, 0))
+			_ = r.file.Close()
 		}
-		// Past deadline → any in-flight Read on the dup returns
-		// immediately with an i/o timeout error, and the goroutine
-		// bails. Then Close() releases the dup fd and the goroutine's
-		// reference goes away cleanly.
-		_ = r.file.SetReadDeadline(time.Unix(1, 0))
-		_ = r.file.Close()
+		close(r.ch)
 	})
 }

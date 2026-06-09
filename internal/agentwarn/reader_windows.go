@@ -20,8 +20,9 @@ import (
 // keystroke-classification logic in agentwarn.go stays platform-
 // neutral; only the lifecycle of the parked Read differs.
 type keyReader struct {
-	once sync.Once
-	ch   chan Action
+	once     sync.Once
+	stopOnce sync.Once
+	ch       chan Action
 }
 
 func newKeyReader() *keyReader {
@@ -36,6 +37,11 @@ func (r *keyReader) start() <-chan Action {
 			if err != nil || n == 0 {
 				return
 			}
+			// Best-effort send. If stop() already closed ch the send
+			// would panic; recover so the leaked goroutine still exits
+			// cleanly when input finally arrives. The Unix path mirrors
+			// this same defer-recover pattern.
+			defer func() { _ = recover() }()
 			select {
 			case ch <- classifyKey(buf[0]):
 			default:
@@ -45,6 +51,17 @@ func (r *keyReader) start() <-chan Action {
 	return r.ch
 }
 
-// stop is a no-op on Windows (see type doc). It's defined to keep the
-// platform-neutral caller in agentwarn.go simple.
-func (r *keyReader) stop() {}
+// stop closes r.ch so the WarnAndWait select observes a closed channel
+// (`!ok`) on the cancellation path, matching the Unix semantics. The
+// goroutine launched by start() may still be parked in os.Stdin.Read
+// (Windows console handles can't be force-unblocked); it stays alive
+// until the OS reaps it at parent exit. The goroutine's send-on-ch is
+// guarded by defer-recover so a late keystroke doesn't panic the
+// process after stop() has closed ch.
+//
+// Idempotent: only the first call does the work.
+func (r *keyReader) stop() {
+	r.stopOnce.Do(func() {
+		close(r.ch)
+	})
+}

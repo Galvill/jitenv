@@ -333,19 +333,21 @@ func TestWarnAndWait_LinePromptFallback_ContinueOnAnyOtherLine(t *testing.T) {
 	w.Close()
 }
 
-// TestKeyReader_StopReleasesGoroutine guards bug (a): after WarnAndWait
-// returns, the stdin-reader goroutine must NOT still be parked in a
-// Read on the duplicated stdin fd. The leaked goroutine on the pre-fix
-// code would steal the next byte the parent process tries to read from
-// stdin.
+// TestKeyReader_StopReleasesGoroutine guards bug (a) on the
+// stop()-cancellation path: when WarnAndWait exits without a keystroke
+// (countdown elapsed, signal arrived) the stdin-reader goroutine must
+// NOT still be parked in a Read on the duplicated stdin fd. The leaked
+// goroutine on the pre-fix code would steal the next byte the parent
+// process tries to read from stdin.
 //
-// Counts goroutines before vs after a short-countdown WarnAndWait call
-// that exits via the "key pressed → ActionContinue" path. The reader
-// goroutine is part of that delta; if stop() failed to cancel it, the
-// goroutine count would stay elevated.
+// Calls stop() without writing to the pipe so the goroutine's Read is
+// forcibly cancelled by the past-deadline + Close path. Deterministic:
+// receiving the channel close confirms stop() finished its work, which
+// in turn means the goroutine's Read has returned (the dup fd was
+// closed inside the same stopOnce.Do).
 //
 // Linux/macOS only: the Windows reader intentionally retains the
-// legacy leak (see reader_windows.go).
+// legacy parked-Read leak (see reader_windows.go).
 func TestKeyReader_StopReleasesGoroutine(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows reader intentionally leaks; see reader_windows.go")
@@ -365,14 +367,22 @@ func TestKeyReader_StopReleasesGoroutine(t *testing.T) {
 
 	before := runtime.NumGoroutine()
 	ch := reader.start()
-	// Brief wait so the reader's goroutine is definitely parked in
-	// Read before we cancel it.
-	time.Sleep(50 * time.Millisecond)
+	// Do NOT write to the pipe — exercise the cancellation path.
 	reader.stop()
 
-	// stop() pushed a past deadline on the dup's *os.File and closed
-	// it; the goroutine's Read returns immediately and the goroutine
-	// exits. Give the scheduler a beat to actually reap it.
+	// stop() closed the channel; receiving the close is the
+	// deterministic signal that the goroutine has been released (the
+	// dup fd is now closed and the goroutine's Read has returned).
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("stop() path delivered a key; expected channel close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop() did not close the reader channel within 2s")
+	}
+
+	// Give the scheduler a beat for the goroutine stack to fully unwind.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		runtime.Gosched()
@@ -382,14 +392,6 @@ func TestKeyReader_StopReleasesGoroutine(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Sanity: the channel is non-nil and closed-or-empty.
-	select {
-	case _, ok := <-ch:
-		// Either no key (ok=true with zero) or the channel was closed.
-		_ = ok
-	default:
-	}
-
 	after := runtime.NumGoroutine()
 	// We allow a small jitter (other goroutines may come/go during the
 	// test). The pre-fix code leaked one specific goroutine that would
@@ -397,6 +399,83 @@ func TestKeyReader_StopReleasesGoroutine(t *testing.T) {
 	// be cancelled; in those runs, after-before reliably stayed at >=1
 	// indefinitely. The fix should drive it back to before within the
 	// deadline above.
+	if after > before+1 {
+		t.Errorf("reader goroutine appears to have leaked: before=%d after=%d", before, after)
+	}
+}
+
+// TestKeyReader_DataPathReleasesGoroutine guards bug (a) on the
+// data-path exit: a keystroke arrives, the goroutine sends on ch and
+// exits naturally without stop() needing to cancel the Read. Verifies
+// the goroutine does NOT close ch itself (only stop() owns the close),
+// and that a subsequent stop() is still safe and idempotent.
+//
+// Deterministic — writes a byte into the pipe so the parked Read
+// returns via the data path; no sleeps.
+//
+// Linux/macOS only: same rationale as TestKeyReader_StopReleasesGoroutine.
+func TestKeyReader_DataPathReleasesGoroutine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reader intentionally leaks; see reader_windows.go")
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := newKeyReader()
+	prevStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = prevStdin })
+
+	before := runtime.NumGoroutine()
+	ch := reader.start()
+
+	// Deterministically unblock the goroutine via the data path.
+	if _, err := w.Write([]byte("u")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	select {
+	case act, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before the keystroke was delivered")
+		}
+		if act != ActionUnlock {
+			t.Fatalf("expected ActionUnlock from `u`, got %v", act)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine never delivered to ch within 2s")
+	}
+
+	// stop() must still be safe to call after the data-path exit
+	// (idempotent; the goroutine never closed ch itself).
+	reader.stop()
+
+	// After stop(), ch must be closed — the cancellation contract
+	// holds even on the data-path exit.
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("ch yielded a value after stop(); expected closed")
+		}
+	default:
+		t.Fatal("ch not closed after stop()")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.Gosched()
+		if runtime.NumGoroutine() <= before+1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	after := runtime.NumGoroutine()
 	if after > before+1 {
 		t.Errorf("reader goroutine appears to have leaked: before=%d after=%d", before, after)
 	}
