@@ -6,7 +6,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/gv/jitenv/internal/lockfile"
 )
+
+// MigrationLockSuffix is the sibling-file suffix used to serialize the
+// one-shot opaque-ID migration. It deliberately reuses the .tui.lock
+// sibling already taken by `jitenv config` so a concurrent TUI session
+// and a concurrent agent-spawn migration cannot race each other on the
+// same on-disk config (see #275 / #166).
+const MigrationLockSuffix = ".tui.lock"
 
 // MigrationBackupPath returns the absolute path of the verbatim
 // pre-#248 backup sibling for the given config path. Used by the
@@ -85,7 +94,36 @@ const MigrationBackupSuffix = ".pre-id-migration.bak"
 // config. The backup is the rollback escape hatch and stays on disk
 // until the user removes it.
 func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
+	// Cheap fast-path probe BEFORE taking the lock: an already-migrated
+	// config is the common case and we want the no-op path to stay
+	// lock-free so it costs nothing for every inline unlock (#275).
 	c, err := Load(path)
+	if err != nil {
+		return false, err
+	}
+	if !NeedsIDMigration(c) {
+		return false, nil
+	}
+
+	// Migration is needed — serialize with any concurrent `jitenv config`
+	// TUI session or another agent-spawn migration (#275). Lock is held
+	// only for the duration of this single migration; a "lock already
+	// held" error is surfaced so the caller retries rather than racing on
+	// a possibly-half-written config.
+	lock, lockErr := lockfile.Acquire(path + MigrationLockSuffix)
+	if lockErr != nil {
+		if errors.Is(lockErr, os.ErrExist) {
+			return false, fmt.Errorf("another jitenv session is editing %s — close it, then retry", path)
+		}
+		return false, fmt.Errorf("acquire config lock for migration: %w", lockErr)
+	}
+	defer lock.Close()
+
+	// Re-check under the lock: another process may have just finished
+	// the migration while we waited (or were probing). This makes the
+	// function safe to call from multiple key-holding entry points
+	// without an explicit external guard.
+	c, err = Load(path)
 	if err != nil {
 		return false, err
 	}

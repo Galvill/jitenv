@@ -11,6 +11,7 @@
 package unlock
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gv/jitenv/internal/agent"
@@ -20,8 +21,15 @@ import (
 
 // Result reports what happened after a Spawn attempt. Socket is the
 // agent socket / pipe the caller can dial once unlock succeeds.
+// Migrated is true when the one-shot opaque-ID migration (#248) rewrote
+// the on-disk config during this Spawn call; the caller should print
+// config.MigrationNotice(CfgPath) on stderr so the inline-unlock flow
+// surfaces the #269 backup-rollback hint to the user (#275). CfgPath
+// is the resolved config path the migration ran against.
 type Result struct {
-	Socket string
+	Socket   string
+	Migrated bool
+	CfgPath  string
 }
 
 // Spawn prompts for the passphrase on the controlling terminal,
@@ -55,6 +63,30 @@ func Spawn(cfgPath string) (Result, error) {
 	defer zeroBytes(key)
 	defer lockKey(key)()
 
+	// One-shot opaque-ID migration (#248) BEFORE the agent is spawned.
+	// Lifting this here from `jitenv unlock` ensures every key-holding
+	// entry point — including the inline-unlock prompt fired from the
+	// agent-down countdown in run/shim (#232) — runs the migration by
+	// construction, so the user always sees the .pre-id-migration.bak
+	// and the post-migration backup notice (#275). config.MigrateToOpaqueIDs
+	// takes its own internal lock against `jitenv config` and concurrent
+	// migrations, so this call is safe to make from every caller.
+	migrated, err := config.MigrateToOpaqueIDs(resolved, key)
+	if err != nil {
+		return Result{}, fmt.Errorf("migrate to opaque IDs: %w", err)
+	}
+	if migrated {
+		// Reload so the cfg we read fields off (idle timeout) below
+		// matches the now-rewritten on-disk file. The agent itself
+		// reads the path it's given, so this only affects the values
+		// the unlock flow consults pre-spawn — but it keeps
+		// in-memory and on-disk consistent.
+		cfg, err = config.Load(resolved)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+
 	paths, err := agent.DefaultPaths()
 	if err != nil {
 		return Result{}, err
@@ -63,7 +95,7 @@ func Spawn(cfgPath string) (Result, error) {
 	if err := agent.SpawnDaemon(paths, resolved, idle, key); err != nil {
 		return Result{}, err
 	}
-	return Result{Socket: paths.Socket}, nil
+	return Result{Socket: paths.Socket, Migrated: migrated, CfgPath: resolved}, nil
 }
 
 // ParseIdle mirrors the agent idle-timeout parsing used by the unlock

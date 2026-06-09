@@ -18,6 +18,7 @@ import (
 
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/agentwarn"
+	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/runnotice"
 	"github.com/gv/jitenv/internal/unlock"
 )
@@ -203,6 +204,14 @@ func fetchAfterUnlock(ctx context.Context, abs string) (map[string]string, bool,
 			"jitenv: unlock failed (%v) — running without injected env. "+
 				"On slow disks, raise JITENV_AGENT_SPAWN_TIMEOUT (e.g. 20s).\n", err)
 		return nil, false, nil
+	}
+	// Surface the one-shot opaque-ID migration backup notice (#275): a
+	// user whose first jitenv interaction post-#248 upgrade is an inline
+	// unlock via the agent-down countdown otherwise never sees the
+	// .pre-id-migration.bak rollback hint (#269).
+	if res.Migrated {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, config.MigrationNotice(res.CfgPath))
 	}
 	cli := agent.NewClient(res.Socket)
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
