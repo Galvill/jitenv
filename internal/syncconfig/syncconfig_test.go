@@ -47,6 +47,37 @@ func TestDEKWrapUnwrapRoundTrip(t *testing.T) {
 	}
 }
 
+// TestUnwrapDEKReadsLegacyStringPathWrap is a regression for issue #277:
+// WrapDEK now uses crypto.EncryptFieldBytes to keep the DEK off the Go
+// string heap, but the on-disk envelope format is identical to what the
+// previous string-typed path produced. Existing sync.toml files written
+// by older builds must still unwrap with the bytes-path UnwrapDEK.
+func TestUnwrapDEKReadsLegacyStringPathWrap(t *testing.T) {
+	f := newTestFile(t)
+	mk, err := f.DeriveMasterKey([]byte("correct horse battery staple"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dek, err := NewDEK()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the OLD wrap path explicitly: string(dek) -> EncryptField.
+	env, err := crypto.EncryptField(mk, string(dek), dekWrapAAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WrappedDEK = env
+
+	got, err := f.UnwrapDEK(mk)
+	if err != nil {
+		t.Fatalf("unwrap of legacy-shaped envelope: %v", err)
+	}
+	if string(got) != string(dek) {
+		t.Fatal("legacy-shaped DEK roundtrip mismatch")
+	}
+}
+
 func TestUnwrapWrongPassphraseFailsClosed(t *testing.T) {
 	f := newTestFile(t)
 	mk, _ := f.DeriveMasterKey([]byte("right"))

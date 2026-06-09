@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -61,6 +62,128 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 	}
 	if pt != "hunter2" {
 		t.Fatalf("unexpected plaintext %q", pt)
+	}
+}
+
+// TestEnvelopeBytesRoundTrip covers the []byte-typed twins
+// EncryptFieldBytes/DecryptFieldBytes that exist specifically so raw
+// key material (e.g. the sync DEK, issue #277) never has to transit a
+// Go string and pollute the heap with unzeroable copies.
+func TestEnvelopeBytesRoundTrip(t *testing.T) {
+	key := mustKey(t)
+	// Use a binary payload with NULs and high bytes to make sure the
+	// helpers don't accidentally rely on string-y assumptions like
+	// UTF-8 validity or NUL-termination.
+	pt := []byte{0x00, 0x01, 0xfe, 0xff, 'a', 'b', 'c', 0x00}
+	env, err := EncryptFieldBytes(key, pt, "test.ad")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if !IsEnvelope(env) {
+		t.Fatalf("expected envelope prefix, got %q", env)
+	}
+	got, err := DecryptFieldBytes(key, env, "test.ad")
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if !bytes.Equal(got, pt) {
+		t.Fatalf("roundtrip mismatch: %x != %x", got, pt)
+	}
+}
+
+// TestEnvelopeBytesCrossCompatible asserts that envelopes produced by
+// EncryptFieldBytes are readable by the string-typed DecryptField (and
+// vice versa). The on-disk format is identical; only the in-memory
+// types differ. This matters because the read path for older
+// (string-encrypted) on-disk envelopes must keep working when callers
+// switch to the bytes APIs.
+func TestEnvelopeBytesCrossCompatible(t *testing.T) {
+	key := mustKey(t)
+
+	// bytes -> string read
+	envB, err := EncryptFieldBytes(key, []byte("hunter2"), "test.ad")
+	if err != nil {
+		t.Fatalf("encrypt bytes: %v", err)
+	}
+	if pt, err := DecryptField(key, envB, "test.ad"); err != nil || pt != "hunter2" {
+		t.Fatalf("string-read of bytes-envelope: pt=%q err=%v", pt, err)
+	}
+
+	// string -> bytes read
+	envS, err := EncryptField(key, "hunter2", "test.ad")
+	if err != nil {
+		t.Fatalf("encrypt string: %v", err)
+	}
+	got, err := DecryptFieldBytes(key, envS, "test.ad")
+	if err != nil {
+		t.Fatalf("bytes-read of string-envelope: %v", err)
+	}
+	if !bytes.Equal(got, []byte("hunter2")) {
+		t.Fatalf("bytes-read mismatch: %q", got)
+	}
+}
+
+// TestEnvelopeBytesRejectsTransplant mirrors TestEnvelopeRejectsTransplant
+// for the bytes path: an enc:v2 envelope decrypted via DecryptFieldBytes
+// MUST refuse a wrong AD. Same defense (security #110), same guarantee.
+func TestEnvelopeBytesRejectsTransplant(t *testing.T) {
+	key := mustKey(t)
+	env, err := EncryptFieldBytes(key, []byte{0xde, 0xad, 0xbe, 0xef}, "sync.dek")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	// Correct AD must succeed.
+	if _, err := DecryptFieldBytes(key, env, "sync.dek"); err != nil {
+		t.Fatalf("decrypt with correct ad: %v", err)
+	}
+	// Wrong AD must fail.
+	if _, err := DecryptFieldBytes(key, env, "src.aws.secret_access_key"); err == nil {
+		t.Fatal("decrypt with wrong ad must fail (transplantation)")
+	}
+	// Empty AD on v2 must fail.
+	if _, err := DecryptFieldBytes(key, env, ""); err == nil {
+		t.Fatal("decrypt with empty ad must fail when envelope is v2")
+	}
+}
+
+// TestEncryptFieldBytesRejectsEmptyAD covers the input-validation
+// branch — without a per-call AAD, an attacker who can write the
+// envelope back can transplant it elsewhere.
+func TestEncryptFieldBytesRejectsEmptyAD(t *testing.T) {
+	key := mustKey(t)
+	if _, err := EncryptFieldBytes(key, []byte("x"), ""); err == nil {
+		t.Fatal("expected error for empty ad")
+	}
+}
+
+func TestDecryptFieldBytesRejectsMalformed(t *testing.T) {
+	key := mustKey(t)
+	if _, err := DecryptFieldBytes(key, "not-an-envelope", "test.ad"); err == nil {
+		t.Fatalf("expected error for non-envelope")
+	}
+	if _, err := DecryptFieldBytes(key, EnvelopePrefix+"!!!not-base64!!!", "test.ad"); err == nil {
+		t.Fatalf("expected error for malformed base64")
+	}
+	if _, err := DecryptFieldBytes(key, EnvelopePrefix+"YWFh", "test.ad"); err == nil {
+		t.Fatalf("expected error for short blob")
+	}
+}
+
+// TestDecryptFieldBytesAcceptsLegacyV1 mirrors the string-path legacy
+// test: enc:v1 envelopes (no AAD) must still decrypt regardless of ad.
+func TestDecryptFieldBytesAcceptsLegacyV1(t *testing.T) {
+	key := mustKey(t)
+	blob, err := Seal(key, []byte("legacy-value"), nil)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	v1 := EnvelopeLegacyV1Prefix + b64encode(blob)
+	got, err := DecryptFieldBytes(key, v1, "any.context.string")
+	if err != nil {
+		t.Fatalf("decrypt v1 with arbitrary ad must succeed: %v", err)
+	}
+	if !bytes.Equal(got, []byte("legacy-value")) {
+		t.Fatalf("unexpected plaintext: %q", got)
 	}
 }
 

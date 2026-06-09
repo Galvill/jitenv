@@ -162,8 +162,14 @@ func NewDEK() ([]byte, error) {
 }
 
 // WrapDEK seals dek under masterKey and stores it in f.WrappedDEK.
+//
+// The DEK is passed to the crypto layer as []byte (via EncryptFieldBytes)
+// rather than going through `string(dek)`: Go strings are immutable and
+// unzeroable, so a string-typed copy of a 256-bit key would linger in
+// the heap until GC even after the caller zeroed its own buffer
+// (CLAUDE.md "Master key handling", issue #277).
 func (f *File) WrapDEK(masterKey, dek []byte) error {
-	env, err := crypto.EncryptField(masterKey, string(dek), dekWrapAAD)
+	env, err := crypto.EncryptFieldBytes(masterKey, dek, dekWrapAAD)
 	if err != nil {
 		return err
 	}
@@ -174,15 +180,20 @@ func (f *File) WrapDEK(masterKey, dek []byte) error {
 // UnwrapDEK recovers the DEK from f.WrappedDEK using masterKey. A wrong
 // passphrase (wrong master key) fails closed here via the AEAD tag.
 // Caller must zero the result.
+//
+// The plaintext is returned as []byte straight from the crypto layer
+// (via DecryptFieldBytes); it never transits through a Go string, so
+// the only live copies of the DEK are zeroable buffers the caller owns
+// (CLAUDE.md "Master key handling", issue #277).
 func (f *File) UnwrapDEK(masterKey []byte) ([]byte, error) {
 	if f.WrappedDEK == "" {
 		return nil, errors.New("sync sidecar has no wrapped DEK; run `jitenv sync init`")
 	}
-	pt, err := crypto.DecryptField(masterKey, f.WrappedDEK, dekWrapAAD)
+	dek, err := crypto.DecryptFieldBytes(masterKey, f.WrappedDEK, dekWrapAAD)
 	if err != nil {
 		return nil, errors.New("cannot unwrap sync key (wrong passphrase, or sidecar is for a different config)")
 	}
-	return []byte(pt), nil
+	return dek, nil
 }
 
 // SealBlob encrypts the config.toml bytes under the DEK into one opaque

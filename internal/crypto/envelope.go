@@ -56,6 +56,27 @@ func EncryptField(key []byte, plaintext, ad string) (string, error) {
 	return EnvelopePrefix + base64.StdEncoding.EncodeToString(blob), nil
 }
 
+// EncryptFieldBytes is the []byte-typed twin of EncryptField. It exists
+// for raw key material (e.g. the sync DEK) that must never transit a Go
+// string: strings are immutable and unzeroable, so any string copy of
+// the secret lingers in the heap until GC. Callers like
+// syncconfig.WrapDEK pass the DEK directly here instead of round-
+// tripping via string(dek), keeping the key inside zeroable []byte
+// buffers end-to-end (CLAUDE.md "Master key handling").
+//
+// The on-disk envelope format is identical to EncryptField's, so values
+// produced by either are interchangeable on the read side.
+func EncryptFieldBytes(key, plaintext []byte, ad string) (string, error) {
+	if ad == "" {
+		return "", errors.New("EncryptFieldBytes: ad must be non-empty")
+	}
+	blob, err := Seal(key, plaintext, []byte(ad))
+	if err != nil {
+		return "", err
+	}
+	return EnvelopePrefix + base64.StdEncoding.EncodeToString(blob), nil
+}
+
 // DecryptField unwraps an envelope.
 //
 // For enc:v2: the supplied ad MUST match the one passed to
@@ -92,6 +113,38 @@ func DecryptField(key []byte, env, ad string) (string, error) {
 		return string(pt), nil
 	default:
 		return "", errors.New("not an envelope")
+	}
+}
+
+// DecryptFieldBytes is the []byte-typed twin of DecryptField. It exists
+// for raw key material (e.g. the sync DEK) that must never transit a
+// Go string on the read path either — string(pt) would spawn an
+// unzeroable copy of the secret in the heap that lives until GC.
+// Callers like syncconfig.UnwrapDEK use this to keep the DEK inside
+// zeroable []byte buffers end-to-end (CLAUDE.md "Master key handling").
+//
+// Behaviour matches DecryptField exactly: enc:v2 envelopes require a
+// matching non-empty ad; enc:v1 envelopes ignore ad for backward
+// compatibility.
+func DecryptFieldBytes(key []byte, env, ad string) ([]byte, error) {
+	switch {
+	case strings.HasPrefix(env, EnvelopePrefix):
+		if ad == "" {
+			return nil, errors.New("DecryptFieldBytes: ad must be non-empty for enc:v2")
+		}
+		blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(env, EnvelopePrefix))
+		if err != nil {
+			return nil, err
+		}
+		return Open(key, blob, []byte(ad))
+	case strings.HasPrefix(env, EnvelopeLegacyV1Prefix):
+		blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(env, EnvelopeLegacyV1Prefix))
+		if err != nil {
+			return nil, err
+		}
+		return Open(key, blob, nil) // legacy: pre-AAD, ignore ad
+	default:
+		return nil, errors.New("not an envelope")
 	}
 }
 
