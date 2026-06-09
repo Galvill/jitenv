@@ -95,9 +95,20 @@ func PushConfig(ctx context.Context, adapter syncadapter.Adapter, ad *Adapter, d
 			// A CAS-capable adapter rejected the write because the
 			// remote object changed between our pre-push Pull and the
 			// Push itself — symmetric with the soft-fence's "remote
-			// advanced" branch, but enforced by the storage. Surface it
-			// with the same remediation steps (#278).
-			return PushResult{}, fmt.Errorf("remote changed between pull and push (concurrent writer); run `jitenv sync pull` to reconcile and retry, or push with --force to overwrite")
+			// advanced" branch, but enforced by the storage (#278).
+			//
+			// Remediation differs by mode: on a non-force push the
+			// user can pull-to-reconcile or escalate to --force, but
+			// when --force itself hits the CAS, suggesting --force is
+			// circular — the user is already doing that. The CAS and
+			// the engine's soft fence are independent layers, and
+			// --force only bypasses the soft fence, not the
+			// storage-level CAS. Tell the user that and ask them to
+			// retry instead.
+			if force {
+				return PushResult{}, fmt.Errorf("remote changed during force-push (concurrent writer rejected by storage-level CAS); retry the push: %w", err)
+			}
+			return PushResult{}, fmt.Errorf("remote changed between pull and push (concurrent writer); run `jitenv sync pull` to reconcile and retry, or push with --force to overwrite: %w", err)
 		}
 		return PushResult{}, err
 	}
