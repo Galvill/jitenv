@@ -15,6 +15,7 @@
 package agentwarn
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
@@ -30,6 +31,14 @@ import (
 // the keystroke-dispatch logic this gate guards is what's under test).
 var stdinIsTTY = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
+// makeRaw is a hook around term.MakeRaw so tests can simulate a TTY
+// where raw mode is unavailable (issue #282 (b)). On a real TTY raw
+// mode is required for the per-keystroke countdown UX; without it the
+// reader is line-buffered and `u` doesn't fire until the user also
+// hits Enter — so we fall back to a single line-prompt that loses the
+// countdown visual but preserves the [u]/any/Ctrl+C semantics.
+var makeRaw = func(fd int) (*term.State, error) { return term.MakeRaw(fd) }
+
 // Action is the outcome of the agent-down countdown.
 type Action int
 
@@ -43,6 +52,19 @@ const (
 	// unlock flow and, on success, re-fetch env before exec.
 	ActionUnlock
 )
+
+// classifyKey maps a single byte from the TTY to an Action.
+// `u`/`U` → unlock, Ctrl+C (0x03) → abort, anything else → continue.
+func classifyKey(b byte) Action {
+	switch b {
+	case 'u', 'U':
+		return ActionUnlock
+	case 0x03: // Ctrl+C in raw mode (no SIGINT is raised)
+		return ActionAbort
+	default:
+		return ActionContinue
+	}
+}
 
 // WarnAndWait paints the warning + countdown to stderr and reports the
 // user's choice as an Action.
@@ -83,10 +105,6 @@ func WarnAndWait(target string) Action {
 		return ActionContinue
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	defer signal.Stop(sigCh)
-
 	// Put stdin into raw mode for the countdown so a single keypress
 	// (`u`, Enter, Ctrl+C) is delivered immediately instead of being
 	// line-buffered until the user also hits Enter — the prompt offers
@@ -95,57 +113,61 @@ func WarnAndWait(target string) Action {
 	// drives its own raw mode on /dev/tty) and the eventual exec inherit
 	// a sane terminal. In raw mode Ctrl+C arrives as the 0x03 byte
 	// rather than SIGINT, so the reader treats it as abort; the
-	// signal.Notify above remains a fallback for the non-raw path
-	// (e.g. when MakeRaw fails).
-	var restore func()
-	if oldState, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
-		fd := int(os.Stdin.Fd())
-		restore = func() { _ = term.Restore(fd, oldState) }
-		defer restore()
+	// signal.Notify below remains a fallback for the non-raw path.
+	oldState, rawErr := makeRaw(int(os.Stdin.Fd()))
+	if rawErr != nil {
+		// MakeRaw failed (some pty layers, broken termios). Without
+		// raw mode the Read is line-buffered and the per-keystroke UX
+		// is silently broken: `u` wouldn't fire until Enter. Fall back
+		// to a single line-prompt that loses the countdown visual but
+		// keeps the [u]/any/Ctrl+C semantics intact (issue #282 (b)).
+		return linePromptFallback(red, reset)
 	}
-
-	// Drain stdin in a goroutine; report the first keystroke. `u`/`U` →
-	// unlock, Ctrl+C (0x03) → abort, and ANY other byte → continue (so
-	// Enter, Space, or a stray key all mean "run without env" — the
-	// prompt advertises exactly these semantics). We don't tear it down
-	// at return time: on the continue/abort paths the caller is about to
-	// syscall.Exec (which replaces the process image and reaps the
-	// goroutine for free), and on the unlock path WarnAndWait returns
-	// before the passphrase prompt opens — the single outstanding Read
-	// has already consumed the keystroke, so it can't steal a byte from
-	// the subsequent term.ReadPassword on the same TTY.
-	keyCh := make(chan Action, 1)
-	go func() {
-		buf := make([]byte, 1)
-		n, err := os.Stdin.Read(buf)
-		if err != nil || n == 0 {
+	fd := int(os.Stdin.Fd())
+	restoreDone := false
+	restore := func() {
+		if restoreDone {
 			return
 		}
-		var act Action
-		switch buf[0] {
-		case 'u', 'U':
-			act = ActionUnlock
-		case 0x03: // Ctrl+C in raw mode (no SIGINT is raised)
-			act = ActionAbort
-		default: // Enter, Space, or any other key
-			act = ActionContinue
+		restoreDone = true
+		// oldState can legitimately be nil when the makeRaw hook
+		// reports success without an actual State (test-only path —
+		// see withFakeRawMode). term.Restore would segfault on a nil
+		// State on Unix, so skip the call in that case.
+		if oldState == nil {
+			return
 		}
-		select {
-		case keyCh <- act:
-		default:
-		}
-	}()
+		_ = term.Restore(fd, oldState)
+	}
+	defer restore()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	// keyReader is platform-split: on Unix it builds a cancellable
+	// reader so that on every exit path the parked Read on stdin is
+	// force-unblocked (via *os.File.SetReadDeadline), preventing the
+	// leaked-goroutine "next keystroke vanishes" symptom (issue #282
+	// (a)). On Windows the reader still leaks for the lifetime of the
+	// process (Windows uses a different keyboard input path and
+	// SetReadDeadline on console handles is not supported); the
+	// WarnAndWait window is short and the parent jitenv process exits
+	// shortly after, so the leak is bounded.
+	reader := newKeyReader()
+	keyCh := reader.start()
+	defer reader.stop()
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
 	// finish restores the terminal (so the trailing newline / any later
 	// prompt render on a cooked TTY) before returning the chosen action.
+	// It also stops the key reader so its goroutine returns immediately
+	// instead of staying parked in Read on stdin past the call.
 	finish := func(act Action) Action {
-		if restore != nil {
-			restore()
-			restore = nil // the deferred call becomes a no-op
-		}
+		restore()
+		reader.stop()
 		if act == ActionAbort {
 			fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
 		} else {
@@ -159,10 +181,66 @@ func WarnAndWait(target string) Action {
 		select {
 		case <-sigCh:
 			return finish(ActionAbort)
-		case act := <-keyCh:
+		case act, ok := <-keyCh:
+			if !ok {
+				// Reader closed without producing a key (e.g. stop()
+				// fired before any byte arrived). Should not happen
+				// during the live countdown; tolerate it.
+				return finish(ActionContinue)
+			}
 			return finish(act)
 		case <-tick.C:
 		}
 	}
 	return finish(ActionContinue)
+}
+
+// linePromptFallback runs when MakeRaw fails on a TTY: no countdown,
+// no per-keystroke dispatch — just read one line and dispatch on its
+// first byte. Ctrl+C still raises SIGINT in cooked mode so we install
+// the same signal handler as the raw path.
+func linePromptFallback(red, reset string) Action {
+	fmt.Fprintf(os.Stderr,
+		"%sjitenv: raw mode unavailable — type [u] then Enter to unlock, "+
+			"anything else + Enter to continue, [Ctrl+C] to abort.%s\n",
+		red, reset)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	type lineResult struct {
+		act Action
+		err error
+	}
+	resCh := make(chan lineResult, 1)
+	go func() {
+		// One-shot line read. If the user hits Ctrl+C while we're
+		// parked here SIGINT lands on the select below and the
+		// fallback returns ActionAbort; the parked Read is bounded to
+		// the parent process's lifetime, which is short after the
+		// caller propagates the "aborted" error and exits.
+		r := bufio.NewReader(os.Stdin)
+		line, err := r.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			resCh <- lineResult{ActionContinue, err}
+			return
+		}
+		var first byte
+		if len(line) > 0 {
+			first = line[0]
+		}
+		resCh <- lineResult{classifyKey(first), nil}
+	}()
+
+	select {
+	case <-sigCh:
+		fmt.Fprintf(os.Stderr, "\n%saborted — command not executed.%s\n", red, reset)
+		return ActionAbort
+	case res := <-resCh:
+		if res.act == ActionAbort {
+			fmt.Fprintf(os.Stderr, "%saborted — command not executed.%s\n", red, reset)
+		}
+		return res.act
+	}
 }
