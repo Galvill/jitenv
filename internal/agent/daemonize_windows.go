@@ -62,7 +62,7 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 		return fmt.Errorf("clear inherit on write end: %w", err)
 	}
 
-	exe, err := os.Executable()
+	exe, err := resolveAgentExecutable()
 	if err != nil {
 		pr.Close()
 		return err
@@ -124,12 +124,12 @@ func SpawnDaemon(paths Paths, configFile string, idle time.Duration, key []byte)
 			return nil
 		}
 		if cmd.ProcessState != nil {
-			return fmt.Errorf("agent exited early: %s", cmd.ProcessState)
+			return fmt.Errorf("agent exited early: %s%s", cmd.ProcessState, logTailSuffix(paths.LogFile))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
 	return fmt.Errorf("agent did not start within %s "+
 		"(raise JITENV_AGENT_SPAWN_TIMEOUT to extend); "+
-		"check the agent log under %%LOCALAPPDATA%%\\jitenv\\agent.log", timeout)
+		"check the agent log under %%LOCALAPPDATA%%\\jitenv\\agent.log%s", timeout, logTailSuffix(paths.LogFile))
 }
