@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,7 +238,7 @@ func TestMigrationNotice_ContentAndPath(t *testing.T) {
 	for _, want := range []string{
 		"upgraded config to opaque-ID format (#248)",
 		bak,
-		"rm " + bak,
+		fmt.Sprintf("rm %q", bak),
 		"do not check it in or sync it",
 	} {
 		if !strings.Contains(notice, want) {

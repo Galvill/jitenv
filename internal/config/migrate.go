@@ -35,7 +35,7 @@ func MigrationNotice(cfgPath string) string {
 		"This file is left in place so you can roll back if the migration\n" +
 		"caused any problem. Once you have verified the upgrade, you can\n" +
 		"delete the backup manually:\n" +
-		"  rm " + bak + "\n" +
+		fmt.Sprintf("  rm %q\n", bak) +
 		"Note: the backup contains your secret values sealed under the old\n" +
 		"scheme — keep it local; do not check it in or sync it."
 }
@@ -77,7 +77,8 @@ const MigrationBackupSuffix = ".pre-id-migration.bak"
 //
 // Returns migrated=true only when the on-disk file was rewritten. Every
 // caller that surfaces this bool to a user should print the one-shot
-// backup notice (see internal/cli MigrationNotice).
+// backup notice (see config.MigrationNotice in this package; the CLI
+// wrapper is printMigrationNotice).
 //
 // IRREVERSIBILITY: once migrated, the names live only inside the sealed
 // name_map; an older jitenv binary (pre-#248) cannot read the opaque-ID
