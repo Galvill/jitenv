@@ -5,12 +5,45 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 )
 
+// MigrationBackupPath returns the absolute path of the verbatim
+// pre-#248 backup sibling for the given config path. Used by the
+// user-facing migration notice so the message names the exact file.
+func MigrationBackupPath(cfgPath string) string {
+	bak := cfgPath + MigrationBackupSuffix
+	if abs, err := filepath.Abs(bak); err == nil {
+		return abs
+	}
+	return bak
+}
+
+// MigrationNotice is the one-shot, user-facing message printed after the
+// opaque-ID migration (#248) runs. It tells the user a verbatim backup
+// of their pre-upgrade config was written, where it lives, that it holds
+// secrets sealed under the old scheme (so it must not be checked in or
+// sync'd), and how to remove it once they've verified the upgrade (#269).
+//
+// All surfaces (unlock / bag import stderr, the TUI status line) render
+// the SAME text via this helper so the copy stays consistent.
+func MigrationNotice(cfgPath string) string {
+	bak := MigrationBackupPath(cfgPath)
+	return "jitenv: upgraded config to opaque-ID format (#248).\n" +
+		"A verbatim backup of the pre-upgrade config has been written to:\n" +
+		"  " + bak + "\n" +
+		"This file is left in place so you can roll back if the migration\n" +
+		"caused any problem. Once you have verified the upgrade, you can\n" +
+		"delete the backup manually:\n" +
+		fmt.Sprintf("  rm %q\n", bak) +
+		"Note: the backup contains your secret values sealed under the old\n" +
+		"scheme — keep it local; do not check it in or sync it."
+}
+
 // MigrationBackupSuffix is appended to the config path for the verbatim
-// pre-migration backup written by MigrateToOpaqueIDs. The backup is
-// removed automatically by the next successful AtomicSave from a
-// master-key-holding path (see AtomicSave).
+// pre-migration backup written by MigrateToOpaqueIDs. The backup is left
+// in place after migration and is never removed automatically (#269) —
+// the user deletes it themselves once they've verified the upgrade.
 const MigrationBackupSuffix = ".pre-id-migration.bak"
 
 // MigrateToOpaqueIDs upgrades a legacy name-keyed config (pre-#248) to
@@ -36,16 +69,21 @@ const MigrationBackupSuffix = ".pre-id-migration.bak"
 //  5. AtomicSave the new form.
 //
 // Failure handling: a decrypt or save error leaves the ORIGINAL file
-// untouched (we only AtomicSave at the very end) and retains the backup,
+// untouched (we only atomicSave at the very end) and retains the backup,
 // so the next run under a fixed binary/passphrase is a clean retry. The
-// backup written here is removed by the next successful AtomicSave.
+// backup written here persists on disk; nothing removes it
+// automatically (#269) — the user deletes it once they've verified the
+// upgrade.
 //
-// Returns migrated=true only when the on-disk file was rewritten.
+// Returns migrated=true only when the on-disk file was rewritten. Every
+// caller that surfaces this bool to a user should print the one-shot
+// backup notice (see config.MigrationNotice in this package; the CLI
+// wrapper is printMigrationNotice).
 //
 // IRREVERSIBILITY: once migrated, the names live only inside the sealed
 // name_map; an older jitenv binary (pre-#248) cannot read the opaque-ID
-// config. The backup is the escape hatch until the next save consumes
-// it.
+// config. The backup is the rollback escape hatch and stays on disk
+// until the user removes it.
 func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 	c, err := Load(path)
 	if err != nil {
@@ -74,9 +112,9 @@ func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 		return false, fmt.Errorf("migrate: re-encrypt under opaque IDs: %w (original left untouched; backup at %s)", err, backupPath)
 	}
 
-	// Write via the unexported atomicSave so the migration does NOT
-	// remove the backup it just created — the backup is the escape hatch
-	// until the NEXT user-facing AtomicSave (#248).
+	// Write via the unexported atomicSave (AtomicSave is identical now,
+	// but keep the internal call explicit). The verbatim backup created
+	// above stays on disk as the rollback escape hatch (#269).
 	if err := atomicSave(path, c); err != nil {
 		return false, fmt.Errorf("migrate: save migrated config: %w (original left untouched; backup at %s)", err, backupPath)
 	}
@@ -122,10 +160,11 @@ func writeVerbatimBackup(src, dst string) error {
 }
 
 // removeMigrationBackup unlinks the pre-migration backup sibling for
-// path, if present. Called from AtomicSave after a successful rename so
-// the escape-hatch copy is cleaned up on the first config-modifying save
-// under the new binary. Best-effort: a failure to remove is non-fatal
-// (the save already succeeded), so the error is swallowed.
+// path, if present. As of #269 nothing in the save path calls this —
+// the backup is intentionally left on disk for the user to remove. The
+// helper is retained for callers that want to explicitly delete the
+// backup (and is exercised by tests). Best-effort: a failure to remove
+// is non-fatal, so the error is swallowed.
 func removeMigrationBackup(path string) {
 	_ = os.Remove(path + MigrationBackupSuffix)
 }

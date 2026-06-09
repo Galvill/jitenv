@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -274,17 +275,27 @@ func resolveJitenvTUIPath() (string, error) {
 // "another jitenv process is migrating/editing right now" and surfaced
 // so the user retries rather than proceeding on a possibly-half-written
 // config.
-func migrateOpaqueIDsLocked(cfgPath string, key []byte) error {
+//
+// Returns migrated=true when the on-disk config was rewritten, so the
+// caller can print the one-shot backup notice (printMigrationNotice).
+func migrateOpaqueIDsLocked(cfgPath string, key []byte) (migrated bool, err error) {
 	lock, lockErr := lockfile.Acquire(cfgPath + ".tui.lock")
 	if lockErr != nil {
 		if errors.Is(lockErr, os.ErrExist) {
-			return fmt.Errorf("another jitenv session is editing %s — close it, then retry", cfgPath)
+			return false, fmt.Errorf("another jitenv session is editing %s — close it, then retry", cfgPath)
 		}
-		return fmt.Errorf("acquire config lock for migration: %w", lockErr)
+		return false, fmt.Errorf("acquire config lock for migration: %w", lockErr)
 	}
 	defer lock.Close()
-	_, err := config.MigrateToOpaqueIDs(cfgPath, key)
-	return err
+	return config.MigrateToOpaqueIDs(cfgPath, key)
+}
+
+// printMigrationNotice writes the one-shot post-migration backup notice
+// (#269) to w. Shared by every key-holding CLI surface (unlock, bag
+// import) so the copy — including the absolute backup path and the
+// "don't sync this" warning — stays identical to the TUI's.
+func printMigrationNotice(w io.Writer, cfgPath string) {
+	fmt.Fprintln(w, config.MigrationNotice(cfgPath))
 }
 
 func zeroBytes(b []byte) {

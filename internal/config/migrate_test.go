@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gv/jitenv/internal/crypto"
@@ -178,9 +180,12 @@ func TestMigrateToOpaqueIDs_ValidateStructure(t *testing.T) {
 	}
 }
 
-// TestAtomicSave_RemovesMigrationBackup verifies the first config-
-// modifying save after a migration consumes the backup escape hatch.
-func TestAtomicSave_RemovesMigrationBackup(t *testing.T) {
+// TestAtomicSave_PreservesMigrationBackup verifies that, as of #269,
+// AtomicSave no longer consumes the pre-migration backup: the verbatim
+// backup written by the migration survives subsequent config-modifying
+// saves so the user keeps a rollback escape hatch until they delete it
+// themselves.
+func TestAtomicSave_PreservesMigrationBackup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	key := writeLegacyConfig(t, path)
@@ -196,10 +201,48 @@ func TestAtomicSave_RemovesMigrationBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	// Two saves to be sure nothing in the save path removes it.
 	if err := AtomicSave(path, c); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("backup must be preserved across AtomicSave (#269), stat err=%v", err)
+	}
+
+	// removeMigrationBackup remains the explicit way to delete it.
+	removeMigrationBackup(path)
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
-		t.Fatalf("backup should be removed after the next AtomicSave, stat err=%v", err)
+		t.Fatalf("removeMigrationBackup should unlink the backup, stat err=%v", err)
+	}
+}
+
+// TestMigrationNotice_ContentAndPath verifies the shared notice copy
+// names the ABSOLUTE backup path, includes the rollback rm command, and
+// carries the one-line "this holds secrets — don't sync" warning (#269).
+func TestMigrationNotice_ContentAndPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	bak := MigrationBackupPath(path)
+	if !filepath.IsAbs(bak) {
+		t.Fatalf("MigrationBackupPath must be absolute, got %q", bak)
+	}
+	if filepath.Base(bak) != "config.toml"+MigrationBackupSuffix {
+		t.Fatalf("backup basename = %q", filepath.Base(bak))
+	}
+
+	notice := MigrationNotice(path)
+	for _, want := range []string{
+		"upgraded config to opaque-ID format (#248)",
+		bak,
+		fmt.Sprintf("rm %q", bak),
+		"do not check it in or sync it",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("notice missing %q:\n%s", want, notice)
+		}
 	}
 }

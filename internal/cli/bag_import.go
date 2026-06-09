@@ -156,8 +156,12 @@ func runBagImport(cmd *cobra.Command, opts importOpts) error {
 	// One-shot opaque-ID migration (#248) so a legacy config gets the
 	// sealed name_map + backup before we mint a new bag/keys into it,
 	// matching the clone/unlock paths.
-	if err := migrateOpaqueIDsLocked(cfgPath, key); err != nil {
+	migrated, err := migrateOpaqueIDsLocked(cfgPath, key)
+	if err != nil {
 		return err
+	}
+	if migrated {
+		printMigrationNotice(cmd.ErrOrStderr(), cfgPath)
 	}
 	cfg, err = config.Load(cfgPath)
 	if err != nil {

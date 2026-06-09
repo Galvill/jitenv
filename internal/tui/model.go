@@ -44,6 +44,14 @@ type rootModel struct {
 	// to remind the user the TUI was opened by `jitenv clone`.
 	footerHint string
 
+	// migrationNotice, when non-empty, is a one-shot status-line
+	// notice shown when the opaque-ID migration (#248) just ran. It is
+	// surfaced exactly once — the first View consumes it into the flash
+	// slot and clears the field so subsequent model rebuilds / renders
+	// don't re-emit it (#269). The full multi-line copy is printed to
+	// stderr on exit by runModel.
+	migrationNotice string
+
 	err    error // fatal error returned from prog.Run
 	width  int
 	height int
@@ -59,7 +67,21 @@ func (r *rootModel) Init() tea.Cmd {
 	if len(r.stack) == 0 {
 		return nil
 	}
-	return r.top().Init()
+	cmd := r.top().Init()
+	// One-shot post-migration notice (#269). Init runs exactly once, so
+	// emitting the status flash here (and clearing the field) guarantees
+	// it surfaces a single time and is never re-emitted on a later model
+	// rebuild or render.
+	if r.migrationNotice != "" {
+		notice := r.migrationNotice
+		r.migrationNotice = ""
+		flash := func() tea.Msg { return statusMsg(notice) }
+		if cmd == nil {
+			return flash
+		}
+		return tea.Batch(cmd, flash)
+	}
+	return cmd
 }
 
 func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

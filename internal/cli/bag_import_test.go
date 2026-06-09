@@ -421,3 +421,46 @@ func TestBagImport_DryRun_OnCollisionAsk_NoTTY(t *testing.T) {
 		t.Errorf("dry-run must not modify the config")
 	}
 }
+
+// TestMigrationNoticeEmittedOnce verifies the #269 contract: when a
+// legacy config is migrated to opaque-ID format during a key-holding
+// command (here, bag import), the one-shot backup notice is printed to
+// stderr exactly once — and a SECOND import (config already migrated)
+// emits no notice, because the migration is idempotent. The notice must
+// name the absolute backup path and warn that the backup holds secrets.
+func TestMigrationNoticeEmittedOnce(t *testing.T) {
+	cfgPath := newLegacyImportTestConfig(t, "prod", "A", "old")
+	backup := cfgPath + config.MigrationBackupSuffix
+
+	// First import triggers the migration → notice fires once.
+	_, errOut, err := runImport(t, "B=2\n", "prod", "--stdin")
+	if err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	const marker = "upgraded config to opaque-ID format (#248)"
+	if n := strings.Count(errOut, marker); n != 1 {
+		t.Fatalf("migration notice should fire exactly once, got %d:\n%s", n, errOut)
+	}
+	if !strings.Contains(errOut, backup) {
+		t.Errorf("notice must name the absolute backup path %q, got:\n%s", backup, errOut)
+	}
+	if !strings.Contains(errOut, "do not check it in or sync it") {
+		t.Errorf("notice must warn the backup holds secrets, got:\n%s", errOut)
+	}
+	if _, statErr := os.Stat(backup); statErr != nil {
+		t.Fatalf("backup must exist after migration: %v", statErr)
+	}
+
+	// Second import: config is already migrated, so no notice.
+	_, errOut2, err := runImport(t, "C=3\n", "prod", "--stdin")
+	if err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+	if strings.Contains(errOut2, marker) {
+		t.Errorf("migration notice must NOT re-fire on an already-migrated config, got:\n%s", errOut2)
+	}
+	// And the save from the second import must NOT have removed the backup (#269).
+	if _, statErr := os.Stat(backup); statErr != nil {
+		t.Fatalf("backup must survive subsequent saves (#269): %v", statErr)
+	}
+}
