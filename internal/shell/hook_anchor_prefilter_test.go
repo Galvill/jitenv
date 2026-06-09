@@ -166,3 +166,49 @@ printf '__DONE__\n' >&2
 		t.Errorf("command under a glob's literal prefix was filtered out (should fork is-mapped to confirm):\n%s", underPhase)
 	}
 }
+
+// TestHookAnchorPrefilter_TabInPathRoundtrips is the #285 regression: a
+// `path` mapping whose target contains a literal TAB (legal on Linux and
+// macOS filesystems) must round-trip through the anchors sidecar intact,
+// so the in-shell pre-filter still recognises it as an exact anchor. The
+// previous TAB-framed format silently truncated the path at the TAB, so a
+// command at the real path resolved to an unrecognised anchor and ran
+// without env injection. NUL framing fixes that.
+func TestHookAnchorPrefilter_TabInPathRoundtrips(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	runtimeDir := filepath.Join(dir, "runtime")
+	_ = os.MkdirAll(runtimeDir, 0o700)
+
+	// A path with an embedded TAB. Created on the host fs — Linux/macOS
+	// accept TAB in filenames; the test skips if the fs disallows it.
+	tabbed := filepath.Join(dir, "tools", "with\ttab", "probe")
+	if err := os.MkdirAll(filepath.Dir(tabbed), 0o755); err != nil {
+		t.Skipf("filesystem rejected TAB in path: %v", err)
+	}
+	if err := os.WriteFile(tabbed, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Skipf("filesystem rejected TAB-containing file: %v", err)
+	}
+
+	cfgPath := writeConfigWithMappings(t, dir, []config.Mapping{
+		{Path: tabbed, Vars: []config.VarRef{{Name: "FOO", Source: "n", Ref: "x"}}},
+	})
+
+	// Run the exact tabbed path. Pre-filter should recognise it as an
+	// exact-anchor hit and fork `is-mapped` (the `candidate cmd=…` log
+	// line is the marker — it's printed immediately before the fork).
+	// We bash-quote the path explicitly so the shell sees the TAB byte.
+	quoted := fmt.Sprintf("$'%s'", strings.ReplaceAll(tabbed, "\t", `\t`))
+	out := runHookDebug(t, bin, cfgPath, runtimeDir, fmt.Sprintf(`
+printf '__RUN__\n' >&2
+%s
+printf '__DONE__\n' >&2
+`, quoted))
+
+	if !strings.Contains(out, "candidate cmd=") {
+		t.Errorf("TAB-containing path failed to match its exact anchor (#285):\n%s", out)
+	}
+}
