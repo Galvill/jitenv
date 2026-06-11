@@ -19,15 +19,79 @@ import (
 // same on-disk config (see #275 / #166).
 const MigrationLockSuffix = ".tui.lock"
 
-// MigrationBackupPath returns the absolute path of the verbatim
-// pre-#248 backup sibling for the given config path. Used by the
-// user-facing migration notice so the message names the exact file.
+// migrationBackupKind is the migration-kind token embedded in dated
+// backup filenames (config.toml.pre-id-migration.<when>.bak). It names
+// the opaque-ID migration (#248). A future migration would use a
+// different kind so its backups never collide with these.
+const migrationBackupKind = "id"
+
+// migrationBackupTimeLayout is the filesystem-safe UTC timestamp format
+// used in dated backup filenames. It is RFC3339-like but uses dashes in
+// the time component because colons are not valid in filenames on
+// Windows (e.g. 2026-06-11T15-30-00Z).
+const migrationBackupTimeLayout = "2006-01-02T15-04-05Z"
+
+// backupPath builds the verbatim pre-migration backup sibling for
+// cfgPath, dating it with when so each migration call (including a retry
+// after a partial failure) lands on its own unique filename rather than
+// colliding on a fixed suffix (#304). Example output:
+//
+//	/home/u/.config/jitenv/config.toml.pre-id-migration.2026-06-11T15-30-00Z.bak
+//
+// when is passed in by the caller (rather than read from time.Now here)
+// so the migration stays testable with an injected clock.
+func backupPath(cfgPath, kind string, when time.Time) string {
+	return cfgPath + ".pre-" + kind + "-migration." + when.UTC().Format(migrationBackupTimeLayout) + ".bak"
+}
+
+// migrationBackupGlob returns the doublestar-free filepath.Glob pattern
+// matching every dated backup of the given kind for cfgPath. Both the
+// notice (most-recent discovery) and the retention sweep use it so they
+// agree on which files are pre-migration backups.
+func migrationBackupGlob(cfgPath, kind string) string {
+	return cfgPath + ".pre-" + kind + "-migration.*.bak"
+}
+
+// listMigrationBackups returns the dated backup siblings of cfgPath for
+// the given kind, in no particular order. A glob error or no matches
+// yields an empty slice.
+func listMigrationBackups(cfgPath, kind string) []string {
+	matches, err := filepath.Glob(migrationBackupGlob(cfgPath, kind))
+	if err != nil {
+		return nil
+	}
+	return matches
+}
+
+// MigrationBackupPath returns the absolute path of the most-recent
+// (by mtime) verbatim pre-#248 backup sibling for the given config
+// path, or "" if no dated backup exists. Used by the user-facing
+// migration notice so the message names the exact file that was just
+// written (the just-written backup is, by construction, the newest).
+//
+// Discovery-by-glob (rather than recomputing a fixed path) is what lets
+// dated backups (#304) coexist: a retry or a future migration adds a new
+// dated file without the notice losing track of the current one.
 func MigrationBackupPath(cfgPath string) string {
-	bak := cfgPath + MigrationBackupSuffix
-	if abs, err := filepath.Abs(bak); err == nil {
+	matches := listMigrationBackups(cfgPath, migrationBackupKind)
+	var newest string
+	var newestMod time.Time
+	for _, m := range matches {
+		fi, err := os.Stat(m)
+		if err != nil {
+			continue
+		}
+		if newest == "" || fi.ModTime().After(newestMod) {
+			newest, newestMod = m, fi.ModTime()
+		}
+	}
+	if newest == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(newest); err == nil {
 		return abs
 	}
-	return bak
+	return newest
 }
 
 // MigrationNotice is the one-shot, user-facing message printed after the
@@ -40,6 +104,15 @@ func MigrationBackupPath(cfgPath string) string {
 // the SAME text via this helper so the copy stays consistent.
 func MigrationNotice(cfgPath string) string {
 	bak := MigrationBackupPath(cfgPath)
+	if bak == "" {
+		// No backup discoverable (e.g. it was already swept). Fall back
+		// to naming the config so the message is still coherent.
+		if abs, err := filepath.Abs(cfgPath); err == nil {
+			bak = abs
+		} else {
+			bak = cfgPath
+		}
+	}
 	return "jitenv: upgraded config to opaque-ID format (#248).\n" +
 		"A verbatim backup of the pre-upgrade config has been written to:\n" +
 		"  " + bak + "\n" +
@@ -50,12 +123,6 @@ func MigrationNotice(cfgPath string) string {
 		"Note: the backup contains your secret values sealed under the old\n" +
 		"scheme — keep it local; do not check it in or sync it."
 }
-
-// MigrationBackupSuffix is appended to the config path for the verbatim
-// pre-migration backup written by MigrateToOpaqueIDs. The backup is left
-// in place after migration and is never removed automatically (#269) —
-// the user deletes it themselves once they've verified the upgrade.
-const MigrationBackupSuffix = ".pre-id-migration.bak"
 
 // MigrateToOpaqueIDs upgrades a legacy name-keyed config (pre-#248) to
 // the opaque-ID on-disk shape: source/bag/bag-key names move into the
@@ -69,9 +136,10 @@ const MigrationBackupSuffix = ".pre-id-migration.bak"
 //
 // Flow (DECIDED in #248):
 //  1. Detect old shape; short-circuit if already migrated.
-//  2. Copy the file verbatim to a sibling backup. If the backup already
-//     exists, abort with a conflict error (it may be a prior half-
-//     migration) — never overwrite it.
+//  2. Copy the file verbatim to a DATED sibling backup (#304). Each call
+//     stamps the filename with the current UTC time, so a retry after a
+//     partial failure lands on a fresh name and proceeds rather than
+//     colliding on a fixed suffix. The original is never overwritten.
 //  3. Decrypt under the OLD (name-based) AADs. On a legacy config the
 //     map keys are names, so DecryptInPlace's AAD derivation reproduces
 //     the old name-based context exactly, and translation is a no-op.
@@ -133,8 +201,12 @@ func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 		return false, nil
 	}
 
-	backupPath := path + MigrationBackupSuffix
-	if err := writeVerbatimBackup(path, backupPath); err != nil {
+	// Date the backup filename so a leftover backup from a prior
+	// (possibly half-completed) run does not block this one (#304). The
+	// timestamp is captured once here; the migration itself takes no
+	// other dependency on the wall clock until Meta.MigratedAt below.
+	bak := backupPath(path, migrationBackupKind, time.Now())
+	if err := writeVerbatimBackup(path, bak); err != nil {
 		return false, err
 	}
 
@@ -143,13 +215,13 @@ func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 	// reproduces the pre-#248 context. There is no name_map yet, so the
 	// ID→name translation step is a no-op and c stays name-keyed.
 	if err := DecryptInPlace(c, key); err != nil {
-		return false, fmt.Errorf("migrate: decrypt legacy config: %w (original left untouched; backup at %s)", err, backupPath)
+		return false, fmt.Errorf("migrate: decrypt legacy config: %w (original left untouched; backup at %s)", err, bak)
 	}
 
 	// Re-seal under the new ID-based AADs + build the sealed name_map.
 	// c.Meta.NameMap is empty here, so EncryptInPlace mints fresh IDs.
 	if err := EncryptInPlace(c, key); err != nil {
-		return false, fmt.Errorf("migrate: re-encrypt under opaque IDs: %w (original left untouched; backup at %s)", err, backupPath)
+		return false, fmt.Errorf("migrate: re-encrypt under opaque IDs: %w (original left untouched; backup at %s)", err, bak)
 	}
 
 	// Stamp the migration timestamp into Meta so the AtomicSave
@@ -165,30 +237,26 @@ func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 	// AtomicSave retention sweep removes it once Meta.MigratedAt is
 	// older than the configured window (#288).
 	if err := atomicSave(path, c); err != nil {
-		return false, fmt.Errorf("migrate: save migrated config: %w (original left untouched; backup at %s)", err, backupPath)
+		return false, fmt.Errorf("migrate: save migrated config: %w (original left untouched; backup at %s)", err, bak)
 	}
 	return true, nil
 }
 
-// writeVerbatimBackup copies src to dst byte-for-byte at mode 0600. It
-// refuses to overwrite an existing backup: a leftover backup signals a
-// prior interrupted migration, and clobbering it would discard the only
-// pristine copy of the user's original config.
+// writeVerbatimBackup copies src to dst byte-for-byte at mode 0600.
+//
+// As of #304 dst is a DATED, per-call filename, so a leftover backup
+// from a prior run no longer collides here and there is no pre-existence
+// check to abort the migration. O_EXCL is kept purely as defense in
+// depth against the absurd same-second collision (two migrations of the
+// same config within one second resolving to the same timestamp) — it
+// never fires in normal operation.
 func writeVerbatimBackup(src, dst string) error {
-	if _, err := os.Stat(dst); err == nil {
-		return fmt.Errorf("migration backup %s already exists; refusing to overwrite (it may be a prior interrupted migration — inspect it, then remove it to retry)", dst)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat backup path %s: %w", dst, err)
-	}
-
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
 
-	// O_EXCL so a backup that appears between the Stat and the Open
-	// (TOCTOU) still aborts rather than truncating.
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -208,15 +276,19 @@ func writeVerbatimBackup(src, dst string) error {
 	return nil
 }
 
-// removeMigrationBackup unlinks the pre-migration backup sibling for
-// path, if present. As of #288 the AtomicSave path wires this in via
-// sweepMigrationBackupIfExpired once the rollback window
+// removeMigrationBackup unlinks every dated pre-migration backup
+// sibling for path, if any. As of #288 the AtomicSave path wires this in
+// via sweepMigrationBackupIfExpired once the rollback window
 // (Meta.MigratedAt + DefaultMigrationBackupRetention) has elapsed,
 // closing the long-tail data-exfil hazard where the .bak rode along
-// in dotfile tarballs / rsyncs (#288). Best-effort: a failure to
+// in dotfile tarballs / rsyncs (#288). Since #304 backups are dated, so
+// a single migration may have left more than one (e.g. a retry after a
+// partial failure) — all of them are removed. Best-effort: a failure to
 // remove is non-fatal, so the error is swallowed.
 func removeMigrationBackup(path string) {
-	_ = os.Remove(path + MigrationBackupSuffix)
+	for _, m := range listMigrationBackups(path, migrationBackupKind) {
+		_ = os.Remove(m)
+	}
 }
 
 // MigrationBackupRetentionEnv lets the user override the default
@@ -269,9 +341,14 @@ func migrationBackupRetention() time.Duration {
 //     timestamp).
 //   - backup missing: no-op (idempotent; the common steady-state
 //     after the first sweep).
-//   - now - migratedAt >= retention: best-effort os.Remove. Errors
-//     are swallowed — a failed remove is no worse than the pre-#288
-//     status quo where the user removes it themselves.
+//   - now - migratedAt >= retention: best-effort os.Remove of every
+//     dated backup (#304). Errors are swallowed — a failed remove is
+//     no worse than the pre-#288 status quo where the user removes it
+//     themselves.
+//
+// The expiry decision is keyed off Meta.MigratedAt (when the config was
+// migrated), not the individual backup mtimes, so every dated backup
+// from that migration ages out together once the window elapses.
 //
 // The sweep never touches Meta.MigratedAt: keeping the timestamp on
 // disk is harmless and lets a future tool report "this config
@@ -291,9 +368,7 @@ func sweepMigrationBackupIfExpired(path string, meta Meta) {
 	if time.Since(migratedAt) < retention {
 		return
 	}
-	backup := path + MigrationBackupSuffix
-	if _, err := os.Stat(backup); err != nil {
-		return
+	for _, m := range listMigrationBackups(path, migrationBackupKind) {
+		_ = os.Remove(m)
 	}
-	_ = os.Remove(backup)
 }
