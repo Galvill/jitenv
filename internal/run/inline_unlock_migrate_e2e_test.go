@@ -138,12 +138,16 @@ func TestRunInlineUnlock_MigratesLegacyConfig(t *testing.T) {
 		t.Fatalf("child did not exit;\noutput=%s", readAll())
 	}
 
-	// The .pre-id-migration.bak must have been written by the inline
-	// unlock — this is the #269 rollback escape hatch the user can
-	// reach via the backup notice.
-	backup := cfgPath + config.MigrationBackupSuffix
+	// The dated pre-id-migration backup must have been written by the
+	// inline unlock — this is the #269 rollback escape hatch the user can
+	// reach via the backup notice. Discovered via MigrationBackupPath
+	// since the filename is dated (#304).
+	backup := config.MigrationBackupPath(cfgPath)
+	if backup == "" {
+		t.Fatalf("inline-unlock did not write a pre-migration backup near %s", cfgPath)
+	}
 	if _, err := os.Stat(backup); err != nil {
-		t.Fatalf("inline-unlock did not write the pre-migration backup at %s: %v", backup, err)
+		t.Fatalf("discovered backup %s not statable: %v", backup, err)
 	}
 
 	// And the on-disk config is now in the migrated (opaque-ID) shape:

@@ -133,10 +133,10 @@ func runBagImport(cmd *cobra.Command, opts importOpts) error {
 	defer lockKey(key)()
 
 	// Dry-run must be byte-for-byte side-effect-free: no opaque-ID
-	// migration (which would write the migrated config + a
-	// .pre-id-migration.bak), no save, and no TTY prompts. We decrypt the
-	// config IN MEMORY ONLY to read the target bag's existing keys, then
-	// report what WOULD change. A legacy (pre-#248) config decrypts under
+	// migration (which would write the migrated config + a dated
+	// *.pre-id-migration.*.bak, #304), no save, and no TTY prompts. We
+	// decrypt the config IN MEMORY ONLY to read the target bag's existing
+	// keys, then report what WOULD change. A legacy (pre-#248) config decrypts under
 	// its name-based AADs into a name-keyed cfg.Secrets — exactly the
 	// shape bagUpsert's collision check needs — so no in-memory migration
 	// is required for the report either.

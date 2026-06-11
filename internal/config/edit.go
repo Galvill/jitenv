@@ -142,8 +142,8 @@ func DeriveKeyFromMeta(c *Config, passphrase []byte) ([]byte, error) {
 // config never has to buffer in RAM; durability + cleanup-on-failure
 // come from internal/atomicfile (#281).
 //
-// On every successful save the pre-id-migration backup sibling
-// (.pre-id-migration.bak) is swept if Meta.MigratedAt is past the
+// On every successful save any dated pre-id-migration backup sibling
+// (*.pre-id-migration.*.bak, #304) is swept if Meta.MigratedAt is past the
 // configured rollback window (#288). The sweep is best-effort and
 // gated on Meta.MigratedAt being a parseable RFC3339 stamp, so
 // configs migrated by a binary that predates the field keep the

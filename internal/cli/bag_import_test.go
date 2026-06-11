@@ -381,9 +381,8 @@ func TestBagImport_DryRun_LegacyConfig_NoSideEffects(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Errorf("dry-run must not modify a legacy config on disk")
 	}
-	if _, err := os.Stat(cfgPath + config.MigrationBackupSuffix); !os.IsNotExist(err) {
-		t.Errorf("dry-run must not create a %s backup (stat err: %v)",
-			config.MigrationBackupSuffix, err)
+	if bak := config.MigrationBackupPath(cfgPath); bak != "" {
+		t.Errorf("dry-run must not create a migration backup, found: %s", bak)
 	}
 }
 
@@ -430,12 +429,16 @@ func TestBagImport_DryRun_OnCollisionAsk_NoTTY(t *testing.T) {
 // name the absolute backup path and warn that the backup holds secrets.
 func TestMigrationNoticeEmittedOnce(t *testing.T) {
 	cfgPath := newLegacyImportTestConfig(t, "prod", "A", "old")
-	backup := cfgPath + config.MigrationBackupSuffix
 
 	// First import triggers the migration → notice fires once.
 	_, errOut, err := runImport(t, "B=2\n", "prod", "--stdin")
 	if err != nil {
 		t.Fatalf("first import: %v", err)
+	}
+	// The dated backup is discoverable only after the migration ran.
+	backup := config.MigrationBackupPath(cfgPath)
+	if backup == "" {
+		t.Fatal("expected a dated migration backup after the first import")
 	}
 	const marker = "upgraded config to opaque-ID format (#248)"
 	if n := strings.Count(errOut, marker); n != 1 {

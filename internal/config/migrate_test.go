@@ -88,7 +88,7 @@ func TestMigrateToOpaqueIDs_Golden(t *testing.T) {
 	}
 
 	// Backup written verbatim.
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 	if _, err := os.Stat(backup); err != nil {
 		t.Fatalf("expected backup at %s: %v", backup, err)
 	}
@@ -139,27 +139,128 @@ func TestMigrateToOpaqueIDs_Golden(t *testing.T) {
 	}
 }
 
-// TestMigrateToOpaqueIDs_BackupConflict asserts a pre-existing backup
-// aborts the migration (it may be a prior interrupted run).
-func TestMigrateToOpaqueIDs_BackupConflict(t *testing.T) {
+// TestMigrateToOpaqueIDs_StaleBackupIgnored asserts the #304 contract:
+// a leftover dated backup from a prior run does NOT block a fresh
+// migration. The migration writes its own dated backup and proceeds; the
+// stale file is left untouched.
+func TestMigrateToOpaqueIDs_StaleBackupIgnored(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	key := writeLegacyConfig(t, path)
 
-	// Plant a stale backup.
-	if err := os.WriteFile(path+MigrationBackupSuffix, []byte("stale"), 0600); err != nil {
-		t.Fatalf("plant backup: %v", err)
+	// Plant a stale dated backup from a (simulated) earlier run.
+	stale := backupPath(path, migrationBackupKind, time.Now().Add(-time.Hour))
+	if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
+		t.Fatalf("plant stale backup: %v", err)
 	}
-	if _, err := MigrateToOpaqueIDs(path, key); err == nil {
-		t.Fatal("migration must abort when a backup already exists")
+
+	migrated, err := MigrateToOpaqueIDs(path, key)
+	if err != nil {
+		t.Fatalf("migration must not abort on a stale dated backup: %v", err)
 	}
-	// Original untouched (still legacy).
+	if !migrated {
+		t.Fatal("expected migration to proceed past the stale backup")
+	}
+
+	// The config is now migrated.
 	c, err := Load(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !NeedsIDMigration(c) {
-		t.Fatal("original config must be left untouched (still legacy) on backup conflict")
+	if NeedsIDMigration(c) {
+		t.Fatal("config should be migrated despite the stale backup")
+	}
+
+	// The stale backup is untouched and still holds its sentinel bytes.
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatalf("stale backup should still exist: %v", err)
+	}
+	if string(got) != "stale" {
+		t.Fatalf("stale backup was modified: %q", got)
+	}
+
+	// A fresh dated backup was written too, distinct from the stale one.
+	backups := listMigrationBackups(path, migrationBackupKind)
+	if len(backups) != 2 {
+		t.Fatalf("expected stale + fresh backup (2), got %d: %v", len(backups), backups)
+	}
+}
+
+// TestMigrateToOpaqueIDs_RetryProducesDistinctBackups asserts that two
+// migration runs (e.g. a retry path) each produce their own dated backup
+// without colliding. Both backups coexist on disk; neither blocks the
+// other (#304).
+func TestMigrateToOpaqueIDs_RetryProducesDistinctBackups(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	// First migration: legacy -> opaque IDs, writes backup #1.
+	key := writeLegacyConfig(t, path)
+	if migrated, err := MigrateToOpaqueIDs(path, key); err != nil || !migrated {
+		t.Fatalf("first migrate: migrated=%v err=%v", migrated, err)
+	}
+	first := listMigrationBackups(path, migrationBackupKind)
+	if len(first) != 1 {
+		t.Fatalf("expected 1 backup after first migration, got %d", len(first))
+	}
+
+	// Re-plant a legacy config at the same path (simulates a fresh
+	// migration needing to run again over a config at this location) and
+	// migrate again. The new dated backup must NOT collide with the first.
+	// Sleep a second so the timestamp (1s granularity) differs.
+	// Remove the (now-migrated) config so InitNew can re-seed it; the
+	// dated backup from migration #1 stays on disk to prove coexistence.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove migrated config: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	key2 := writeLegacyConfig(t, path)
+	if migrated, err := MigrateToOpaqueIDs(path, key2); err != nil || !migrated {
+		t.Fatalf("second migrate: migrated=%v err=%v", migrated, err)
+	}
+
+	all := listMigrationBackups(path, migrationBackupKind)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 distinct dated backups after two migrations, got %d: %v", len(all), all)
+	}
+	if all[0] == all[1] {
+		t.Fatalf("the two backups must have distinct filenames: %v", all)
+	}
+}
+
+// TestMigrationBackupPath_MostRecent verifies MigrationBackupPath returns
+// the newest (by mtime) dated backup, and "" when none exist (#304).
+func TestMigrationBackupPath_MostRecent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	if got := MigrationBackupPath(path); got != "" {
+		t.Fatalf("MigrationBackupPath with no backups should be empty, got %q", got)
+	}
+
+	now := time.Now()
+	older := backupPath(path, migrationBackupKind, now.Add(-2*time.Hour))
+	newer := backupPath(path, migrationBackupKind, now.Add(-1*time.Hour))
+	for _, p := range []string{older, newer} {
+		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	// Force mtimes so the newer-named file is genuinely newer on disk.
+	if err := os.Chtimes(older, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("chtimes older: %v", err)
+	}
+	if err := os.Chtimes(newer, now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("chtimes newer: %v", err)
+	}
+
+	got := MigrationBackupPath(path)
+	if !filepath.IsAbs(got) {
+		t.Fatalf("MigrationBackupPath must be absolute, got %q", got)
+	}
+	if filepath.Base(got) != filepath.Base(newer) {
+		t.Fatalf("expected most-recent backup %q, got %q", filepath.Base(newer), filepath.Base(got))
 	}
 }
 
@@ -195,7 +296,7 @@ func TestAtomicSave_PreservesMigrationBackup(t *testing.T) {
 	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 	if _, err := os.Stat(backup); err != nil {
 		t.Fatalf("backup should exist immediately after migration: %v", err)
 	}
@@ -236,7 +337,7 @@ func TestAtomicSave_RemovesExpiredMigrationBackup(t *testing.T) {
 	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 	if _, err := os.Stat(backup); err != nil {
 		t.Fatalf("backup should exist immediately after migration: %v", err)
 	}
@@ -278,7 +379,7 @@ func TestAtomicSave_KeepsInWindowMigrationBackup(t *testing.T) {
 	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 
 	c, err := Load(path)
 	if err != nil {
@@ -305,7 +406,7 @@ func TestAtomicSave_MigrationBackupRetentionEnvOverride(t *testing.T) {
 	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 	if _, err := os.Stat(backup); err != nil {
 		t.Fatalf("backup should exist immediately after migration: %v", err)
 	}
@@ -337,7 +438,7 @@ func TestAtomicSave_MigrationBackupRetentionEnvDisable(t *testing.T) {
 	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 
 	t.Setenv(MigrationBackupRetentionEnv, "-1")
 
@@ -368,7 +469,7 @@ func TestAtomicSave_MissingMigratedAtPreservesBackup(t *testing.T) {
 	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	backup := path + MigrationBackupSuffix
+	backup := MigrationBackupPath(path)
 
 	c, err := Load(path)
 	if err != nil {
@@ -459,12 +560,18 @@ func TestMigrationNotice_ContentAndPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
+	// Plant a dated backup so the notice has a concrete file to name.
+	written := backupPath(path, migrationBackupKind, time.Now())
+	if err := os.WriteFile(written, []byte("x"), 0600); err != nil {
+		t.Fatalf("plant backup: %v", err)
+	}
+
 	bak := MigrationBackupPath(path)
 	if !filepath.IsAbs(bak) {
 		t.Fatalf("MigrationBackupPath must be absolute, got %q", bak)
 	}
-	if filepath.Base(bak) != "config.toml"+MigrationBackupSuffix {
-		t.Fatalf("backup basename = %q", filepath.Base(bak))
+	if filepath.Base(bak) != filepath.Base(written) {
+		t.Fatalf("backup basename = %q, want %q", filepath.Base(bak), filepath.Base(written))
 	}
 
 	notice := MigrationNotice(path)
@@ -477,5 +584,80 @@ func TestMigrationNotice_ContentAndPath(t *testing.T) {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice missing %q:\n%s", want, notice)
 		}
+	}
+}
+
+// TestAtomicSave_RemovesExpiredLegacyMigrationBackup pins the #304
+// regression: a user who migrated with a pre-#304 binary has a FIXED-name
+// .pre-id-migration.bak (no embedded timestamp). The dated glob the sweep
+// uses does not match it, so without explicit handling the #288 retention
+// sweep would never fire for that file and it would persist indefinitely,
+// re-opening the data-exfil hazard. Once Meta.MigratedAt is past the
+// rollback window, AtomicSave must remove the legacy fixed-name backup too.
+func TestAtomicSave_RemovesExpiredLegacyMigrationBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// Remove the dated backup the migration just wrote and plant a legacy
+	// fixed-name backup in its place to simulate a pre-#304 on-disk state.
+	for _, m := range listMigrationBackups(path, migrationBackupKind) {
+		if err := os.Remove(m); err != nil {
+			t.Fatalf("clear dated backup: %v", err)
+		}
+	}
+	legacy := legacyMigrationBackupPath(path, migrationBackupKind)
+	if err := os.WriteFile(legacy, []byte("legacy backup contents"), 0o600); err != nil {
+		t.Fatalf("plant legacy backup: %v", err)
+	}
+
+	// Backdate Meta.MigratedAt past the default 30-day window and save.
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	c.Meta.MigratedAt = time.Now().Add(-31 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("expired legacy fixed-name backup must be swept (#304), stat err=%v", err)
+	}
+}
+
+// TestAtomicSave_KeepsInWindowLegacyMigrationBackup is the boundary
+// counterpart: a legacy fixed-name backup whose recorded migration
+// timestamp is still inside the rollback window must survive AtomicSave,
+// preserving the user's rollback escape hatch (#269) for upgraded installs.
+func TestAtomicSave_KeepsInWindowLegacyMigrationBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for _, m := range listMigrationBackups(path, migrationBackupKind) {
+		if err := os.Remove(m); err != nil {
+			t.Fatalf("clear dated backup: %v", err)
+		}
+	}
+	legacy := legacyMigrationBackupPath(path, migrationBackupKind)
+	if err := os.WriteFile(legacy, []byte("legacy backup contents"), 0o600); err != nil {
+		t.Fatalf("plant legacy backup: %v", err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// 29 days ago — still inside the default 30-day window.
+	c.Meta.MigratedAt = time.Now().Add(-29 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("in-window legacy fixed-name backup must survive AtomicSave: %v", err)
 	}
 }

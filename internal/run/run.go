@@ -207,8 +207,9 @@ func fetchAfterUnlock(ctx context.Context, abs string) (map[string]string, bool,
 	}
 	// Surface the one-shot opaque-ID migration backup notice (#275): a
 	// user whose first jitenv interaction post-#248 upgrade is an inline
-	// unlock via the agent-down countdown otherwise never sees the
-	// .pre-id-migration.bak rollback hint (#269).
+	// unlock via the agent-down countdown otherwise never sees the dated
+	// pre-id-migration backup (*.pre-id-migration.*.bak, #304) rollback
+	// hint (#269).
 	if res.Migrated {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, config.MigrationNotice(res.CfgPath))
