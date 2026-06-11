@@ -67,8 +67,9 @@ func Spawn(cfgPath string) (Result, error) {
 	// Lifting this here from `jitenv unlock` ensures every key-holding
 	// entry point — including the inline-unlock prompt fired from the
 	// agent-down countdown in run/shim (#232) — runs the migration by
-	// construction, so the user always sees the .pre-id-migration.bak
-	// and the post-migration backup notice (#275). config.MigrateToOpaqueIDs
+	// construction, so the user always sees the dated pre-id-migration
+	// backup (*.pre-id-migration.*.bak, #304) and the post-migration
+	// backup notice (#275). config.MigrateToOpaqueIDs
 	// takes its own internal lock against `jitenv config` and concurrent
 	// migrations, so this call is safe to make from every caller.
 	migrated, err := config.MigrateToOpaqueIDs(resolved, key)

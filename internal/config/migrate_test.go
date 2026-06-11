@@ -586,3 +586,78 @@ func TestMigrationNotice_ContentAndPath(t *testing.T) {
 		}
 	}
 }
+
+// TestAtomicSave_RemovesExpiredLegacyMigrationBackup pins the #304
+// regression: a user who migrated with a pre-#304 binary has a FIXED-name
+// .pre-id-migration.bak (no embedded timestamp). The dated glob the sweep
+// uses does not match it, so without explicit handling the #288 retention
+// sweep would never fire for that file and it would persist indefinitely,
+// re-opening the data-exfil hazard. Once Meta.MigratedAt is past the
+// rollback window, AtomicSave must remove the legacy fixed-name backup too.
+func TestAtomicSave_RemovesExpiredLegacyMigrationBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// Remove the dated backup the migration just wrote and plant a legacy
+	// fixed-name backup in its place to simulate a pre-#304 on-disk state.
+	for _, m := range listMigrationBackups(path, migrationBackupKind) {
+		if err := os.Remove(m); err != nil {
+			t.Fatalf("clear dated backup: %v", err)
+		}
+	}
+	legacy := legacyMigrationBackupPath(path, migrationBackupKind)
+	if err := os.WriteFile(legacy, []byte("legacy backup contents"), 0o600); err != nil {
+		t.Fatalf("plant legacy backup: %v", err)
+	}
+
+	// Backdate Meta.MigratedAt past the default 30-day window and save.
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	c.Meta.MigratedAt = time.Now().Add(-31 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("expired legacy fixed-name backup must be swept (#304), stat err=%v", err)
+	}
+}
+
+// TestAtomicSave_KeepsInWindowLegacyMigrationBackup is the boundary
+// counterpart: a legacy fixed-name backup whose recorded migration
+// timestamp is still inside the rollback window must survive AtomicSave,
+// preserving the user's rollback escape hatch (#269) for upgraded installs.
+func TestAtomicSave_KeepsInWindowLegacyMigrationBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+	if _, err := MigrateToOpaqueIDs(path, key); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for _, m := range listMigrationBackups(path, migrationBackupKind) {
+		if err := os.Remove(m); err != nil {
+			t.Fatalf("clear dated backup: %v", err)
+		}
+	}
+	legacy := legacyMigrationBackupPath(path, migrationBackupKind)
+	if err := os.WriteFile(legacy, []byte("legacy backup contents"), 0o600); err != nil {
+		t.Fatalf("plant legacy backup: %v", err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// 29 days ago — still inside the default 30-day window.
+	c.Meta.MigratedAt = time.Now().Add(-29 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := AtomicSave(path, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("in-window legacy fixed-name backup must survive AtomicSave: %v", err)
+	}
+}

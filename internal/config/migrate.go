@@ -52,6 +52,18 @@ func migrationBackupGlob(cfgPath, kind string) string {
 	return cfgPath + ".pre-" + kind + "-migration.*.bak"
 }
 
+// legacyMigrationBackupPath returns the pre-#304 FIXED-name backup
+// sibling for cfgPath: <cfgPath>.pre-<kind>-migration.bak. Binaries
+// before #304 wrote the backup to this single, undated path. The dated
+// glob (migrationBackupGlob) deliberately does NOT match it (the dated
+// form always has a timestamp segment between "migration." and ".bak"),
+// so the retention sweep would otherwise never reach a backup left by an
+// older binary, re-opening the #288 data-exfil hazard. The sweep removes
+// this path explicitly as a best-effort cleanup for upgraded installs.
+func legacyMigrationBackupPath(cfgPath, kind string) string {
+	return cfgPath + ".pre-" + kind + "-migration.bak"
+}
+
 // listMigrationBackups returns the dated backup siblings of cfgPath for
 // the given kind, in no particular order. A glob error or no matches
 // yields an empty slice.
@@ -105,13 +117,18 @@ func MigrationBackupPath(cfgPath string) string {
 func MigrationNotice(cfgPath string) string {
 	bak := MigrationBackupPath(cfgPath)
 	if bak == "" {
-		// No backup discoverable (e.g. it was already swept). Fall back
-		// to naming the config so the message is still coherent.
-		if abs, err := filepath.Abs(cfgPath); err == nil {
-			bak = abs
-		} else {
-			bak = cfgPath
-		}
+		// No dated backup discoverable (e.g. it was already swept by the
+		// #288 retention path). Emit a coherent notice that does NOT name
+		// the live config as the backup location — naming cfgPath here
+		// would point the rollback/rm instructions at the user's live
+		// config, which is worse than admitting the path is unknown.
+		return "jitenv: upgraded config to opaque-ID format (#248).\n" +
+			"A verbatim backup of the pre-upgrade config was written, but its\n" +
+			"location could not be determined (it may already have been removed\n" +
+			"by the retention sweep, #288). If a *.pre-id-migration.*.bak file\n" +
+			"is still present next to your config, it is that backup.\n" +
+			"Note: such a backup contains your secret values sealed under the old\n" +
+			"scheme — keep it local; do not check it in or sync it."
 	}
 	return "jitenv: upgraded config to opaque-ID format (#248).\n" +
 		"A verbatim backup of the pre-upgrade config has been written to:\n" +
@@ -289,6 +306,9 @@ func removeMigrationBackup(path string) {
 	for _, m := range listMigrationBackups(path, migrationBackupKind) {
 		_ = os.Remove(m)
 	}
+	// Best-effort cleanup of a pre-#304 fixed-name backup too (#304),
+	// which the dated glob does not match.
+	_ = os.Remove(legacyMigrationBackupPath(path, migrationBackupKind))
 }
 
 // MigrationBackupRetentionEnv lets the user override the default
@@ -371,4 +391,10 @@ func sweepMigrationBackupIfExpired(path string, meta Meta) {
 	for _, m := range listMigrationBackups(path, migrationBackupKind) {
 		_ = os.Remove(m)
 	}
+	// Also sweep a legacy fixed-name backup left by a pre-#304 binary
+	// (#304): it is not matched by the dated glob above, so without this
+	// it would persist past the rollback window and keep re-creating the
+	// #288 exfil hazard. Gated by the same Meta.MigratedAt expiry check
+	// the dated backups passed above; best-effort, errors swallowed.
+	_ = os.Remove(legacyMigrationBackupPath(path, migrationBackupKind))
 }
