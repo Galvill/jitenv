@@ -206,11 +206,36 @@ func MigrateToOpaqueIDs(path string, key []byte) (migrated bool, err error) {
 	}
 	defer lock.Close()
 
+	return MigrateToOpaqueIDsLocked(path, key)
+}
+
+// MigrateToOpaqueIDsLocked is the locked core of MigrateToOpaqueIDs: it
+// performs the opaque-ID migration ASSUMING THE CALLER ALREADY HOLDS the
+// path + MigrationLockSuffix flock. It does NOT acquire that lock itself.
+//
+// This split exists for the `jitenv config` TUI path (#306): the parent
+// `jitenv` process takes an exclusive flock on config.toml.tui.lock and
+// holds it for the whole TUI session while exec'ing the child jitenv-tui.
+// The child cannot re-acquire the same sibling (a fresh, O_CLOEXEC,
+// non-inherited fd flock(LOCK_EX|LOCK_NB) on the same inode returns
+// EWOULDBLOCK), so calling the self-locking MigrateToOpaqueIDs there
+// self-deadlocks and bricks the TUI for legacy configs. The TUI calls
+// THIS variant instead, trusting the parent's lock.
+//
+// Every other entry point (inline unlock, agent spawn, clone, bag
+// import) does NOT hold .tui.lock and MUST call the self-locking
+// MigrateToOpaqueIDs, not this one.
+//
+// The re-check-under-lock (Load + NeedsIDMigration) is preserved here so
+// both entry points are safe against another process having finished the
+// migration in the window between the caller's lock acquire and this
+// call. Returns (false, nil) when the config no longer needs migrating.
+func MigrateToOpaqueIDsLocked(path string, key []byte) (migrated bool, err error) {
 	// Re-check under the lock: another process may have just finished
 	// the migration while we waited (or were probing). This makes the
 	// function safe to call from multiple key-holding entry points
 	// without an explicit external guard.
-	c, err = Load(path)
+	c, err := Load(path)
 	if err != nil {
 		return false, err
 	}

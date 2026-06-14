@@ -215,8 +215,12 @@ func loadOrInit(cfgPath string) (*config.Config, []byte, bool, error) {
 		return nil, nil, false, err
 	}
 	// One-shot opaque-ID migration (#248). Runs under the TUI lock held
-	// by `jitenv config`, so it can't race the agent-spawn migration.
-	migrated, err := config.MigrateToOpaqueIDs(cfgPath, key)
+	// by the parent `jitenv config` process (config.go acquires
+	// config.toml.tui.lock and holds it for the whole TUI session while
+	// exec'ing this child). We therefore call the LOCKED core variant:
+	// re-acquiring that same sibling here would self-deadlock and brick
+	// the TUI for legacy configs (#306).
+	migrated, err := config.MigrateToOpaqueIDsLocked(cfgPath, key)
 	if err != nil {
 		zero(key)
 		return nil, nil, false, err
