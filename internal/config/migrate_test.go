@@ -553,6 +553,79 @@ func TestMigrateToOpaqueIDs_LegacyContendsOnLock(t *testing.T) {
 	}
 }
 
+// TestMigrateToOpaqueIDsLocked_MigratesUnderHeldLock is the #306
+// regression: the `jitenv config` parent holds an exclusive flock on
+// config.toml.tui.lock for the whole TUI session and exec's the child
+// jitenv-tui while still holding it. The child cannot re-acquire that
+// same sibling (a fresh O_CLOEXEC fd's flock(LOCK_EX|LOCK_NB) on the same
+// inode returns EWOULDBLOCK), so calling the self-locking
+// MigrateToOpaqueIDs there self-deadlocks and bricks the TUI for legacy
+// configs. The locked-core variant trusts the caller's lock, so the
+// migration must succeed even with the lock already held.
+func TestMigrateToOpaqueIDsLocked_MigratesUnderHeldLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	key := writeLegacyConfig(t, path)
+
+	// Sanity: pre-migration it's legacy and needs migration.
+	pre, err := Load(path)
+	if err != nil {
+		t.Fatalf("load pre: %v", err)
+	}
+	if !NeedsIDMigration(pre) {
+		t.Fatal("legacy config should need migration")
+	}
+
+	// Simulate the parent `jitenv config` process holding .tui.lock for
+	// the whole TUI session (config.go:198). The self-locking
+	// MigrateToOpaqueIDs would EWOULDBLOCK here (see
+	// TestMigrateToOpaqueIDs_LegacyContendsOnLock); the locked core must
+	// not.
+	heldF, err := lockfile.Acquire(path + MigrationLockSuffix)
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+	t.Cleanup(func() { _ = heldF.Close() })
+
+	migrated, err := MigrateToOpaqueIDsLocked(path, key)
+	if err != nil {
+		t.Fatalf("locked migration must succeed under a held .tui.lock: %v", err)
+	}
+	if !migrated {
+		t.Fatal("expected migrated=true for a legacy config")
+	}
+
+	// On disk: migrated to the opaque-ID shape, no longer needs migrating.
+	post, err := Load(path)
+	if err != nil {
+		t.Fatalf("load post: %v", err)
+	}
+	if NeedsIDMigration(post) {
+		t.Fatal("post-migration config should NOT need migration")
+	}
+	if post.Meta.NameMap == "" {
+		t.Fatal("post-migration config missing sealed name_map")
+	}
+
+	// Values still decrypt to the original plaintext under the new AADs.
+	if err := DecryptInPlace(post, key); err != nil {
+		t.Fatalf("decrypt post: %v", err)
+	}
+	if post.Secrets["stripe"]["SECRET_KEY"] != "sk_live_x" {
+		t.Fatalf("stripe secret not preserved: %v", post.Secrets["stripe"]["SECRET_KEY"])
+	}
+
+	// Locked core is idempotent too: a re-run on the migrated config (lock
+	// still held) is a clean no-op.
+	migrated2, err := MigrateToOpaqueIDsLocked(path, key)
+	if err != nil {
+		t.Fatalf("second locked migrate: %v", err)
+	}
+	if migrated2 {
+		t.Fatal("second locked migration should be a no-op")
+	}
+}
+
 // TestMigrationNotice_ContentAndPath verifies the shared notice copy
 // names the ABSOLUTE backup path, includes the rollback rm command, and
 // carries the one-line "this holds secrets — don't sync" warning (#269).
