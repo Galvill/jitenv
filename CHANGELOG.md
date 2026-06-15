@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.14.0](https://github.com/Galvill/jitenv/compare/v0.13.0...v0.14.0) (2026-06-14)
+
+
+### Features
+
+* **agentwarn:** add inline unlock from the agent-down countdown ([#232](https://github.com/Galvill/jitenv/issues/232)) ([#239](https://github.com/Galvill/jitenv/issues/239)) ([892b462](https://github.com/Galvill/jitenv/commit/892b4628e843d7a5d8c5f5dc36609faf622f4e84))
+* **bag:** import KEY=VALUE pairs from files, env vars, and stdin ([#250](https://github.com/Galvill/jitenv/issues/250)) ([#254](https://github.com/Galvill/jitenv/issues/254)) ([063e8d6](https://github.com/Galvill/jitenv/commit/063e8d6dd051ac6d0182502d49d3a09b99022406))
+* **config:** encrypt all vars[*] fields so config.toml stops leaking secret topology ([#240](https://github.com/Galvill/jitenv/issues/240)) ([937fe48](https://github.com/Galvill/jitenv/commit/937fe48d229f3fa5d211aa694438b37f4acd873e)), closes [#235](https://github.com/Galvill/jitenv/issues/235)
+* **config:** encrypt source/bag/key NAMES via opaque IDs + sealed name_map ([#248](https://github.com/Galvill/jitenv/issues/248)) ([#249](https://github.com/Galvill/jitenv/issues/249)) ([efdc3a8](https://github.com/Galvill/jitenv/commit/efdc3a8c04dd0fd28976a74c088767ad8cba3c09))
+* **config:** warn on intra-mapping env-var collisions ([#251](https://github.com/Galvill/jitenv/issues/251)) ([#255](https://github.com/Galvill/jitenv/issues/255)) ([d8467a7](https://github.com/Galvill/jitenv/commit/d8467a79ddf22e138faf98b06030ecff8f1510b1))
+* **shell:** PATH-resolved bare-name hook + fix flaky cwd_glob e2e ([#242](https://github.com/Galvill/jitenv/issues/242)) ([6e4bfb7](https://github.com/Galvill/jitenv/commit/6e4bfb7347bf6a3364b514654ad66bef78442bac))
+* **sync:** add S3 config-sync adapter ([#243](https://github.com/Galvill/jitenv/issues/243)) ([#247](https://github.com/Galvill/jitenv/issues/247)) ([acf9935](https://github.com/Galvill/jitenv/commit/acf993560efee19489977920d048182c5026bb1b))
+* **sync:** encrypted config sync to pluggable remote adapters (SSH, file) ([#244](https://github.com/Galvill/jitenv/issues/244)) ([d9f68b9](https://github.com/Galvill/jitenv/commit/d9f68b98db6db3ec8f213d72df1baff4b10f91c9))
+* **tui,cli:** discover cwd_glob commands by scanning a folder for project markers ([#256](https://github.com/Galvill/jitenv/issues/256)) ([1f58801](https://github.com/Galvill/jitenv/commit/1f588010b5748e20f833ed9ca3a755f7240254b8))
+
+
+### Bug Fixes
+
+* **agent:** configurable spawn timeout + clearer locked-agent countdown copy ([#266](https://github.com/Galvill/jitenv/issues/266)) ([5661c19](https://github.com/Galvill/jitenv/commit/5661c19c75447e5041ed5ab00003bc2568835189))
+* **agent:** detect early child exit in SpawnDaemon via wait goroutine ([#292](https://github.com/Galvill/jitenv/issues/292)) ([956f659](https://github.com/Galvill/jitenv/commit/956f65964f679e4f1a799283134d51d0d6444fb5)), closes [#276](https://github.com/Galvill/jitenv/issues/276)
+* **agent:** SpawnDaemon re-execs full jitenv, not jitenv-hook ([#268](https://github.com/Galvill/jitenv/issues/268)) ([#271](https://github.com/Galvill/jitenv/issues/271)) ([0f2711e](https://github.com/Galvill/jitenv/commit/0f2711e6ae04db33adbb689b30d245b2e72d8fe5))
+* **cli:** pin master key buffer in sources/config commands ([#280](https://github.com/Galvill/jitenv/issues/280)) ([#293](https://github.com/Galvill/jitenv/issues/293)) ([7e64569](https://github.com/Galvill/jitenv/commit/7e6456990a7d63f0d00adc82e9e4bf6423c5e088))
+* **config:** keep pre-id-migration backup on disk; surface a one-shot notice ([#269](https://github.com/Galvill/jitenv/issues/269)) ([#273](https://github.com/Galvill/jitenv/issues/273)) ([d5f026e](https://github.com/Galvill/jitenv/commit/d5f026efc2bec371521fea58dc343437af0e2469))
+* **finalize:** pass --repo explicitly to gh release upload ([#236](https://github.com/Galvill/jitenv/issues/236)) ([fc3f32e](https://github.com/Galvill/jitenv/commit/fc3f32ebd8361771c46d1b8e0bf9e4707478e6cc))
+* **notarize-poll:** correct API base URL + parse the right status field ([#233](https://github.com/Galvill/jitenv/issues/233)) ([3569a78](https://github.com/Galvill/jitenv/commit/3569a781392234cc4c6a9c47b00388ac2a83c157))
+* **rendocs:** pin testdata fixtures to LF so Windows CI passes ([#261](https://github.com/Galvill/jitenv/issues/261)) ([f995cb7](https://github.com/Galvill/jitenv/commit/f995cb7dc922fe31159639fa682fbc2900f622e1))
+* **shell:** in-shell anchor pre-filter — stop forking is-mapped per command ([#260](https://github.com/Galvill/jitenv/issues/260)) ([#262](https://github.com/Galvill/jitenv/issues/262)) ([1686195](https://github.com/Galvill/jitenv/commit/16861953c0f9d6620ec97219ddf6781b2dfc2113))
+* **unlock:** run opaque-ID migration inside Spawn ([#275](https://github.com/Galvill/jitenv/issues/275)) ([#290](https://github.com/Galvill/jitenv/issues/290)) ([ce2dc31](https://github.com/Galvill/jitenv/commit/ce2dc31e1a28d2a264269b10b7b97efd11ea3f96))
+* **zsh:** normalize ../-relative command paths to match mappings ([#245](https://github.com/Galvill/jitenv/issues/245)) ([#246](https://github.com/Galvill/jitenv/issues/246)) ([c3cd056](https://github.com/Galvill/jitenv/commit/c3cd056d96ba9ce44a371986b6984ef57fff1d43))
+
+
+### Documentation
+
+* **website:** refresh jitenv.com + release-triggered version-pin renderer ([#253](https://github.com/Galvill/jitenv/issues/253)) ([#257](https://github.com/Galvill/jitenv/issues/257)) ([2d5ae6e](https://github.com/Galvill/jitenv/commit/2d5ae6e85fd1505c33e644d6d308118f98438e5f))
+
 ## [0.13.0](https://github.com/Galvill/jitenv/compare/v0.12.0...v0.13.0) (2026-06-02)
 
 
