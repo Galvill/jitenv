@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/Galvill/jitenv/compare/v0.14.0...v0.14.1) (2026-06-18)
+
+
+### Documentation
+
+* **website:** refresh version pins for v0.14.0 ([#309](https://github.com/Galvill/jitenv/issues/309)) ([fcaa176](https://github.com/Galvill/jitenv/commit/fcaa1768e59c47d7f140c316cb1251b5a5114f28))
+
 ## [0.14.0](https://github.com/Galvill/jitenv/compare/v0.13.0...v0.14.0) (2026-06-14)
 
 
