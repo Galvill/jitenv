@@ -190,9 +190,25 @@ jobs:
         env:
           PKG_VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          choco push "dist-choco/jitenv.${env:PKG_VERSION}.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCO_KEY
-          if ($LASTEXITCODE -ne 0) { throw "choco push failed ($LASTEXITCODE)" }
-          Write-Host "Pushed jitenv ${env:PKG_VERSION} to chocolatey.org (pending moderation)."
+          $out = choco push "dist-choco/jitenv.${env:PKG_VERSION}.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCO_KEY 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -eq 0) {
+            Write-Host "Pushed jitenv ${env:PKG_VERSION} to chocolatey.org (pending moderation)."
+            exit 0
+          }
+          # A 403/409 here is a chocolatey.org moderation condition CI can't
+          # resolve: the community repo refuses a new version while an earlier
+          # one is still pending its (manual) new-package review, returning a
+          # bodyless 403. Don't fail the whole release for it — the .nupkg is
+          # already uploaded as an artifact. Re-run this job once the pending
+          # version is approved. Genuine errors still hard-fail.
+          $text = ($out | Out-String)
+          if ($text -match '403|Forbidden|409|Conflict') {
+            Write-Host "::warning::choco push was refused (exit $code) — likely chocolatey.org moderation blocking a new version while an earlier one is pending review. The .nupkg artifact is uploaded; re-run this job after the pending version is approved. Not failing the release."
+            exit 0
+          }
+          throw "choco push failed ($code)"
 
       - name: Note when key absent
         if: ${{ env.CHOCO_KEY == '' }}
