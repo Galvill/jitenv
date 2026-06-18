@@ -90,6 +90,15 @@ jobs:
       # refreshes the existing PR instead of erroring on a stale branch.
       # GH_TOKEN is the PAT so `gh` acts as a user (PR creation allowed,
       # and the PR fires the required `build / test / lint` check).
+      #
+      # The commit/PR title uses the `chore` type (NOT `docs`): release-
+      # please-config.json gives `docs` a visible changelog section, which
+      # makes docs commits releasable and bumps a patch — so a version-pin
+      # refresh would itself cut a release, whose `release: published`
+      # event re-triggers THIS workflow: an endless patch-bump loop. `chore`
+      # is hidden / non-releasable there, so the refresh never bumps the
+      # version. The squash-merge commit subject is the PR title, so the
+      # title is what release-please actually reads — keep both `chore`.
       - name: Open docs-refresh PR
         if: steps.diff.outputs.changed == 'true'
         env:
@@ -100,7 +109,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "${branch}"
           git add web
-          git commit -m "docs(website): refresh version pins for ${TAG}"
+          git commit -m "chore(website): refresh version pins for ${TAG}"
           git push --force-with-lease origin "${branch}"
           if gh pr view "${branch}" --json state --jq .state >/dev/null 2>&1; then
             echo "PR already open for ${branch}; the force-push above updated it."
@@ -108,7 +117,7 @@ jobs:
             gh pr create \
               --base main \
               --head "${branch}" \
-              --title "docs(website): refresh version pins for ${TAG}" \
+              --title "chore(website): refresh version pins for ${TAG}" \
               --body "$(cat <<EOF
           Automated by the website-update workflow on the ${TAG} release.
 
