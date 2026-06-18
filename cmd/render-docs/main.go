@@ -1,5 +1,5 @@
 // Command render-docs performs marker-bounded version-pin substitution
-// on the static site under docs/. It is invoked by the website-update
+// on the static site under web/. It is invoked by the website-update
 // release workflow (#253). See package internal/rendocs for the marker
 // contract and the >50% safety bail.
 //
@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	docs := flag.String("docs", "docs", "path to the docs directory to render")
+	docs := flag.String("docs", "web", "path to the site directory to render")
 	tag := flag.String("tag", "", "release tag to substitute (default: resolve from env / gh)")
 	dryRun := flag.Bool("dry-run", false, "compute and print changes without writing files")
 	flag.Parse()

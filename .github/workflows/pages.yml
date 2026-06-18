@@ -1,0 +1,49 @@
+name: pages
+
+# Publishes the static site under web/ to GitHub Pages via the GitHub
+# Actions deployment model (build_type: workflow). This replaces the old
+# "deploy from a branch /docs folder" setup: branch-folder publishing
+# only supports / or /docs, so serving from web/ requires this workflow.
+#
+# After this lands, switch Settings → Pages → Source to "GitHub Actions"
+# once (the custom domain jitenv.com is preserved by web/CNAME in the
+# uploaded artifact and the repo's Pages custom-domain setting).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

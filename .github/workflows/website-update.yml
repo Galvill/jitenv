@@ -1,6 +1,6 @@
 name: website-update
 
-# Refreshes the version-pinned spans in the static site under docs/ on
+# Refreshes the version-pinned spans in the static site under web/ on
 # each STABLE release (#253). It substitutes ONLY the marker-bounded
 # spans (see internal/rendocs) — hand-written narrative is never touched
 # — then opens a pull request against main for an admin to review and
@@ -69,19 +69,19 @@ jobs:
       - name: Render version-pinned docs spans
         run: |
           echo "Rendering docs for tag: ${TAG}"
-          go run ./cmd/render-docs -tag "${TAG}" -docs docs
+          go run ./cmd/render-docs -tag "${TAG}" -docs web
 
       - name: Summarize diff
         id: diff
         run: |
-          if git diff --quiet -- docs; then
+          if git diff --quiet -- web; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No docs changes for ${TAG} — nothing to commit."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "----- docs diff -----"
-            git --no-pager diff --stat -- docs
-            git --no-pager diff -- docs
+            git --no-pager diff --stat -- web
+            git --no-pager diff -- web
           fi
 
       # Open (or update) a PR rather than pushing to main: the
@@ -99,7 +99,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "${branch}"
-          git add docs
+          git add web
           git commit -m "docs(website): refresh version pins for ${TAG}"
           git push --force-with-lease origin "${branch}"
           if gh pr view "${branch}" --json state --jq .state >/dev/null 2>&1; then
@@ -112,7 +112,7 @@ jobs:
               --body "$(cat <<EOF
           Automated by the website-update workflow on the ${TAG} release.
 
-          Refreshes only the marker-bounded version spans under docs/ (see internal/rendocs); hand-written narrative is untouched. Review the diff and squash-merge.
+          Refreshes only the marker-bounded version spans under web/ (see internal/rendocs); hand-written narrative is untouched. Review the diff and squash-merge.
 
           The required "build / test / lint" check runs on this PR per the protect-main ruleset.
           EOF
