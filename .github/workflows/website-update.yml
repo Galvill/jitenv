@@ -1,10 +1,18 @@
 name: website-update
 
-# Refreshes the version-pinned spans in the static site under docs/ on
+# Refreshes the version-pinned spans in the static site under web/ on
 # each STABLE release (#253). It substitutes ONLY the marker-bounded
 # spans (see internal/rendocs) — hand-written narrative is never touched
-# — then commits + pushes the result directly to main with a
-# `[skip ci]` message so it doesn't loop back through CI.
+# — then opens a pull request against main for an admin to review and
+# squash-merge.
+#
+# The PR route (rather than a direct push to main) is mandated by the
+# `protect-main` ruleset: changes must land via PR with the
+# `build / test / lint` status check green and one approval. The branch
+# is pushed and the PR opened with RELEASE_PLEASE_TOKEN (a PAT) so that
+# opening the PR triggers ci.yml — a GITHUB_TOKEN-authored PR would not
+# fire the required check. The commit deliberately OMITS `[skip ci]` so
+# that check actually runs and the PR becomes mergeable.
 #
 # Stable-only: prereleases / RC tags are skipped (same gate the
 # chocolatey / macos-release workflows use). Manual re-runs are possible
@@ -22,6 +30,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: website-update
@@ -44,8 +53,9 @@ jobs:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       # Check out main with the same fine-grained PAT release-please.yml
-      # uses, so the push below is authored by a user/PAT (and can land
-      # on main) rather than the recursion-guarded GITHUB_TOKEN.
+      # uses, so the branch push + PR below are authored by a user/PAT
+      # (which fires CI on the PR) rather than the recursion-guarded
+      # GITHUB_TOKEN (whose PRs don't trigger workflows).
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -59,27 +69,53 @@ jobs:
       - name: Render version-pinned docs spans
         run: |
           echo "Rendering docs for tag: ${TAG}"
-          go run ./cmd/render-docs -tag "${TAG}" -docs docs
+          go run ./cmd/render-docs -tag "${TAG}" -docs web
 
       - name: Summarize diff
         id: diff
         run: |
-          if git diff --quiet -- docs; then
+          if git diff --quiet -- web; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No docs changes for ${TAG} — nothing to commit."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "----- docs diff -----"
-            git --no-pager diff --stat -- docs
-            git --no-pager diff -- docs
+            git --no-pager diff --stat -- web
+            git --no-pager diff -- web
           fi
 
-      - name: Commit and push
+      # Open (or update) a PR rather than pushing to main: the
+      # `protect-main` ruleset rejects direct pushes. The branch is bot-
+      # owned and force-pushed so a manual re-run for the same tag just
+      # refreshes the existing PR instead of erroring on a stale branch.
+      # GH_TOKEN is the PAT so `gh` acts as a user (PR creation allowed,
+      # and the PR fires the required `build / test / lint` check).
+      - name: Open docs-refresh PR
         if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
+          branch="website/version-pins-${TAG}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs
-          git commit -m "docs(website): refresh version pins for ${TAG} [skip ci]"
-          git push origin HEAD:main
-          echo "Pushed website version-pin refresh for ${TAG} to main."
+          git switch -c "${branch}"
+          git add web
+          git commit -m "docs(website): refresh version pins for ${TAG}"
+          git push --force-with-lease origin "${branch}"
+          if gh pr view "${branch}" --json state --jq .state >/dev/null 2>&1; then
+            echo "PR already open for ${branch}; the force-push above updated it."
+          else
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "docs(website): refresh version pins for ${TAG}" \
+              --body "$(cat <<EOF
+          Automated by the website-update workflow on the ${TAG} release.
+
+          Refreshes only the marker-bounded version spans under web/ (see internal/rendocs); hand-written narrative is untouched. Review the diff and squash-merge.
+
+          The required "build / test / lint" check runs on this PR per the protect-main ruleset.
+          EOF
+          )"
+            echo "Opened docs version-pin PR for ${TAG} (branch ${branch})."
+          fi

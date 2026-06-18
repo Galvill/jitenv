@@ -1,5 +1,5 @@
 // Package rendocs performs mechanical, marker-bounded version-pin
-// substitution on the static docs under docs/. It is driven by the
+// substitution on the static docs under web/. It is driven by the
 // website-update release workflow (#253 Part B).
 //
 // Design constraints (from the issue):

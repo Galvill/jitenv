@@ -27,25 +27,25 @@ exposure to the one process that actually needs the value:
 ## Website
 
 [jitenv.com](https://jitenv.com) — project landing page with overview,
-download links, and contact info. Served via GitHub Pages from the
-[`/docs`](docs/) folder on `main`; edits land through normal pull
-requests.
+download links, and contact info. The static site lives in
+[`/web`](web/) and is published by the `pages` GitHub Actions workflow
+(`.github/workflows/pages.yml`); edits land through normal pull requests.
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md) — install → unlock → mapping → run.
-- [Concepts](docs/concepts.md) — sources, bags, mappings, `VarRef`
+- [Quickstart](web/quickstart.md) — install → unlock → mapping → run.
+- [Concepts](web/concepts.md) — sources, bags, mappings, `VarRef`
   semantics, glob behaviour.
-- [Shell hook](docs/shell-hook.md) — exit-code contract, login-shell
+- [Shell hook](web/shell-hook.md) — exit-code contract, login-shell
   wiring, debug flags.
-- [Security model](docs/security.md) — threat model, key handling,
+- [Security model](web/security.md) — threat model, key handling,
   socket access, what's *not* protected.
-- [TUI walkthrough](docs/tui.md) — `jitenv config` end to end.
-- [Troubleshooting](docs/troubleshooting.md) — hook silent, agent
+- [TUI walkthrough](web/tui.md) — `jitenv config` end to end.
+- [Troubleshooting](web/troubleshooting.md) — hook silent, agent
   unreachable, permission denied.
-- [Source plugins](docs/source-plugins.md) — adding a new backend.
+- [Source plugins](web/source-plugins.md) — adding a new backend.
 - [Releasing](docs/RELEASING.md) — how releases are cut and verified.
-- Example config: [docs/examples/local.toml](docs/examples/local.toml).
+- Example config: [web/examples/local.toml](web/examples/local.toml).
 
 ## Install
 
