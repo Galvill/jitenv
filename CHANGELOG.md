@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.1](https://github.com/Galvill/jitenv/compare/v0.14.0...v0.14.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* **clone:** store token as plaintext so save funnel seals it under ID AAD (closes [#318](https://github.com/Galvill/jitenv/issues/318)) ([#320](https://github.com/Galvill/jitenv/issues/320)) ([5a9bcb6](https://github.com/Galvill/jitenv/commit/5a9bcb678306a1ee74bb9b7877d91fbd6e016e78))
+* **config,tui:** re-seal name_map on rename; accurate edit verbs + quit guard ([#315](https://github.com/Galvill/jitenv/issues/315)) ([a95f439](https://github.com/Galvill/jitenv/commit/a95f439ca99e17dc494b0cdd706ec97a64b10b2e)), closes [#313](https://github.com/Galvill/jitenv/issues/313) [#314](https://github.com/Galvill/jitenv/issues/314)
+
 ## [0.14.0](https://github.com/Galvill/jitenv/compare/v0.13.0...v0.14.0) (2026-06-14)
 
 
