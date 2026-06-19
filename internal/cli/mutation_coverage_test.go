@@ -36,7 +36,6 @@ import (
 	"testing"
 
 	"github.com/gv/jitenv/internal/config"
-	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/gitauth"
 	_ "github.com/gv/jitenv/internal/sources/builtin"
 )
@@ -63,20 +62,18 @@ func loadDecrypt(t *testing.T, path string) *config.Config {
 // (saveAndReencrypt) on a clone-shaped mutation and asserts every piece
 // survives a reload + decrypt. This is the round-trip clone_test.go lacked.
 //
-// SKIPPED pending #318: this audit DISCOVERED a real #314-class production
-// bug while writing the test. `runClone` pre-encrypts the PAT under a
-// NAME-based AAD (config.SecretAAD(bagName, "token")), then hands the
+// Regression guard for #318: `runClone` used to pre-encrypt the PAT under a
+// NAME-based AAD (config.SecretAAD(bagName, "token")), then hand the
 // already-envelope value to EncryptInPlace, which passes envelopes through
-// unchanged (encrypt.go ~179). The on-disk artifact therefore stays sealed
+// unchanged (encrypt.go ~179). The on-disk artifact therefore stayed sealed
 // under the name AAD, but DecryptInPlace reads secrets under the opaque-ID
-// AAD (decrypt.go ~53, post-#248), so the token fails authentication on
-// reload: "chacha20poly1305: message authentication failed". Per the #316
-// constraints this PR is tests-only and must NOT touch production crypto,
-// so the test is parked as a ready regression that will go green once #318
-// fixes runClone to store the token as plaintext (sealed by the funnel like
-// every other bag value). Remove the Skip when #318 lands.
+// AAD (decrypt.go ~53, post-#248), so the token failed authentication on
+// reload: "chacha20poly1305: message authentication failed". The fix stores
+// the token as PLAINTEXT in cfg.Secrets and lets the save funnel seal it
+// under the correct ID AAD like every other bag value. This test replicates
+// that corrected mutation and asserts the token survives save → reload →
+// decrypt; a regression to pre-encryption would fail the round-trip below.
 func TestCloneSaveFunnelRoundTrip(t *testing.T) {
-	t.Skip("blocked on #318: jitenv clone seals the token bag under a name-based AAD that EncryptInPlace passes through, so it fails to decrypt on reload (production bug; do not fix in tests-only #316)")
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	if err := config.InitNew(cfgPath, []byte(testPassphrase)); err != nil {
@@ -107,14 +104,10 @@ func TestCloneSaveFunnelRoundTrip(t *testing.T) {
 	)
 
 	// Replicate the post-git-clone mutation runClone builds (clone.go
-	// ~178-210): pre-encrypt the token into a fresh bag, append the
-	// cwd_glob mapping with a literal-Value GIT_ASKPASS var, ensure a
-	// local source exists.
-	envelope, err := crypto.EncryptField(key, token, config.SecretAAD(bagName, "token"))
-	if err != nil {
-		t.Fatalf("encrypt token: %v", err)
-	}
-	cfg.Secrets = map[string]map[string]string{bagName: {"token": envelope}}
+	// ~175-210): store the token as PLAINTEXT into a fresh bag (the save
+	// funnel seals it under the ID AAD), append the cwd_glob mapping with
+	// a literal-Value GIT_ASKPASS var, ensure a local source exists.
+	cfg.Secrets = map[string]map[string]string{bagName: {"token": token}}
 	cfg.Mappings = append(cfg.Mappings, config.Mapping{
 		CwdGlob:  repoGlob,
 		Commands: []string{"git"},
