@@ -90,7 +90,7 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r.width, r.height = msg.Width, msg.Height
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
-			return r, tea.Quit
+			return r, r.quitOrConfirm()
 		}
 		// Global Ctrl+S persists the in-memory cfg to disk from any
 		// screen. Per-screen Update funcs never see this key, so they
@@ -112,6 +112,13 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r.flashErr = true
 		return r, nil
 	case popMsg:
+		// Popping the last screen means the user is leaving the TUI. Guard
+		// against silently dropping unsaved edits: if dirty, re-push the
+		// current screen and surface a Save/Discard/Cancel prompt instead
+		// of quitting (#313). When clean, quit immediately as before.
+		if len(r.stack) == 1 && r.dirty {
+			return r, r.quitOrConfirm()
+		}
 		r.pop()
 		if len(r.stack) == 0 {
 			return r, tea.Quit
@@ -190,6 +197,24 @@ func (r *rootModel) View() string {
 	}
 
 	return renderApp(r.width, r.height, r.top().View(), status)
+}
+
+// quitOrConfirm returns a command that quits immediately when there are
+// no unsaved edits, or — when r.dirty — pushes a Save/Discard/Cancel
+// confirm prompt and returns nil so the TUI stays open (#313). If a quit
+// confirm is already on top (the user hit Ctrl+C while the prompt was
+// showing), it quits unconditionally so the prompt can't trap them.
+func (r *rootModel) quitOrConfirm() tea.Cmd {
+	if !r.dirty {
+		return tea.Quit
+	}
+	if len(r.stack) > 0 {
+		if _, ok := r.top().(*quitConfirmScreen); ok {
+			return tea.Quit
+		}
+	}
+	r.push(newQuitConfirmScreen(r))
+	return nil
 }
 
 func (r *rootModel) push(s screen) { r.stack = append(r.stack, s) }

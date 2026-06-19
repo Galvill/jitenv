@@ -619,7 +619,31 @@ func (s *kvEditScreen) commit() tea.Cmd {
 			bag[key] = val
 		}
 	}
-	return tea.Sequence(emit(popMsg{}), emit(dirtyMsg{}), emit(secretChangedMsg{}), emit(statusMsg("saved key "+key)))
+	// kvEditVerb gives an accurate, persistence-neutral status verb. The
+	// word "saved" is reserved for the post-AtomicSave flash (model.go
+	// savedMsg) — using it here would lie about durability, since nothing
+	// is written to disk until the user presses Ctrl+S (#313).
+	return tea.Sequence(
+		emit(popMsg{}),
+		emit(dirtyMsg{}),
+		emit(secretChangedMsg{}),
+		emit(statusMsg(kvEditVerb(s.existingKey, key))),
+	)
+}
+
+// kvEditVerb returns the status-line verb for an in-memory key edit:
+// "added key X" for a brand-new key, "renamed key to X" when the key name
+// changed, and "edited key X" for a same-name value change. It never says
+// "saved" — that word means "written to disk" (#313).
+func kvEditVerb(existingKey, key string) string {
+	switch {
+	case existingKey == "":
+		return "added key " + key
+	case key != existingKey:
+		return "renamed key to " + key
+	default:
+		return "edited key " + key
+	}
 }
 
 func (s *kvEditScreen) View() string {

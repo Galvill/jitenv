@@ -536,7 +536,10 @@ func (s *sourceParamsScreen) save() tea.Cmd {
 		sc.Params[k] = v
 	}
 	s.root.cfg.Sources[s.name] = sc
-	verb := "saved"
+	// This commits to the in-memory cfg only; nothing is written to disk
+	// until Ctrl+S. Use an accurate verb — "saved" is reserved for the
+	// post-AtomicSave flash (#313).
+	verb := "edited"
 	if s.creating {
 		verb = "added"
 	}

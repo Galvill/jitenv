@@ -37,20 +37,36 @@ func EncryptInPlace(c *Config, key []byte) error {
 	//    doesn't rotate the name_map nonce (idempotency).
 	//
 	//    Prefer c.IDMap (the live, post-decrypt dictionary the TUI mutates
-	//    on rename) over the sealed Meta.NameMap, which goes stale the
-	//    moment a name is changed in memory. Carrying the dictionary is
-	//    what makes a rename keep the source/bag/key ID STABLE (#248):
+	//    on rename) over the sealed Meta.NameMap for ID STABILITY (#248):
 	//    the TUI rewrites IDMap[id]=newName, so the new name maps back to
 	//    the SAME id here rather than minting a fresh one.
+	//
+	//    The re-seal decision, however, must NOT compare against c.IDMap.
+	//    The TUI applies a rename to c.IDMap in memory BEFORE this runs, so
+	//    by the time we get here c.IDMap already encodes the new name; the
+	//    rebuilt nm would then be content-equal to it and the re-seal would
+	//    be (wrongly) skipped, leaving the STALE sealed name_map on disk and
+	//    silently reverting the rename on the next load (#314). So we open
+	//    the sealed-on-disk dictionary separately as sealedPrev and gate the
+	//    re-seal on whether nm differs from THAT — the actual on-disk truth.
 	prev := c.IDMap
+	var err error
 	if prev == nil {
-		var err error
 		prev, err = openNameMap(key, c.Meta.NameMap)
 		if err != nil {
 			return err
 		}
 	}
-	var err error
+	// sealedPrev is whatever the existing sealed envelope decodes to (the
+	// on-disk truth). It is used ONLY to decide whether a re-seal is needed,
+	// so a no-op save still produces byte-identical output (no nonce churn).
+	sealedPrev := &NameMap{}
+	if c.Meta.NameMap != "" {
+		sealedPrev, err = openNameMap(key, c.Meta.NameMap)
+		if err != nil {
+			return err
+		}
+	}
 
 	nm := &NameMap{
 		Sources: map[string]string{},
@@ -222,7 +238,7 @@ func EncryptInPlace(c *Config, key []byte) error {
 	//    its content changed vs. the prior one — otherwise leave the
 	//    existing envelope untouched so a no-op save produces byte-
 	//    identical output (no nonce churn).
-	if c.Meta.NameMap == "" || !nameMapEqual(prev, nm) {
+	if c.Meta.NameMap == "" || !nameMapEqual(sealedPrev, nm) {
 		sealed, err := sealNameMap(key, nm)
 		if err != nil {
 			return err
