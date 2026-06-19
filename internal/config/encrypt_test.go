@@ -136,6 +136,101 @@ func TestEncryptInPlace_VarsIdempotent(t *testing.T) {
 	}
 }
 
+// TestEncryptInPlace_RenameReSealsNameMap is the #314 regression: the
+// TUI applies a rename to the live c.IDMap BEFORE EncryptInPlace runs, so
+// the re-seal decision must NOT compare the rebuilt dictionary against
+// c.IDMap (it would always look "unchanged" and skip the re-seal, leaving
+// the stale sealed name_map on disk). It must compare against the
+// sealed-on-disk dictionary instead.
+func TestEncryptInPlace_RenameReSealsNameMap(t *testing.T) {
+	key := newTestKey(t)
+	c := &Config{
+		Version: Version,
+		Secrets: map[string]map[string]string{
+			"db": {"pass": "s3cret"},
+		},
+	}
+	if err := EncryptInPlace(c, key); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := DecryptInPlace(c, key); err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+
+	// Locate the stable bag ID and capture the sealed envelope.
+	var bagID string
+	for id, n := range c.IDMap.Bags {
+		if n == "db" {
+			bagID = id
+		}
+	}
+	if bagID == "" {
+		t.Fatal("no bag ID minted for 'db'")
+	}
+	sealedBefore := c.Meta.NameMap
+
+	// Simulate the TUI rename: mutate Secrets + the live IDMap in place,
+	// exactly as references.renameIDMapKey/Bag do, BEFORE the next encrypt.
+	c.Secrets["db"]["password"] = c.Secrets["db"]["pass"]
+	delete(c.Secrets["db"], "pass")
+	for kid, n := range c.IDMap.Keys[bagID] {
+		if n == "pass" {
+			c.IDMap.Keys[bagID][kid] = "password"
+		}
+	}
+
+	if err := EncryptInPlace(c, key); err != nil {
+		t.Fatalf("re-encrypt: %v", err)
+	}
+	if c.Meta.NameMap == sealedBefore {
+		t.Fatal("rename did not re-seal Meta.NameMap (#314): stale envelope kept")
+	}
+
+	// Round-trip: the decrypted name must be the NEW one.
+	if err := DecryptInPlace(c, key); err != nil {
+		t.Fatalf("decrypt2: %v", err)
+	}
+	if _, ok := c.Secrets["db"]["password"]; !ok {
+		t.Fatalf("rename reverted: keys=%v", c.Secrets["db"])
+	}
+	if _, ok := c.Secrets["db"]["pass"]; ok {
+		t.Fatal("stale key name 'pass' resurfaced (#314)")
+	}
+	if c.Secrets["db"]["password"] != "s3cret" {
+		t.Fatalf("value lost across rename: %q", c.Secrets["db"]["password"])
+	}
+}
+
+// TestEncryptInPlace_NoOpDoesNotReSeal guards the optimization the #314
+// fix preserves: a re-encrypt with no name changes must leave Meta.NameMap
+// byte-identical (no nonce churn from a needless re-seal).
+func TestEncryptInPlace_NoOpDoesNotReSeal(t *testing.T) {
+	key := newTestKey(t)
+	c := &Config{
+		Version: Version,
+		Sources: map[string]SourceConfig{
+			"aws": {Type: "aws", Params: map[string]any{"region": "us-east-1"}},
+		},
+		Secrets: map[string]map[string]string{
+			"db": {"pass": "s3cret"},
+		},
+	}
+	if err := EncryptInPlace(c, key); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	sealed := c.Meta.NameMap
+	if err := DecryptInPlace(c, key); err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	// Re-encrypt with no edits at all.
+	if err := EncryptInPlace(c, key); err != nil {
+		t.Fatalf("re-encrypt: %v", err)
+	}
+	if c.Meta.NameMap != sealed {
+		t.Fatal("no-op re-encrypt rotated Meta.NameMap (nonce churn)")
+	}
+}
+
 // TestDecryptInPlace_RejectsTransplantedVarEnvelope is the #235 AAD
 // regression: a var-field envelope sealed at one slot must fail to
 // decrypt when moved to another slot.
