@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,7 +23,10 @@ func resolveCwdGlobToFolder(p string) string {
 	}
 	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
 		if home, err := os.UserHomeDir(); err == nil {
-			p = home + p[1:]
+			// filepath.Join yields OS-native separators (and cleans the
+			// joined path), so the tilde tail "~/work/acme" doesn't leave
+			// a stray forward slash inside a Windows path.
+			p = filepath.Join(home, p[1:])
 		}
 	}
 	// Trim a trailing separator ("/x/" → "/x") but keep a lone root.
