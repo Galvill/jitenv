@@ -159,6 +159,61 @@ nfpms:
 # downloads the windows .zip this release uploads and SHA256-verifies
 # it. See that workflow and packaging/chocolatey/ for the details.
 
+# Scoop and winget (below) ARE goreleaser pipes — unlike
+# Chocolatey. Their "publish" step is just committing a manifest file
+# (Scoop -> the Galvill/scoop-jitenv bucket) or opening a PR (winget ->
+# microsoft/winget-pkgs), pure git work that runs fine on this ubuntu
+# release runner. They consume the windows .zip + SHA256SUMS produced
+# above in this same run, so there's no async ordering problem like the
+# darwin cask. Cross-repo pushes need the RELEASE_PAT secret (the default
+# GITHUB_TOKEN can't push to other repos); release.yml passes it through.
+# skip_upload: "auto" skips prereleases/snapshots, matching Chocolatey.
+scoops:
+  - repository:
+      owner: Galvill
+      name: scoop-jitenv
+      branch: main
+      token: "{{ .Env.RELEASE_PAT }}"
+    directory: bucket
+    homepage: "https://github.com/Galvill/jitenv"
+    description: "Just-in-time environment variable loader, scoped to per-command process trees"
+    license: MIT
+    skip_upload: "auto"
+
+winget:
+  - name: jitenv
+    publisher: Galvill
+    publisher_url: "https://github.com/Galvill"
+    author: Gal Villaret
+    short_description: "Just-in-time environment variable loader, scoped to per-command process trees"
+    description: |
+      jitenv loads environment variables on demand from pluggable sources
+      when configured executables are run, keeping secrets out of the parent
+      shell. Linux, macOS, and Windows.
+    license: MIT
+    license_url: "https://github.com/Galvill/jitenv/blob/main/LICENSE"
+    copyright: "© 2026 Gal Villaret"
+    homepage: "https://github.com/Galvill/jitenv"
+    release_notes_url: "https://github.com/Galvill/jitenv/releases/tag/{{ .Tag }}"
+    tags:
+      - secrets
+      - cli
+      - environment-variables
+      - shell-hook
+    package_identifier: Galvill.jitenv
+    repository:
+      owner: Galvill
+      name: winget-pkgs
+      branch: "jitenv-{{ .Version }}"
+      token: "{{ .Env.RELEASE_PAT }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+    skip_upload: "auto"
+
 checksum:
   name_template: SHA256SUMS
 
@@ -213,10 +268,14 @@ release:
     brew install Galvill/jitenv/jitenv
     ```
 
-    Windows users can install via Chocolatey:
+    Windows users can install via Chocolatey, Scoop, or winget:
 
     ```powershell
     choco install jitenv
+    # or
+    scoop bucket add jitenv https://github.com/Galvill/scoop-jitenv; scoop install jitenv
+    # or
+    winget install Galvill.jitenv
     ```
 
     macOS binaries are Apple Developer ID code-signed and notarized.
