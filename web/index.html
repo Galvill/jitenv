@@ -72,7 +72,7 @@ echo "$DATABASE_URL"       # empty in your shell &mdash; it never saw the value<
 
     <p>
       Stable release:
-      <strong><!-- VERSION:start -->v0.14.0<!-- VERSION:end --></strong>.
+      <strong><!-- VERSION:start -->v0.14.1<!-- VERSION:end --></strong>.
       Pre-built, cosign-signed binaries are published on every tag by
       goreleaser.
     </p>
@@ -105,6 +105,22 @@ echo "$DATABASE_URL"       # empty in your shell &mdash; it never saw the value<
       SHA256-verifies it, and shims both <code>jitenv.exe</code> and
       <code>jitenv-tui.exe</code> onto <code>%PATH%</code>. PowerShell&nbsp;7+
       is required for the hook.
+    </p>
+
+    <h3>Windows &mdash; Scoop</h3>
+    <pre><code>scoop bucket add jitenv https://github.com/Galvill/scoop-jitenv
+scoop install jitenv</code></pre>
+    <p>
+      Adds a dedicated Scoop bucket and shims <code>jitenv.exe</code>,
+      <code>jitenv-hook.exe</code>, and <code>jitenv-tui.exe</code> onto
+      <code>%PATH%</code>. PowerShell&nbsp;7+ is required for the hook.
+    </p>
+
+    <h3>Windows &mdash; winget</h3>
+    <pre><code>winget install Galvill.jitenv</code></pre>
+    <p>
+      Installs <code>Galvill.jitenv</code> from the winget-pkgs community
+      repository. PowerShell&nbsp;7+ is required for the hook.
     </p>
 
     <h3>Activate the shell hook (once)</h3>
@@ -144,7 +160,7 @@ make install</code></pre>
       <a href="https://github.com/Galvill/jitenv/tree/main/web"><code>/web</code></a>.
     </p>
     <p class="version-footer">
-      Docs current as of <!-- VERSION:asof:start -->v0.14.0<!-- VERSION:asof:end -->.
+      Docs current as of <!-- VERSION:asof:start -->v0.14.1<!-- VERSION:asof:end -->.
     </p>
   </div>
 </footer>

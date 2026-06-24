@@ -44,3 +44,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo pushes for the Scoop bucket + winget fork; the
+          # default GITHUB_TOKEN can't push to other repositories.
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}

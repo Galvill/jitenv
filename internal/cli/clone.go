@@ -172,18 +172,18 @@ func runClone(cmd *cobra.Command, args []string, tokenStdin bool, bagOverride st
 		created = true
 	}
 
-	// Build the bag entry. EncryptField wraps the cleartext under
-	// the AAD that binds it to (bag, key) so a transplanted
-	// envelope is rejected on decrypt (security #110).
+	// Build the bag entry. Store the token as PLAINTEXT in the
+	// in-memory Config and let saveAndReencrypt → EncryptInPlace seal
+	// it under the opaque-ID AAD (SecretAAD(bagID, keyID), post-#248) —
+	// exactly how `bag import` and the TUI populate secrets. Do NOT
+	// pre-encrypt here: a value that already looks like an envelope is
+	// passed through unchanged by EncryptInPlace, so a name-based AAD
+	// would survive and fail authentication on the next reload (#318).
 	if created {
-		envelope, err := crypto.EncryptField(key, string(token), config.SecretAAD(finalBag, "token"))
-		if err != nil {
-			return fmt.Errorf("encrypt token: %w", err)
-		}
 		if cfg.Secrets == nil {
 			cfg.Secrets = map[string]map[string]string{}
 		}
-		cfg.Secrets[finalBag] = map[string]string{"token": envelope}
+		cfg.Secrets[finalBag] = map[string]string{"token": string(token)}
 	}
 
 	// Wire the cwd_glob mapping. The literal-value GIT_ASKPASS
