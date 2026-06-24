@@ -159,6 +159,27 @@ nfpms:
 # downloads the windows .zip this release uploads and SHA256-verifies
 # it. See that workflow and packaging/chocolatey/ for the details.
 
+# Scoop and winget (below) ARE goreleaser pipes — unlike
+# Chocolatey. Their "publish" step is just committing a manifest file
+# (Scoop -> the Galvill/scoop-jitenv bucket) or opening a PR (winget ->
+# microsoft/winget-pkgs), pure git work that runs fine on this ubuntu
+# release runner. They consume the windows .zip + SHA256SUMS produced
+# above in this same run, so there's no async ordering problem like the
+# darwin cask. Cross-repo pushes need the RELEASE_PAT secret (the default
+# GITHUB_TOKEN can't push to other repos); release.yml passes it through.
+# skip_upload: "auto" skips prereleases/snapshots, matching Chocolatey.
+scoops:
+  - repository:
+      owner: Galvill
+      name: scoop-jitenv
+      branch: main
+      token: "{{ .Env.RELEASE_PAT }}"
+    directory: bucket
+    homepage: "https://github.com/Galvill/jitenv"
+    description: "Just-in-time environment variable loader, scoped to per-command process trees"
+    license: MIT
+    skip_upload: "auto"
+
 checksum:
   name_template: SHA256SUMS
 
