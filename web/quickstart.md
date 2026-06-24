@@ -3,7 +3,7 @@
 From zero to "my deploy script has its env vars" in about a minute.
 
 Current stable release:
-<!-- VERSION:start -->v0.14.0<!-- VERSION:end -->.
+<!-- VERSION:start -->v0.14.1<!-- VERSION:end -->.
 
 ## 1. Install
 
@@ -14,12 +14,12 @@ ship on every tag via goreleaser.
 
 ```sh
 # Debian / Ubuntu
-curl -LO https://github.com/Galvill/jitenv/releases/latest/download/jitenv_<!-- ARTIFACT_VERSION:start -->0.14.0<!-- ARTIFACT_VERSION:end -->_linux_amd64.deb
-sudo dpkg -i jitenv_<!-- ARTIFACT_VERSION:start -->0.14.0<!-- ARTIFACT_VERSION:end -->_linux_amd64.deb
+curl -LO https://github.com/Galvill/jitenv/releases/latest/download/jitenv_<!-- ARTIFACT_VERSION:start -->0.14.1<!-- ARTIFACT_VERSION:end -->_linux_amd64.deb
+sudo dpkg -i jitenv_<!-- ARTIFACT_VERSION:start -->0.14.1<!-- ARTIFACT_VERSION:end -->_linux_amd64.deb
 
 # Fedora / RHEL / openSUSE
-curl -LO https://github.com/Galvill/jitenv/releases/latest/download/jitenv_<!-- ARTIFACT_VERSION:start -->0.14.0<!-- ARTIFACT_VERSION:end -->_linux_amd64.rpm
-sudo rpm -i jitenv_<!-- ARTIFACT_VERSION:start -->0.14.0<!-- ARTIFACT_VERSION:end -->_linux_amd64.rpm
+curl -LO https://github.com/Galvill/jitenv/releases/latest/download/jitenv_<!-- ARTIFACT_VERSION:start -->0.14.1<!-- ARTIFACT_VERSION:end -->_linux_amd64.rpm
+sudo rpm -i jitenv_<!-- ARTIFACT_VERSION:start -->0.14.1<!-- ARTIFACT_VERSION:end -->_linux_amd64.rpm
 ```
 
 `amd64` and `arm64` are both published; swap the arch in the filename.
@@ -133,4 +133,4 @@ leaving the command.
 - [tui.md](tui.md) — full TUI walkthrough.
 - [source-plugins.md](source-plugins.md) — adding a new secret backend.
 
-<!-- VERSION:asof:start -->_Docs current as of v0.14.0._<!-- VERSION:asof:end -->
+<!-- VERSION:asof:start -->_Docs current as of v0.14.1._<!-- VERSION:asof:end -->
