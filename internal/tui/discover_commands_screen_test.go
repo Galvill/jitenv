@@ -38,19 +38,109 @@ func markerDir(t *testing.T, names ...string) string {
 }
 
 // TestCommandsList_DiscoverSentinelOpensPicker checks that the top
-// sentinel (cursor 0) opens the folder picker.
+// sentinel (cursor 0) opens the folder picker WHEN the mapping has no
+// cwd_glob target yet (the once-only "set the target now" path).
 func TestCommandsList_DiscoverSentinelOpensPicker(t *testing.T) {
 	r := makeRoot(commandsFixture())
+	r.cfg.Mappings[0].CwdGlob = "" // half-built: no target yet
 	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
 
 	// Cursor 0 is the discover sentinel by default.
 	_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	fp := findFilePicker(drainCmd(cmd))
+	msgs := drainCmd(cmd)
+	fp := findFilePicker(msgs)
 	if fp == nil {
 		t.Fatal("Enter on discover sentinel should push a filePickerScreen")
 	}
 	if fp.mode != pickDir {
 		t.Errorf("picker mode = %v, want pickDir (folder select)", fp.mode)
+	}
+	// No discover screen yet — that comes after the path is picked.
+	if findDiscoverScreen(msgs) != nil {
+		t.Error("discover screen should not be pushed until a path is picked")
+	}
+}
+
+// TestCommandsList_DiscoverSentinelReusesTarget checks that when the
+// mapping already has a cwd_glob target, Enter on the discover sentinel
+// skips the picker and scans the resolved target folder directly.
+func TestCommandsList_DiscoverSentinelReusesTarget(t *testing.T) {
+	cases := []struct {
+		name    string
+		cwdGlob func(dir string) string
+	}{
+		{"bare path", func(dir string) string { return dir }},
+		{"doublestar tail", func(dir string) string { return dir + "/**" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := markerDir(t, "package.json")
+			r := makeRoot(commandsFixture())
+			r.cfg.Mappings[0].CwdGlob = tc.cwdGlob(dir)
+			scr := newCommandsListScreen(r, 0).(*commandsListScreen)
+
+			_, cmd := scr.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			msgs := drainCmd(cmd)
+
+			if fp := findFilePicker(msgs); fp != nil {
+				t.Fatal("picker should NOT be pushed when cwd_glob is already set")
+			}
+			ds := findDiscoverScreen(msgs)
+			if ds == nil {
+				t.Fatal("Enter should push a discoverCommandsScreen for the resolved folder")
+			}
+			if ds.folder != dir {
+				t.Errorf("discover folder = %q, want %q (resolved from %q)", ds.folder, dir, tc.cwdGlob(dir))
+			}
+		})
+	}
+}
+
+// TestCommandsList_DiscoverPickerSetsTarget checks that for a mapping
+// with an empty cwd_glob, picking a folder writes it back to mp.CwdGlob
+// (emitting dirtyMsg) and pushes the discover list against that folder.
+func TestCommandsList_DiscoverPickerSetsTarget(t *testing.T) {
+	dir := markerDir(t, "package.json")
+	r := makeRoot(commandsFixture())
+	r.cfg.Mappings[0].CwdGlob = "" // half-built: no target yet
+	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
+
+	_, cmd := scr.Update(pathPickedMsg{path: dir})
+	msgs := drainCmd(cmd)
+
+	if got := r.cfg.Mappings[0].CwdGlob; got != dir {
+		t.Errorf("CwdGlob = %q, want %q (picked path persisted)", got, dir)
+	}
+	if !hasMsgType(msgs, dirtyMsg{}) {
+		t.Errorf("expected dirtyMsg after setting target: %#v", msgs)
+	}
+	ds := findDiscoverScreen(msgs)
+	if ds == nil {
+		t.Fatal("pathPickedMsg should push a discoverCommandsScreen")
+	}
+	if ds.folder != dir {
+		t.Errorf("discover folder = %q, want %q", ds.folder, dir)
+	}
+}
+
+// TestCommandsList_DiscoverPickerKeepsExistingTarget checks that a
+// pathPickedMsg never clobbers an already-set cwd_glob target.
+func TestCommandsList_DiscoverPickerKeepsExistingTarget(t *testing.T) {
+	dir := markerDir(t, "package.json")
+	r := makeRoot(commandsFixture()) // CwdGlob == "~/work/acme"
+	scr := newCommandsListScreen(r, 0).(*commandsListScreen)
+
+	_, cmd := scr.Update(pathPickedMsg{path: dir})
+	msgs := drainCmd(cmd)
+
+	if got := r.cfg.Mappings[0].CwdGlob; got != "~/work/acme" {
+		t.Errorf("CwdGlob = %q, want it left unchanged", got)
+	}
+	if hasMsgType(msgs, dirtyMsg{}) {
+		t.Errorf("dirtyMsg should not fire when target was already set: %#v", msgs)
+	}
+	if findDiscoverScreen(msgs) == nil {
+		t.Fatal("pathPickedMsg should still push a discoverCommandsScreen")
 	}
 }
 
