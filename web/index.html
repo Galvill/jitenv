@@ -107,6 +107,22 @@ echo "$DATABASE_URL"       # empty in your shell &mdash; it never saw the value<
       is required for the hook.
     </p>
 
+    <h3>Windows &mdash; Scoop</h3>
+    <pre><code>scoop bucket add jitenv https://github.com/Galvill/scoop-jitenv
+scoop install jitenv</code></pre>
+    <p>
+      Adds a dedicated Scoop bucket and shims <code>jitenv.exe</code>,
+      <code>jitenv-hook.exe</code>, and <code>jitenv-tui.exe</code> onto
+      <code>%PATH%</code>. PowerShell&nbsp;7+ is required for the hook.
+    </p>
+
+    <h3>Windows &mdash; winget</h3>
+    <pre><code>winget install Galvill.jitenv</code></pre>
+    <p>
+      Installs <code>Galvill.jitenv</code> from the winget-pkgs community
+      repository. PowerShell&nbsp;7+ is required for the hook.
+    </p>
+
     <h3>Activate the shell hook (once)</h3>
     <pre><code>jitenv hook install
 exec $SHELL</code></pre>

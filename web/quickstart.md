@@ -44,6 +44,25 @@ Fetches the official `windows_amd64` release zip, SHA256-verifies it,
 and shims both `jitenv.exe` and `jitenv-tui.exe` onto `%PATH%`.
 PowerShell 7+ is required for the hook.
 
+### Windows — Scoop
+
+```powershell
+scoop bucket add jitenv https://github.com/Galvill/scoop-jitenv
+scoop install jitenv
+```
+
+Adds a dedicated Scoop bucket and shims `jitenv.exe`, `jitenv-hook.exe`,
+and `jitenv-tui.exe` onto `%PATH%`. PowerShell 7+ is required for the hook.
+
+### Windows — winget
+
+```powershell
+winget install Galvill.jitenv
+```
+
+Installs `Galvill.jitenv` from the winget-pkgs community repository.
+PowerShell 7+ is required for the hook.
+
 ### From source
 
 ```sh

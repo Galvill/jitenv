@@ -268,10 +268,14 @@ release:
     brew install Galvill/jitenv/jitenv
     ```
 
-    Windows users can install via Chocolatey:
+    Windows users can install via Chocolatey, Scoop, or winget:
 
     ```powershell
     choco install jitenv
+    # or
+    scoop bucket add jitenv https://github.com/Galvill/scoop-jitenv; scoop install jitenv
+    # or
+    winget install Galvill.jitenv
     ```
 
     macOS binaries are Apple Developer ID code-signed and notarized.

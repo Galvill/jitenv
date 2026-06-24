@@ -127,6 +127,45 @@ is not yet Authenticode-signed (tracked in
 or right-click → Properties → Unblock, clears it. PowerShell 7+ is
 required for the hook.
 
+### Scoop (Windows)
+
+```powershell
+scoop bucket add jitenv https://github.com/Galvill/scoop-jitenv
+scoop install jitenv
+```
+
+Adds a dedicated [Scoop](https://scoop.sh) bucket and installs from it.
+Scoop shims `jitenv.exe`, `jitenv-hook.exe`, and `jitenv-tui.exe` onto
+`%PATH%`; `scoop update jitenv` picks up new releases. After install,
+activate the PowerShell hook **once**:
+
+```powershell
+jitenv hook install
+# open a new pwsh tab — the hook is live
+```
+
+### winget (Windows)
+
+```powershell
+winget install Galvill.jitenv
+```
+
+Published to the [winget-pkgs](https://github.com/microsoft/winget-pkgs)
+community repository as `Galvill.jitenv`. `winget upgrade Galvill.jitenv`
+picks up new releases. After install, activate the PowerShell hook
+**once**:
+
+```powershell
+jitenv hook install
+# open a new pwsh tab — the hook is live
+```
+
+As with Chocolatey, the first run of `jitenv.exe` may trip SmartScreen
+because the binary is not yet Authenticode-signed (tracked in
+[#39](https://github.com/Galvill/jitenv/issues/39)) — `Unblock-File`,
+or right-click → Properties → Unblock, clears it. PowerShell 7+ is
+required for the hook.
+
 ## Commands
 
 ```
