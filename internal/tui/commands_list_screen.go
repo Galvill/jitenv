@@ -96,7 +96,15 @@ func (s *commandsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	// pathPickedMsg arrives from the folder picker launched by
 	// openDiscoverFolder; it carries the folder to scan. The picker has
 	// already popped itself, so this screen is back on top of the stack.
+	// The picker only fires when the mapping had no cwd_glob target yet,
+	// so this is also the "set the target now" step: persist the picked
+	// path to mp.CwdGlob (and mark dirty) before scanning, so the mapping
+	// validates on save and discover never prompts for the folder again.
 	if pm, ok := msg.(pathPickedMsg); ok {
+		if mp := s.mp(); mp != nil && mp.CwdGlob == "" {
+			mp.CwdGlob = pm.path
+			return s, tea.Batch(emit(dirtyMsg{}), s.openDiscoverList(pm.path))
+		}
 		return s, s.openDiscoverList(pm.path)
 	}
 	mp := s.mp()
@@ -129,10 +137,19 @@ func (s *commandsListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-// openDiscoverFolder pushes the file browser in folder-select mode. On
-// commit it emits a pathPickedMsg that this screen's Update routes to
-// openDiscoverList.
+// openDiscoverFolder is the "< Discover from folder… >" dispatcher.
+//
+// When the mapping already has a cwd_glob target the user has already
+// told us where the project lives, so we skip the picker entirely and
+// scan that folder directly (resolveCwdGlobToFolder strips any glob
+// tail discover.Scan wouldn't use anyway). Only a half-built mapping
+// with an empty target opens the file browser, as a once-only
+// "set the target now" step; the pathPickedMsg handler in Update then
+// writes the picked path back to mp.CwdGlob before scanning.
 func (s *commandsListScreen) openDiscoverFolder() tea.Cmd {
+	if mp := s.mp(); mp != nil && mp.CwdGlob != "" {
+		return s.openDiscoverList(resolveCwdGlobToFolder(mp.CwdGlob))
+	}
 	return emit(pushMsg{s: newFilePickerScreen(s.root, pickDir, pickerStartDir(""))})
 }
 
