@@ -33,6 +33,17 @@ import (
 	"github.com/gv/jitenv/internal/crypto"
 )
 
+// ErrIncorrectPassphrase is the sentinel returned by UnwrapDEK when the
+// supplied master key fails to authenticate the wrapped DEK — almost
+// always because the user mistyped the passphrase. Exported so the
+// bounded-retry helper in internal/unlock can branch on it without
+// matching against the (intentionally vague) user-facing error string
+// (issue #326). A wrong sidecar paired with a right passphrase will
+// also surface here; retrying on the same condition is still useful
+// (the user re-types the right passphrase) and is capped by the attempt
+// counter.
+var ErrIncorrectPassphrase = errors.New("incorrect passphrase")
+
 // AAD strings binding each envelope to its slot (security #110 pattern).
 const (
 	dekWrapAAD = "sync.dek" // wraps the DEK under the master key
@@ -176,9 +187,29 @@ func (f *File) UnwrapDEK(masterKey []byte) ([]byte, error) {
 	}
 	dek, err := crypto.DecryptFieldBytes(masterKey, f.WrappedDEK, dekWrapAAD)
 	if err != nil {
-		return nil, errors.New("cannot unwrap sync key (wrong passphrase, or sidecar is for a different config)")
+		// Keep the user-facing message identical to the pre-#326 wording
+		// — the AEAD tag failure can be a sidecar/data-config mismatch as
+		// well as a typo, and the long phrasing captures both cases. Use
+		// a custom error type whose Is method matches ErrIncorrectPassphrase
+		// so the unlock retry loop can recognise the condition via
+		// errors.Is without polluting the printed message with a duplicate
+		// "incorrect passphrase" tail from %w wrapping.
+		return nil, &wrongPassphraseError{msg: "cannot unwrap sync key (wrong passphrase, or sidecar is for a different config)"}
 	}
 	return dek, nil
+}
+
+// wrongPassphraseError is an internal helper that lets UnwrapDEK return a
+// rich user-facing message while still satisfying errors.Is against
+// ErrIncorrectPassphrase. %w wrapping would append "incorrect passphrase"
+// to every printed error and regress the existing user-facing copy.
+type wrongPassphraseError struct {
+	msg string
+}
+
+func (e *wrongPassphraseError) Error() string { return e.msg }
+func (e *wrongPassphraseError) Is(target error) bool {
+	return target == ErrIncorrectPassphrase
 }
 
 // SealBlob encrypts the config.toml bytes under the DEK into one opaque

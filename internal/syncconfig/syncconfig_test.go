@@ -2,7 +2,9 @@ package syncconfig
 
 import (
 	"encoding/base64"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gv/jitenv/internal/crypto"
@@ -87,8 +89,20 @@ func TestUnwrapWrongPassphraseFailsClosed(t *testing.T) {
 	}
 
 	wrongMK, _ := f.DeriveMasterKey([]byte("wrong"))
-	if _, err := f.UnwrapDEK(wrongMK); err == nil {
+	_, err := f.UnwrapDEK(wrongMK)
+	if err == nil {
 		t.Fatal("expected unwrap with wrong passphrase to fail")
+	}
+	// #326: UnwrapDEK's wrong-passphrase error must satisfy
+	// errors.Is(err, ErrIncorrectPassphrase) so the unlock retry loop can
+	// recognise it. The user-facing message should also be unchanged
+	// (the helpful "(wrong passphrase, or sidecar is for a different
+	// config)" copy must not regress to a bare "incorrect passphrase").
+	if !errors.Is(err, ErrIncorrectPassphrase) {
+		t.Errorf("expected errors.Is(err, ErrIncorrectPassphrase), got %v", err)
+	}
+	if !strings.Contains(err.Error(), "cannot unwrap sync key") {
+		t.Errorf("expected user-facing message to be preserved, got %q", err.Error())
 	}
 }
 

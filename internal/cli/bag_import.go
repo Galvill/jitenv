@@ -12,6 +12,7 @@ import (
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/dotenv"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 // newBagImportCmd implements `jitenv bag import <bag> [flags]` (#250) —
@@ -120,12 +121,11 @@ func runBagImport(cmd *cobra.Command, opts importOpts) error {
 	if err != nil {
 		return fmt.Errorf("load %s: %w (run `jitenv config init` first)", cfgPath, err)
 	}
-	pw, err := importPassphraseFn()
-	if err != nil {
-		return err
-	}
-	defer zeroBytes(pw)
-	key, err := config.DeriveKeyFromMeta(cfg, pw)
+	// Retry on incorrect passphrase (#326). The importPassphraseFn
+	// indirection stays intact — tests inject a fixed passphrase via
+	// this hook, and a single-shot test fake will produce a single
+	// retry which still surfaces the correct ErrIncorrectPassphrase.
+	key, err := unlock.DeriveKeyWithRetry(cfg, importPassphraseFn, 0)
 	if err != nil {
 		return err
 	}
