@@ -15,6 +15,20 @@ import (
 
 const verifySentinel = "jitenv-ok"
 
+// ErrIncorrectPassphrase is the sentinel returned by DeriveKeyFromMeta
+// when the supplied passphrase fails the Meta.Verify check (i.e. it
+// derived a key that does not decrypt the verify envelope). Exported so
+// callers can branch on this specific failure — notably the bounded
+// retry loop in internal/unlock — instead of bailing out on the first
+// typo (issue #326). The exact message is kept identical to the
+// pre-#326 wording so user-facing error copy does not change.
+//
+// Any OTHER DeriveKeyFromMeta error (missing _meta, corrupt salt, KDF
+// params below the documented floor) stays fatal: those are signs of a
+// broken or tampered config, not a fat-fingered passphrase, and
+// re-prompting would just waste user keystrokes.
+var ErrIncorrectPassphrase = errors.New("incorrect passphrase")
+
 // metaVerifyAAD is the associated-data string that binds the [_meta]
 // verify envelope to its slot. Mirrored on encrypt (InitNew) and
 // decrypt (DeriveKeyFromMeta) — changing either side independently
@@ -132,7 +146,7 @@ func DeriveKeyFromMeta(c *Config, passphrase []byte) ([]byte, error) {
 	key := crypto.DeriveKey(passphrase, salt, params)
 	if pt, err := crypto.DecryptField(key, c.Meta.Verify, metaVerifyAAD); err != nil || pt != verifySentinel {
 		zero(key)
-		return nil, errors.New("incorrect passphrase")
+		return nil, ErrIncorrectPassphrase
 	}
 	return key, nil
 }

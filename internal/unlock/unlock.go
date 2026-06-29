@@ -19,6 +19,12 @@ import (
 	"github.com/gv/jitenv/internal/crypto"
 )
 
+// The bounded-retry helpers (PromptAndDeriveKey, DeriveKeyWithRetry,
+// PromptWithRetry) live in prompt.go alongside the retry primitive
+// itself; they are exposed from this same package so every key-holding
+// entry point — including this Spawn flow — can drop into the same
+// shape (issue #326).
+
 // Result reports what happened after a Spawn attempt. Socket is the
 // agent socket / pipe the caller can dial once unlock succeeds.
 // Migrated is true when the one-shot opaque-ID migration (#248) rewrote
@@ -51,12 +57,7 @@ func Spawn(cfgPath string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	pw, err := crypto.PromptPassphrase("jitenv unlock passphrase: ", false)
-	if err != nil {
-		return Result{}, err
-	}
-	defer zeroBytes(pw)
-	key, err := config.DeriveKeyFromMeta(cfg, pw)
+	key, err := PromptAndDeriveKey(cfg, "jitenv unlock passphrase: ", 0)
 	if err != nil {
 		return Result{}, err
 	}

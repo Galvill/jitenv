@@ -10,8 +10,8 @@ import (
 
 	"github.com/gv/jitenv/internal/agent"
 	"github.com/gv/jitenv/internal/config"
-	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/shell"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 var unlockForeground bool
@@ -31,12 +31,7 @@ func newUnlockCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pw, err := crypto.PromptPassphrase("jitenv unlock passphrase: ", false)
-			if err != nil {
-				return err
-			}
-			defer zeroBytes(pw)
-			key, err := config.DeriveKeyFromMeta(cfg, pw)
+			key, err := unlock.PromptAndDeriveKey(cfg, "jitenv unlock passphrase: ", 0)
 			if err != nil {
 				return err
 			}

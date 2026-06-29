@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -85,8 +86,19 @@ func TestInitAndDeriveKey(t *testing.T) {
 	}
 	defer zero(key)
 
+	// #326: the wrong-passphrase return must be the exported sentinel so
+	// the bounded-retry helper in internal/unlock can recognise it via
+	// errors.Is. The user-facing message stays unchanged ("incorrect
+	// passphrase") so cobra's exit-1 output is identical to pre-#326.
 	if _, err := DeriveKeyFromMeta(c, []byte("wrong")); err == nil {
 		t.Fatalf("expected wrong passphrase to fail")
+	} else {
+		if !errors.Is(err, ErrIncorrectPassphrase) {
+			t.Errorf("expected errors.Is(err, ErrIncorrectPassphrase), got %v", err)
+		}
+		if err.Error() != "incorrect passphrase" {
+			t.Errorf("user-facing error copy regressed; want %q got %q", "incorrect passphrase", err.Error())
+		}
 	}
 
 	if err := InitNew(path, pw); err == nil {

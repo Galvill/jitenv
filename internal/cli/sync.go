@@ -11,9 +11,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gv/jitenv/internal/config"
-	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/syncadapters"
 	"github.com/gv/jitenv/internal/syncconfig"
+	"github.com/gv/jitenv/internal/unlock"
 	"github.com/gv/jitenv/pkg/syncadapter"
 
 	// Blank-import the builtins so the registry is populated even in the
@@ -155,14 +155,11 @@ func runSyncInit(cmd *cobra.Command, adapterType, adapterName string, params []s
 		return fmt.Errorf("%s has no _meta header; run `jitenv config init` first", cfgPath)
 	}
 
-	pw, err := crypto.PromptPassphrase("jitenv sync init: passphrase: ", false)
-	if err != nil {
-		return err
-	}
-	defer zeroBytes(pw)
 	// Verify the passphrase against the data config before writing
-	// anything, and reuse the derived master key to wrap the DEK.
-	masterKey, err := config.DeriveKeyFromMeta(dataCfg, pw)
+	// anything, and reuse the derived master key to wrap the DEK. The
+	// bounded retry (#326) lets the user fix a typo without re-running
+	// `jitenv sync init` from scratch.
+	masterKey, err := unlock.PromptAndDeriveKey(dataCfg, "jitenv sync init: passphrase: ", 0)
 	if err != nil {
 		return err
 	}
@@ -264,20 +261,15 @@ func runSyncPush(cmd *cobra.Command, adapterName string, force bool) error {
 		return err
 	}
 
-	pw, err := crypto.PromptPassphrase("jitenv sync push: passphrase: ", false)
-	if err != nil {
-		return err
-	}
-	defer zeroBytes(pw)
-	masterKey, err := f.DeriveMasterKey(pw)
+	// Bounded retry (#326): f.DeriveMasterKey by itself can't verify the
+	// passphrase (no Meta.Verify on the sidecar), so the unwrap of the
+	// wrapped DEK IS the verifier. Pair them inside PromptWithRetry so
+	// a typo re-prompts instead of bailing the whole `sync push`.
+	masterKey, dek, err := promptAndUnlockSync(f, "jitenv sync push: passphrase: ")
 	if err != nil {
 		return err
 	}
 	defer zeroBytes(masterKey)
-	dek, err := f.UnwrapDEK(masterKey)
-	if err != nil {
-		return err
-	}
 	defer zeroBytes(dek)
 
 	adapter, err := buildAdapter(masterKey, ad)
@@ -332,20 +324,11 @@ func runSyncPull(cmd *cobra.Command, adapterName string, adopt bool) error {
 		return err
 	}
 
-	pw, err := crypto.PromptPassphrase("jitenv sync pull: passphrase: ", false)
-	if err != nil {
-		return err
-	}
-	defer zeroBytes(pw)
-	masterKey, err := f.DeriveMasterKey(pw)
+	masterKey, dek, err := promptAndUnlockSync(f, "jitenv sync pull: passphrase: ")
 	if err != nil {
 		return err
 	}
 	defer zeroBytes(masterKey)
-	dek, err := f.UnwrapDEK(masterKey)
-	if err != nil {
-		return err
-	}
 	defer zeroBytes(dek)
 
 	adapter, err := buildAdapter(masterKey, ad)
@@ -465,15 +448,17 @@ func runSyncStatus(cmd *cobra.Command) error {
 	}
 	localHash := syncconfig.HashConfig(cfgBytes)
 
-	pw, err := crypto.PromptPassphrase("jitenv sync status: passphrase: ", false)
+	// `sync status` needs the master key to decrypt adapter params
+	// inside buildAdapter, but never touches the blob — so the DEK is
+	// only used here as a passphrase verifier (so a typo retries
+	// immediately instead of producing N per-adapter "decrypt failed"
+	// lines later in the loop, #326). Zero the DEK as soon as we have
+	// the master key.
+	masterKey, dek, err := promptAndUnlockSync(f, "jitenv sync status: passphrase: ")
 	if err != nil {
 		return err
 	}
-	defer zeroBytes(pw)
-	masterKey, err := f.DeriveMasterKey(pw)
-	if err != nil {
-		return err
-	}
+	zeroBytes(dek)
 	defer zeroBytes(masterKey)
 
 	fmt.Fprintln(out, "merge model: whole-file last-writer-wins with a divergence fence")
@@ -591,6 +576,42 @@ func parseParams(kvs []string) (map[string]any, error) {
 		m[kv[:i]] = kv[i+1:]
 	}
 	return m, nil
+}
+
+// promptAndUnlockSync drives the sync passphrase prompt through the
+// bounded-retry helper (#326). The master key for a sync sidecar is not
+// directly verifiable (sync.toml has no Meta.Verify of its own), so the
+// unwrap of the wrapped DEK doubles as the wrong-passphrase check:
+// syncconfig.UnwrapDEK returns syncconfig.ErrIncorrectPassphrase on
+// AEAD failure, which the retry loop recognises via errors.Is.
+//
+// Returns (masterKey, dek). Both buffers are the caller's to zero. On
+// any error nothing is returned and the helper has already zeroed any
+// transient key material.
+func promptAndUnlockSync(f *syncconfig.File, prompt string) ([]byte, []byte, error) {
+	var dek []byte
+	masterKey, err := unlock.PromptWithRetry(prompt, 0, func(pw []byte) ([]byte, error) {
+		mk, derr := f.DeriveMasterKey(pw)
+		if derr != nil {
+			return nil, derr
+		}
+		d, uerr := f.UnwrapDEK(mk)
+		if uerr != nil {
+			// Zero the transient master key on the wrong-passphrase
+			// path so the loop's between-attempts heap is bounded
+			// (CLAUDE.md "Master key handling").
+			zeroBytes(mk)
+			return nil, uerr
+		}
+		dek = d
+		return mk, nil
+	}, func(err error) bool {
+		return errors.Is(err, syncconfig.ErrIncorrectPassphrase)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return masterKey, dek, nil
 }
 
 // short truncates a hex hash for display; empty stays "-".

@@ -15,6 +15,7 @@ import (
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/lockfile"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -71,12 +72,7 @@ func newConfigShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pw, err := crypto.PromptPassphrase("jitenv config show passphrase: ", false)
-			if err != nil {
-				return err
-			}
-			defer zeroBytes(pw)
-			key, err := config.DeriveKeyFromMeta(c, pw)
+			key, err := unlock.PromptAndDeriveKey(c, "jitenv config show passphrase: ", 0)
 			if err != nil {
 				return err
 			}
@@ -147,19 +143,18 @@ available, e.g. via an expect-style wrapper).`,
 				}
 				return nil
 			}
-			pw, err := crypto.PromptPassphrase("jitenv config validate passphrase (warnings; Enter to skip): ", false)
+			key, err := unlock.PromptAndDeriveKey(c, "jitenv config validate passphrase (warnings; Enter to skip): ", 0)
 			if err != nil {
-				// Treat a prompt failure / cancellation as "skip
-				// warnings" — structural validation already passed.
-				return nil
-			}
-			defer zeroBytes(pw)
-			if len(pw) == 0 {
-				return nil
-			}
-			key, err := config.DeriveKeyFromMeta(c, pw)
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not decrypt to compute warnings: %v\n", err)
+				// PromptPassphrase returns "empty passphrase" when the user
+				// presses Enter, which is the documented opt-out for
+				// validate. ErrIncorrectPassphrase reaches us only after
+				// the retry budget is exhausted — at that point treat it
+				// like the pre-#326 "could not decrypt" note. Any other
+				// error (Ctrl+C, broken tty) also degrades to "skip
+				// warnings" since structural validation already passed.
+				if errors.Is(err, config.ErrIncorrectPassphrase) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "note: could not decrypt to compute warnings: %v\n", err)
+				}
 				return nil
 			}
 			defer zeroBytes(key)

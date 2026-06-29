@@ -23,6 +23,7 @@ import (
 	"github.com/gv/jitenv/internal/config"
 	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/shell"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 // Run is the entrypoint invoked by `jitenv config`. It prompts for the
@@ -201,16 +202,11 @@ func loadOrInit(cfgPath string) (*config.Config, []byte, bool, error) {
 		fmt.Fprintf(os.Stderr, "Created %s\n", cfgPath)
 	}
 
-	pw, err := crypto.PromptPassphrase("jitenv config passphrase: ", false)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	defer zero(pw)
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	key, err := config.DeriveKeyFromMeta(c, pw)
+	key, err := unlock.PromptAndDeriveKey(c, "jitenv config passphrase: ", 0)
 	if err != nil {
 		return nil, nil, false, err
 	}

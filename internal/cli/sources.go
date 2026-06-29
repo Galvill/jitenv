@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gv/jitenv/internal/config"
-	"github.com/gv/jitenv/internal/crypto"
 	"github.com/gv/jitenv/internal/sources"
+	"github.com/gv/jitenv/internal/unlock"
 )
 
 func newSourcesCmd() *cobra.Command {
@@ -43,12 +43,7 @@ func newSourcesListCmd() *cobra.Command {
 			// IDs. Decrypt so we can list the real names. (source.type
 			// stays plaintext, so a config with no name_map — pre-#248 or
 			// never-migrated — still lists fine after a no-op decrypt.)
-			pw, err := crypto.PromptPassphrase("jitenv sources passphrase: ", false)
-			if err != nil {
-				return err
-			}
-			defer zeroBytes(pw)
-			key, err := config.DeriveKeyFromMeta(cfg, pw)
+			key, err := unlock.PromptAndDeriveKey(cfg, "jitenv sources passphrase: ", 0)
 			if err != nil {
 				return err
 			}
@@ -99,12 +94,7 @@ func newSourcesTestCmd() *cobra.Command {
 				return err
 			}
 
-			pw, err := crypto.PromptPassphrase("jitenv sources passphrase: ", false)
-			if err != nil {
-				return err
-			}
-			defer zeroBytes(pw)
-			key, err := config.DeriveKeyFromMeta(cfg, pw)
+			key, err := unlock.PromptAndDeriveKey(cfg, "jitenv sources passphrase: ", 0)
 			if err != nil {
 				return err
 			}
