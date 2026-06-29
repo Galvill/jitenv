@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/Galvill/jitenv/compare/v0.14.1...v0.15.0) (2026-06-29)
+
+
+### Features
+
+* **release:** add Scoop + winget Windows install channels ([#323](https://github.com/Galvill/jitenv/issues/323)) ([4058699](https://github.com/Galvill/jitenv/commit/40586997f786038eb5e6ef9320a3fba4c5a78adc))
+
 ## [0.14.1](https://github.com/Galvill/jitenv/compare/v0.14.0...v0.14.1) (2026-06-19)
 
 
